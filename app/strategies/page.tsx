@@ -119,6 +119,13 @@ export default function StrategiesPage() {
         </div>
       )}
 
+      {/* Live Performance Attribution */}
+      <div className="mb-6">
+        <a href="/api/research/performance" target="_blank" className="text-xs underline text-zinc-400 hover:text-white">
+          View 7-day Strategy Performance Attribution →
+        </a>
+      </div>
+
       {/* Real Execution Warning Banner */}
       {process.env.NEXT_PUBLIC_REAL_EXECUTION_ENABLED === 'true' || true /* we'll improve this */ ? (
         <div className="mb-8 rounded-xl border border-red-900/70 bg-red-950/60 p-4 text-sm">
