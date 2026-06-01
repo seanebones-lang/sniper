@@ -259,6 +259,20 @@ export class ExecutionManager {
   }
 
   /**
+   * Cancel all resting orders for a specific market (used by runner self-protection).
+   */
+  cancelOrdersForMarket(marketExternalId: string): OpenOrder[] {
+    const toCancel: OpenOrder[] = [];
+    for (const [id, order] of this.openOrders.entries()) {
+      if (order.marketExternalId === marketExternalId) {
+        toCancel.push(order);
+        this.openOrders.delete(id);
+      }
+    }
+    return toCancel;
+  }
+
+  /**
    * Returns markets that currently have poor execution health (for risk throttling)
    */
   getUnhealthyMarkets(threshold = 0.5): string[] {

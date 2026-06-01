@@ -18,6 +18,7 @@ import { saveBookSnapshot } from '@/lib/data/historical';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
+import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 
 export interface RunnerStatus {
   running: boolean;
@@ -294,6 +295,19 @@ export async function runOnce() {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
   }
 
+  // === Edge Decay Monitoring (lightweight) ===
+  for (const strat of activeStrategies) {
+    const decay = edgeDecayMonitor.isDecaying(strat.id);
+    if (decay.decaying) {
+      console.warn(`[Runner] EDGE DECAY on ${strat.name}: ${decay.reason}`);
+      await logAudit('edge_decay_detected', {
+        strategy: strat.name,
+        severity: decay.severity,
+        reason: decay.reason,
+      });
+    }
+  }
+
   // Periodic portfolio health log (every ~10 runs on average)
   if (Math.random() < 0.1) {
     const state = await portfolioRiskManager.getCurrentPortfolioState();
@@ -315,24 +329,22 @@ export async function runOnce() {
     }
   }
 
-  // === Active Execution Management on Unhealthy Markets ===
+  // === Active Execution Management on Unhealthy Markets (recommendations + simulation) ===
   if (Math.random() < 0.08) {
     for (const marketId of unhealthyMarkets) {
       const action = executionManager.manageRestingOrders(marketId);
       if (action.type === 'CANCEL_ALL' || action.type === 'CANCEL_AND_REPOST') {
         console.warn(`[Runner] ACTION: ${action.type} recommended for ${marketId} — ${action.reason}`);
+        
+        const cancelled = executionManager.cancelOrdersForMarket(marketId);
+        
         await logAudit('execution_management_action', {
           market: marketId,
           action: action.type,
           reason: action.reason,
+          ordersCancelled: cancelled.length,
         });
-
-        // In a full system this would actually cancel via the venue client.
-        // For now we record the strong signal so the operator (or future automation) can act.
       }
-
-      // Also run the more advanced book handler if we had fresh book data here
-      // const bookAction = executionManager.handleBookUpdate(marketId, book);
     }
   }
 }

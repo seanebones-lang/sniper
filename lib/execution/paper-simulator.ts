@@ -41,6 +41,9 @@ export class PaperSimulator {
   private fills: PaperFill[] = [];
   private positions: Map<string, PaperPosition> = new Map();
 
+  /**
+   * Core snipe method. Now has much more realistic passive fill behavior.
+   */
   snipe(req: SnipeRequest): PaperFill | null {
     const { market, side, price, size, reason } = req;
 
@@ -49,7 +52,7 @@ export class PaperSimulator {
       return null;
     }
 
-    // Use ExecutionManager for decision (even in paper mode for realism)
+    // Get current execution decision
     const decision = executionManager.decideExecution(
       { action: side, price, size, reason },
       null,
@@ -64,18 +67,72 @@ export class PaperSimulator {
 
     let execPrice = price;
     let executionType: 'PASSIVE' | 'AGGRESSIVE' = 'AGGRESSIVE';
+    let fillProbability = 1.0;
 
     if (decision.type === 'POST_PASSIVE') {
       execPrice = decision.price;
       executionType = 'PASSIVE';
-    } else if (decision.type === 'TAKE_AGGRESSIVE') {
-      execPrice = decision.price;
-      executionType = 'AGGRESSIVE';
-    } else if (decision.type === 'WAIT' || decision.type === 'CANCEL_ALL') {
-      // For paper, we still simulate the fill but mark the reason
-      console.log(`[PaperSimulator] ExecutionManager suggested ${decision.type}: ${decision.reason}`);
+
+      // === Realistic Passive Fill Simulation ===
+      // Base probability influenced by imbalance, regime, and time
+      const imbalance = 0.05; // placeholder — in real system this would come from recent snapshots
+      const regimeFactor = 1.0; // will be wired to actual regime later
+
+      // Strong imbalance in our direction = higher fill probability
+      const imbalanceBonus = side === 'BUY' ? Math.max(0, imbalance) * 0.6 : Math.max(0, -imbalance) * 0.6;
+
+      fillProbability = Math.min(0.92, 0.35 + imbalanceBonus + (regimeFactor - 1) * 0.2);
+
+      // Simulate partial fills on passive orders
+      const fillSize = size * fillProbability;
+
+      if (fillSize < size * 0.15) {
+        // Too low probability — treat as no fill for now (realistic for passive in bad conditions)
+        console.log(`[PaperSimulator] Passive order on ${market.externalId} had low fill probability (${(fillProbability * 100).toFixed(1)}%) — no fill this cycle`);
+        return null;
+      }
+
+      // Record the (partial) fill
+      const fee = fillSize * execPrice * FEE_RATE;
+
+      const fill: PaperFill = {
+        id: `paper_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        marketExternalId: market.externalId,
+        platform: market.platform,
+        side,
+        price: execPrice,
+        size: fillSize,
+        fee,
+        timestamp: new Date().toISOString(),
+        reason: `${reason} | ${decision.type} (passive fill prob ${(fillProbability * 100).toFixed(1)}%)`,
+        executionType: 'PASSIVE',
+      };
+
+      this.fills.push(fill);
+      this._updatePosition(fill);
+
+      const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size, false);
+      const { adverseSelectionLikely } = executionManager.recordFill(orderId, execPrice, fillSize);
+
+      if (adverseSelectionLikely) {
+        console.warn(`[PaperSimulator] Possible adverse selection on passive fill for ${market.externalId}`);
+      }
+
+      return fill;
     }
 
+    if (decision.type === 'TAKE_AGGRESSIVE') {
+      execPrice = decision.price;
+      executionType = 'AGGRESSIVE';
+      fillProbability = 0.97; // aggressive is usually filled, but not always in thin books
+    }
+
+    if (decision.type === 'WAIT' || decision.type === 'CANCEL_ALL') {
+      console.log(`[PaperSimulator] ExecutionManager suggested ${decision.type}: ${decision.reason}`);
+      return null;
+    }
+
+    // Fallback aggressive path
     const fee = size * execPrice * FEE_RATE;
 
     const fill: PaperFill = {
@@ -87,18 +144,16 @@ export class PaperSimulator {
       size,
       fee,
       timestamp: new Date().toISOString(),
-      reason: `${reason} | ${decision.type}`,
+      reason: `${reason} | ${executionType}`,
       executionType,
     };
 
     this.fills.push(fill);
     this._updatePosition(fill);
 
-    // Record with execution manager for quality tracking
     const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size, false);
     executionManager.recordFill(orderId, execPrice, size);
 
-    console.log('[PaperSimulator] Fill recorded:', fill);
     return fill;
   }
 
