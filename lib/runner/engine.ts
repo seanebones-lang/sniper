@@ -333,7 +333,7 @@ export async function runOnce() {
           const insertedSignal = await db.insert(signals).values({
             strategyId: stratRow.id,
             marketId: marketDbId,
-            action: signal.action as any,
+            action: signal.action as 'BUY' | 'SELL' | 'CANCEL',
             price: signal.price.toString(),
             size: finalSize.toString(),
             reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}${sizeReason}`,
