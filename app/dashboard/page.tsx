@@ -24,19 +24,19 @@ export default function Dashboard() {
           <div className="mt-4 text-xs text-emerald-400">Phase 2 ✓</div>
         </Link>
 
-        <div className="card opacity-60">
+        <Link href="/strategies" className="card hover:border-white/30 transition">
           <Clock className="h-6 w-6 mb-4" />
           <div className="font-semibold mb-1">Strategies &amp; 24/7 Runner</div>
-          <div className="text-sm text-zinc-400">Configurable paper-first strategies + background automated execution.</div>
-          <div className="mt-4 text-xs">Phase 3</div>
-        </div>
+          <div className="text-sm text-zinc-400">Create strategies and start the autonomous paper runner. Telegram alerts supported.</div>
+          <div className="mt-4 text-xs text-emerald-400">Phase 3 ✓</div>
+        </Link>
 
-        <div className="card opacity-60">
+        <Link href="/backtest" className="card hover:border-white/30 transition">
           <Shield className="h-6 w-6 mb-4" />
-          <div className="font-semibold mb-1">Positions, Logs &amp; Risk</div>
-          <div className="text-sm text-zinc-400">Paper + real trade history, PnL, kill switches, full audit trail.</div>
-          <div className="mt-4 text-xs">Phase 3–4</div>
-        </div>
+          <div className="font-semibold mb-1">Backtester + Real Controls</div>
+          <div className="text-sm text-zinc-400">Test strategies on price series. Real execution available behind heavy gates (/real).</div>
+          <div className="mt-4 text-xs text-amber-400">Phase 4 ✓</div>
+        </Link>
       </div>
 
       <div className="card bg-zinc-900/40 text-sm">
