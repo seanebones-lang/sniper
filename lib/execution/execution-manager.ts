@@ -4,7 +4,8 @@
  * Now with stronger adverse selection tracking and market-level health.
  */
 
-import { getSmartExecutionDecision, detectPotentialAdverseSelection } from './smart-router';
+import { getSmartExecutionDecision } from './smart-router';
+import type { OrderBook } from '../types';
 
 export type ExecutionAction =
   | { type: 'POST_PASSIVE'; price: number; size: number; reason: string }
@@ -289,7 +290,7 @@ export class ExecutionManager {
    * Advanced: Decide if we should cancel resting orders on a market right now
    * due to adverse selection signals or regime shift.
    */
-  shouldCancelRestingOrders(marketExternalId: string, currentBook: any = null): { shouldCancel: boolean; reason: string } {
+  shouldCancelRestingOrders(marketExternalId: string, currentBook: OrderBook | null = null): { shouldCancel: boolean; reason: string } {
     const health = this.getMarketHealth(marketExternalId);
 
     if (health.healthScore < 0.35) {
@@ -317,7 +318,7 @@ export class ExecutionManager {
   /**
    * Get recommended action for managing existing resting orders on a market.
    */
-  manageRestingOrders(marketExternalId: string, latestBook: any = null): ExecutionAction {
+  manageRestingOrders(marketExternalId: string, latestBook: OrderBook | null = null): ExecutionAction {
     const health = this.getMarketHealth(marketExternalId);
     const openOrders = this.getOpenOrdersForMarket(marketExternalId);
 
@@ -361,7 +362,7 @@ export class ExecutionManager {
    * Handle a live book update — this is the key method for passive execution intelligence.
    * In a full implementation, the runner would call this frequently with fresh books.
    */
-  handleBookUpdate(marketExternalId: string, book: any): ExecutionAction {
+  handleBookUpdate(marketExternalId: string, book: OrderBook): ExecutionAction {
     if (!book) return { type: 'WAIT', reason: 'No book data' };
 
     const openOrders = this.getOpenOrdersForMarket(marketExternalId);

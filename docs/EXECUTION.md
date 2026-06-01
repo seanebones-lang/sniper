@@ -49,3 +49,5 @@ Most systems focus too much on signal generation and not enough on how they actu
 A strategy that looks good on P&L but has terrible average execution (constant adverse selection) will eventually lose money.
 
 The ExecutionManager + health feedback loop is designed to catch this early and protect capital.
+
+**Note (June 2026):** Real execution for Kalshi now has a trading client skeleton and basic reconciliation support. Full position tracking and kill-switches remain high-priority future work.
