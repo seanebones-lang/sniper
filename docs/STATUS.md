@@ -32,7 +32,7 @@ All references to this blocker in older docs/wiki are now historical.
 | Polymarket live WebSocket | Partial | Only on market detail page |
 | Real Polymarket execution | Gated | `SNIPER_ENABLE_REAL_EXECUTION=true` + private key. Not CI-tested. Heavy warnings in UI. |
 | Real Kalshi execution | Not implemented | |
-| Full CI (lint + build + unit + e2e) | Partial | See `package.json` scripts and `.github/workflows` |
+| Full CI (lint + build + unit + smoke) | Good | Real GitHub Actions workflow at `.github/workflows/ci.yml`. Runs on every push/PR with Postgres, full test:ci, typecheck, build, and smoke test. E2E still pending. |
 | Risk system (PortfolioRiskManager, modes, temporary adjustments) | Strong | One of the most complete parts of the system |
 | Execution quality tracking + adverse selection detection | Strong | `ExecutionManager` |
 
