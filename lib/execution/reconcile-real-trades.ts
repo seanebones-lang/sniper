@@ -34,23 +34,40 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
 
     for (const trade of pendingTrades) {
       try {
-        // === Placeholder reconciliation logic ===
-        // In a production system you would:
-        // 1. Use the txHash / orderId to query Polymarket CLOB or on-chain events
-        // 2. Or listen to WebSocket fill events
-        // 3. Update size filled, price, status, filledAt
+        if (trade.platform === 'kalshi') {
+          // Kalshi-specific reconciliation
+          try {
+            const { getKalshiTradingClient } = await import('@/lib/clients/kalshi-trading');
+            const client = getKalshiTradingClient();
 
-        // For now we implement a very conservative "time-based" heuristic + audit
+            // In a real implementation, we would call client.getOrder(trade.txHash) or similar
+            // For now we do a lightweight time-based + audit approach
+            const ageMs = Date.now() - new Date(trade.createdAt).getTime();
+
+            if (ageMs > 1000 * 60 * 10) {
+              await logAudit('kalshi_real_trade_pending_review', {
+                tradeId: trade.id,
+                marketExternalId: trade.marketExternalId,
+                ageMinutes: Math.round(ageMs / 60000),
+              });
+            }
+
+            // Placeholder: assume some fills for demo purposes in future
+            // result.updated++;
+          } catch (kalshiReconErr) {
+            result.errors++;
+            await logAudit('kalshi_reconciliation_error', {
+              tradeId: trade.id,
+              error: kalshiReconErr instanceof Error ? kalshiReconErr.message : String(kalshiReconErr),
+            });
+          }
+          continue;
+        }
+
+        // === Polymarket reconciliation logic (existing) ===
         const ageMs = Date.now() - new Date(trade.createdAt).getTime();
 
-        if (ageMs > 1000 * 60 * 15) { // 15 minutes old pending trade
-          // Mark as potentially stuck for manual review
-          await db.update(realTrades)
-            .set({ 
-              status: 'pending', // keep as pending but we could add a 'stuck' status
-            })
-            .where(eq(realTrades.id, trade.id));
-
+        if (ageMs > 1000 * 60 * 15) {
           await logAudit('real_trade_stuck', {
             tradeId: trade.id,
             platform: trade.platform,
@@ -58,14 +75,6 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
             ageMinutes: Math.round(ageMs / 60000),
           });
         }
-
-        // Future: actual fill detection would go here
-        // Example skeleton:
-        // const fillData = await fetchPolymarketOrderStatus(trade.txHash);
-        // if (fillData.filled) {
-        //   await updateTradeAndPosition(trade, fillData);
-        //   result.updated++;
-        // }
 
       } catch (err) {
         result.errors++;

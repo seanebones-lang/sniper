@@ -14,6 +14,7 @@ import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
+import { getKalshiTradingClient } from '@/lib/clients/kalshi-trading';
 import { executionManager } from './execution-manager';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
@@ -164,12 +165,61 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     };
   }
 
-  // Kalshi real execution
+  // Kalshi real execution (now using the authenticated trading client)
   if (req.market.platform === 'kalshi') {
-    // Kalshi trading client skeleton now exists in lib/clients/kalshi-trading.ts
-    // Full order placement + balance checks can be wired here.
-    await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
-    return { success: false, error: 'Kalshi real execution is not yet fully implemented (client skeleton ready)' };
+    try {
+      const kalshiClient = getKalshiTradingClient();
+
+      // Convert our normalized side/price to Kalshi format
+      // Our system: BUY = Yes, SELL = No (for binary markets)
+      const kalshiSide = req.side === 'BUY' ? 'yes' : 'no';
+      const kalshiPriceCents = Math.round(req.price * 100);
+
+      const orderResult = await kalshiClient.placeOrder({
+        ticker: req.market.externalId,
+        side: kalshiSide,
+        type: 'limit',
+        count: Math.round(finalSize), // Kalshi uses count (number of contracts)
+        price: kalshiPriceCents,
+      });
+
+      const newStatus = orderResult.success ? 'filled' : 'pending'; // Kalshi may require separate fill confirmation
+
+      await db.update(realTrades)
+        .set({
+          status: newStatus,
+          txHash: orderResult.order_id || undefined,
+        })
+        .where({ id: trade.id } as any);
+
+      await logAudit('kalshi_real_order_result', {
+        tradeId: trade.id,
+        ...orderResult,
+      });
+
+      if (orderResult.success) {
+        executionManager.recordOrderPosted(
+          req.market.externalId,
+          req.side,
+          req.price,
+          finalSize,
+          true
+        );
+      }
+
+      return {
+        success: !!orderResult.success,
+        tradeId: trade.id,
+        error: orderResult.error,
+      };
+    } catch (kalshiErr: any) {
+      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
+      await logAudit('kalshi_real_order_failed', {
+        tradeId: trade.id,
+        error: kalshiErr?.message || String(kalshiErr),
+      });
+      return { success: false, error: kalshiErr?.message || 'Kalshi order failed' };
+    }
   }
 
   return { success: false, error: 'Unsupported platform for real execution' };

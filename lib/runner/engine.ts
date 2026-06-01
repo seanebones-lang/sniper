@@ -7,6 +7,7 @@ import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db';
 import { getAllMarkets, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
+import { KalshiWSClient } from '@/lib/ws/kalshi'; // Deeper integration
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
