@@ -87,3 +87,35 @@ export function getSmartExecutionDecision(params: {
     maxSlippageTolerance: 0.005,
   };
 }
+
+/**
+ * Basic adverse selection detector.
+ * If we get filled very quickly on a limit order, it can be a warning sign.
+ */
+export function detectPotentialAdverseSelection(params: {
+  timeToFillSeconds: number;
+  sizeFilled: number;
+  ourSide: 'BUY' | 'SELL';
+  postFillPriceMove: number; // positive = price moved against us
+}): { likelyAdverse: boolean; confidence: number; note: string } {
+  const { timeToFillSeconds, sizeFilled, postFillPriceMove } = params;
+
+  if (timeToFillSeconds < 4 && sizeFilled > 80 && Math.abs(postFillPriceMove) > 0.012) {
+    return {
+      likelyAdverse: true,
+      confidence: 0.72,
+      note: 'Fast fill on size + immediate adverse move — classic adverse selection pattern',
+    };
+  }
+
+  if (timeToFillSeconds < 8 && postFillPriceMove > 0.008) {
+    return {
+      likelyAdverse: true,
+      confidence: 0.55,
+      note: 'Relatively fast fill followed by move against us',
+    };
+  }
+
+  return { likelyAdverse: false, confidence: 0.2, note: 'No clear adverse selection signal' };
+}
+
