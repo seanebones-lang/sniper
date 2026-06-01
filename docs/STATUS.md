@@ -42,7 +42,7 @@ All references to this blocker in older docs/wiki are now historical.
 
 - **Test surface**: README describes more test commands than currently declared in `package.json`. Smoke/e2e scripts need alignment.
 - **Documentation drift**: Older references may still exist in wiki or comments.
-- **Real execution**: Still considered experimental. No automated reconciliation or kill-switch beyond basic gates.
+- **Real execution**: Still considered experimental. Basic reconciliation added (June 2026) in `lib/execution/reconcile-real-trades.ts`. Still no full on-chain polling or automated kill-switch beyond env var.
 - **Kalshi WS**: Client library exists but not fully wired into UI/runner.
 - **AGENTS.md / CLAUDE.md**: Improved in June 2026 but can be expanded further.
 

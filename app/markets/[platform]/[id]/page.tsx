@@ -55,46 +55,77 @@ export default function LiveMarketDetail({ params }: Props) {
       return;
     }
 
-    if (platform !== 'polymarket') {
-      alert('Live WS currently demoed on Polymarket only in Phase 2. Kalshi support coming next.');
-      return;
-    }
-
     // Dynamic import to avoid SSR issues
-    import('@/lib/ws/polymarket').then(({ PolymarketWSClient }) => {
-      const client = new PolymarketWSClient({
-        onMessage: (msg: any) => {
-          if (msg.type === 'price_change' && msg.asset_id === marketId) {
-            const newPrice = parseFloat(msg.price);
-            if (!isNaN(newPrice) && book) {
+    if (platform === 'polymarket') {
+      import('@/lib/ws/polymarket').then(({ PolymarketWSClient }) => {
+        const client = new PolymarketWSClient({
+          onMessage: (msg: any) => {
+            if (msg.type === 'price_change' && msg.asset_id === marketId) {
+              const newPrice = parseFloat(msg.price);
+              if (!isNaN(newPrice) && book) {
+                setBook(prev => prev ? {
+                  ...prev,
+                  mid: newPrice,
+                  timestamp: new Date().toISOString(),
+                } : null);
+              }
+            }
+            if (msg.type === 'book' && msg.asset_id === marketId) {
+              const bids = (msg.bids || []).map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }));
+              const asks = (msg.asks || []).map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }));
+              const mid = bids[0] && asks[0] ? (bids[0].price + asks[0].price) / 2 : undefined;
               setBook(prev => prev ? {
                 ...prev,
-                mid: newPrice,
+                bids,
+                asks,
+                mid,
                 timestamp: new Date().toISOString(),
               } : null);
             }
-          }
-          if (msg.type === 'book' && msg.asset_id === marketId) {
-            // Basic book update
-            const bids = (msg.bids || []).map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }));
-            const asks = (msg.asks || []).map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }));
-            const mid = bids[0] && asks[0] ? (bids[0].price + asks[0].price) / 2 : undefined;
-            setBook(prev => prev ? {
-              ...prev,
-              bids,
-              asks,
-              mid,
-              timestamp: new Date().toISOString(),
-            } : null);
-          }
-        },
-        onOpen: () => setIsLive(true),
-        onClose: () => setIsLive(false),
-      });
+          },
+          onOpen: () => setIsLive(true),
+          onClose: () => setIsLive(false),
+        });
 
-      wsRef.current = client;
-      client.connect([marketId]);
-    });
+        wsRef.current = client;
+        client.connect([marketId]);
+      });
+    } else if (platform === 'kalshi') {
+      import('@/lib/ws/kalshi').then(({ KalshiWSClient }) => {
+        const client = new KalshiWSClient({
+          onMessage: (data: any) => {
+            // Kalshi WS messages come in different shapes (msg, etc.)
+            if (data.msg?.type === 'ticker' && data.msg?.ticker === marketId) {
+              const price = data.msg?.price ? data.msg.price / 100 : undefined;
+              if (price && book) {
+                setBook(prev => prev ? {
+                  ...prev,
+                  mid: price,
+                  timestamp: new Date().toISOString(),
+                } : null);
+              }
+            }
+            // Trade messages can also update last price
+            if (data.msg?.type === 'trade' && data.msg?.ticker === marketId) {
+              const price = data.msg?.price ? data.msg.price / 100 : undefined;
+              if (price && book) {
+                setBook(prev => prev ? {
+                  ...prev,
+                  mid: price,
+                  timestamp: new Date().toISOString(),
+                } : null);
+              }
+            }
+          },
+          onOpen: () => setIsLive(true),
+          onClose: () => setIsLive(false),
+          onError: (err) => console.warn('[Kalshi WS] Error', err),
+        });
+
+        wsRef.current = client;
+        client.connect([marketId]);
+      });
+    }
   }
 
   function handleManualSnipe() {

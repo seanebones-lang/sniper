@@ -164,10 +164,12 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     };
   }
 
-  // Kalshi real execution can be wired similarly later
+  // Kalshi real execution
   if (req.market.platform === 'kalshi') {
+    // Kalshi trading client skeleton now exists in lib/clients/kalshi-trading.ts
+    // Full order placement + balance checks can be wired here.
     await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
-    return { success: false, error: 'Kalshi real execution not yet implemented' };
+    return { success: false, error: 'Kalshi real execution is not yet fully implemented (client skeleton ready)' };
   }
 
   return { success: false, error: 'Unsupported platform for real execution' };

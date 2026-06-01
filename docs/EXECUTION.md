@@ -42,6 +42,7 @@ Most systems focus too much on signal generation and not enough on how they actu
 - Resting order management (adjust/cancel logic based on new book information)
 - Venue-specific execution profiles (Polymarket CLOB vs Kalshi)
 - Fill quality attribution back into strategy evaluation
+- **Real execution reconciliation** (basic version added June 2026 — see `lib/execution/reconcile-real-trades.ts`)
 
 ## Why This Matters
 
