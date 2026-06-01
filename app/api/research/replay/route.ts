@@ -17,7 +17,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Strategy not found' }, { status: 404 });
   }
 
-  let strategy = baseStrategy;
+  const strategy = baseStrategy;
   let config = {
     maxSizeUsd: 100,
     targetProfitPct: 2.5,

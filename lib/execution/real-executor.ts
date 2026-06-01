@@ -225,7 +225,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   return { success: false, error: 'Unsupported platform for real execution' };
 }
 
-async function logAudit(action: string, payload: any) {
+async function logAudit(action: string, payload: Record<string, unknown>) {
   await db.insert(auditEvents).values({
     actor: 'real-executor',
     action,

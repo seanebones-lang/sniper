@@ -176,7 +176,7 @@ export async function recordRealFill(params: {
 }
 
 // Simple audit helper (can be centralized later)
-async function logAudit(action: string, payload: any) {
+async function logAudit(action: string, payload: Record<string, unknown>) {
   try {
     await db.insert(auditEvents).values({
       actor: 'reconciliation',

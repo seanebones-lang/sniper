@@ -57,7 +57,7 @@ export async function askGrokResearchAgent(query: ResearchQuery): Promise<Resear
   });
 
   // Try to extract structured proposals
-  let proposals: StrategyProposal[] = [];
+  const proposals: StrategyProposal[] = [];
   // Structured proposal extraction can be added later with better prompting.
   // For now the free-text analysis is already extremely valuable.
 
