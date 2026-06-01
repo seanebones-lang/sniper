@@ -20,6 +20,7 @@ import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
+import { storeRecommendations, getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
 
 export interface RunnerStatus {
   running: boolean;
@@ -383,18 +384,66 @@ export async function runOnce() {
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
   }
 
-  // Occasional Grok Research Agent trigger (very lightweight, for continuous improvement)
-  if (process.env.ENABLE_GROK_RESEARCH_AGENT === 'true' && Math.random() < 0.015) {
+  // === Automated Intelligence Layer: Periodic Grok Analysis with Concrete Actions ===
+  // Trigger roughly every 6-8 hours when enabled (more deterministic than pure random)
+  const shouldRunGrokAnalysis = process.env.ENABLE_GROK_RESEARCH_AGENT === 'true' &&
+    (Math.random() < 0.008 || (Date.now() % (6 * 60 * 60 * 1000) < 120000)); // ~every 6h or on lucky runs
+
+  if (shouldRunGrokAnalysis) {
     try {
       const { askGrokResearchAgent } = await import('@/lib/research/grok-agent');
+
+      // Build rich context for the agent
+      const recentExec = executionManager.getRecentExecutionQuality(20);
+      const avgSlip = executionManager.getAverageSlippage(30);
+      const unhealthy = executionManager.getUnhealthyMarkets(0.5);
+      const currentRisk = riskModeManager.getCurrentMode();
+
       const analysis = await askGrokResearchAgent({
         type: 'strategy_analysis',
-        lookbackHours: 36,
+        lookbackHours: 48,
+        extraContext: `Current risk mode: ${currentRisk.current} (${currentRisk.reason}). 
+System health score: ${(systemHealth * 100).toFixed(1)}%. 
+Recent adverse fill rate: ${(adverseRate * 100).toFixed(1)}%. 
+Unhealthy markets: ${unhealthy.length} (${unhealthy.join(', ') || 'none'}). 
+Avg recent slippage: ${avgSlip.toFixed(4)}. 
+Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
       });
-      await logAudit('grok_research_agent', { summary: analysis.analysis.slice(0, 800) });
-      console.log('[Runner] Grok Research Agent analysis completed and logged');
+
+      await logAudit('grok_research_agent', { 
+        fullAnalysis: analysis.analysis.slice(0, 2000),
+        proposals: analysis.proposals || [],
+        riskModeAtTime: currentRisk.current,
+      });
+
+      console.log('[Runner] Grok Research Agent analysis completed.');
+
+      // Parse and surface concrete recommendations
+      if (analysis.analysis.includes('RECOMMENDED ACTIONS')) {
+        const actionsSection = analysis.analysis.split('RECOMMENDED ACTIONS')[1] || '';
+        console.warn(`[Runner] Grok Recommended Actions:\n${actionsSection.trim().slice(0, 1200)}`);
+
+        const stored = storeRecommendations(actionsSection, currentRisk.current);
+
+        await logAudit('grok_recommended_actions', {
+          raw: actionsSection.trim().slice(0, 1500),
+          riskMode: currentRisk.current,
+          parsedCount: stored.parsedActions.length,
+        });
+
+        // Send high-priority recommendations via Telegram if configured
+        if (stored.parsedActions.some(a => 
+            a.action.toLowerCase().includes('pause') || 
+            a.action.toLowerCase().includes('emergency') ||
+            a.action.toLowerCase().includes('reduce'))) {
+          const summary = stored.parsedActions.map(a => 
+            `- ${a.action} on ${a.target}: ${a.reason}`
+          ).join('\n');
+          alerts.error(`Grok Recommendation:\n${summary}`);
+        }
+      }
     } catch (e) {
-      console.warn('[Runner] Grok Research Agent call failed (non-fatal)');
+      console.warn('[Runner] Grok Research Agent call failed (non-fatal):', e);
     }
   }
 

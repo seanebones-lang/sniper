@@ -132,6 +132,32 @@ export default function StrategyHealthPage() {
             </div>
           </div>
 
+          {/* Recent AI Recommendations */}
+          <div className="card">
+            <div className="font-medium mb-3">Recent Grok Recommendations (Automated Intelligence)</div>
+            {health.aiRecommendations && health.aiRecommendations.length > 0 ? (
+              <div className="space-y-3">
+                {health.aiRecommendations.map((rec: any, idx: number) => (
+                  <div key={idx} className="border border-white/10 rounded p-3 text-sm">
+                    <div className="text-xs text-zinc-500 mb-1">
+                      {new Date(rec.timestamp).toLocaleString()} • Risk Mode: {rec.riskMode}
+                    </div>
+                    <div className="whitespace-pre-wrap text-zinc-200 text-xs">
+                      {rec.rawText.length > 600 ? rec.rawText.slice(0, 600) + '...' : rec.rawText}
+                    </div>
+                    {rec.parsedActions?.length > 0 && (
+                      <div className="mt-2 text-[10px] text-emerald-400">
+                        Parsed {rec.parsedActions.length} action(s)
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-zinc-400">No automated recommendations yet. Enable with ENABLE_GROK_RESEARCH_AGENT=true.</div>
+            )}
+          </div>
+
           <div className="card">
             <div className="font-medium mb-2">System Summary</div>
             <div className="text-sm text-zinc-300">

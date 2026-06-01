@@ -113,7 +113,13 @@ ${JSON.stringify(context.performance, null, 2)}
 Recent snapshot features (with regimes):
 ${JSON.stringify(context.recentSnapshots.slice(-12), null, 2)}
 
-Deliver a sharp analysis of what is working / broken, and why.`;
+Deliver a sharp analysis of what is working / broken, and why.
+
+At the end, output a section called "RECOMMENDED ACTIONS" with 0-5 concrete, executable recommendations in this exact format (one per line):
+- ACTION: [pause_strategy | reduce_allocation | increase_allocation | enter_defensive_mode | cancel_orders_on_market | other] | TARGET: [strategy_id or market_id or "global"] | VALUE: [optional number, e.g. 0.5 for 50%] | REASON: [short explanation]
+Example:
+- ACTION: pause_strategy | TARGET: threshold | REASON: consistent underperformance and edge decay
+- ACTION: reduce_allocation | TARGET: global | VALUE: 0.6 | REASON: system health is low and adverse selection is high`;
   }
 
   if (query.type === 'feature_ideas') {

@@ -3,6 +3,7 @@ import { getStrategyPerformance } from '@/lib/research/performance';
 import { getAllVariants } from '@/lib/strategies/variants';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
+import { getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
 
 export async function GET() {
   const performance = await getStrategyPerformance(3);
@@ -35,6 +36,8 @@ export async function GET() {
       unhealthyMarkets: unhealthyMarkets,
       lastFills: execQuality.slice(-5),
     },
+    aiRecommendations: getRecentRecommendations(5),
+
     summary: {
       totalActiveStrategies: Object.keys(performance.byStrategy || {}).length,
       totalVariants: variants.length,
