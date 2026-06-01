@@ -20,7 +20,11 @@ import { executionManager } from './execution-manager';
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
 
-// Simple in-memory kill switch (can be extended to DB flag later)
+// Kill switch support
+// Priority (highest first):
+// 1. SNIPER_DISABLE_REAL_EXECUTION env var (deployment-level kill switch)
+// 2. In-memory disable (runtime)
+// 3. SNIPER_ENABLE_REAL_EXECUTION env var (positive enable)
 let realExecutionGloballyDisabled = false;
 
 export function disableRealExecution() {
@@ -28,7 +32,13 @@ export function disableRealExecution() {
 }
 
 export function isRealExecutionAllowed(): boolean {
-  return REAL_ENABLED && !realExecutionGloballyDisabled;
+  if (process.env.SNIPER_DISABLE_REAL_EXECUTION === 'true') {
+    return false;
+  }
+  if (realExecutionGloballyDisabled) {
+    return false;
+  }
+  return REAL_ENABLED;
 }
 
 export interface RealOrderRequest {
@@ -45,7 +55,7 @@ export interface RealOrderRequest {
  */
 export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: boolean; tradeId?: string; error?: string }> {
   if (!isRealExecutionAllowed()) {
-    return { success: false, error: 'Real execution disabled (env flag or kill-switch)' };
+    return { success: false, error: 'Real execution disabled (kill-switch or env flag)' };
   }
 
   // === ADVANCED PORTFOLIO RISK MANAGEMENT ===
