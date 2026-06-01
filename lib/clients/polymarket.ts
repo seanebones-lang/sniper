@@ -43,7 +43,7 @@ export function getTradingClient(privateKey: string): ClobClient {
   tradingClient = new ClobClient({
     host: CLOB_HOST,
     chain: 137,
-    signer: walletClient as any, // viem wallet client works with the SDK
+    signer: walletClient as any, // viem wallet client works with the SDK (known integration point)
   });
 
   return tradingClient;
@@ -106,14 +106,19 @@ export async function fetchPolymarketOrderBook(tokenId: string): Promise<OrderBo
   // The SDK method is getOrderBook or similar — adjust if the exact API differs
   const book = await client.getOrderBook(tokenId);
 
-  const bids: OrderBookLevel[] = (book?.bids ?? []).map((b: any) => ({
-    price: parseFloat(b.price),
-    size: parseFloat(b.size),
+  interface RawOrderBookLevel {
+    price: string | number;
+    size: string | number;
+  }
+
+  const bids: OrderBookLevel[] = (book?.bids ?? []).map((b: RawOrderBookLevel) => ({
+    price: parseFloat(String(b.price)),
+    size: parseFloat(String(b.size)),
   }));
 
-  const asks: OrderBookLevel[] = (book?.asks ?? []).map((a: any) => ({
-    price: parseFloat(a.price),
-    size: parseFloat(a.size),
+  const asks: OrderBookLevel[] = (book?.asks ?? []).map((a: RawOrderBookLevel) => ({
+    price: parseFloat(String(a.price)),
+    size: parseFloat(String(a.size)),
   }));
 
   const mid = bids.length && asks.length
@@ -179,11 +184,12 @@ export async function placePolymarketLimitOrder(params: {
       success: true,
       orderId: order?.orderID || 'submitted',
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[Polymarket] Real order failed:', err);
     return {
       success: false,
-      error: err?.message || 'Unknown error placing order',
+      error: message,
     };
   }
 }
