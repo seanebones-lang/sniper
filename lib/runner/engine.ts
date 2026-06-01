@@ -3,7 +3,7 @@
  * This is the core that makes the system "know when to buy and sell".
  */
 
-import { db, strategies, signals, paperTrades } from '@/lib/db';
+import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db';
 import { getAllMarkets } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
@@ -12,6 +12,9 @@ import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
 import type { Market } from '@/lib/types';
 import { alerts } from '@/lib/alerts/telegram';
+import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
+import { categorizeMarket } from '@/lib/risk/categorizer';
+import { saveBookSnapshot } from '@/lib/data/historical';
 
 export interface RunnerStatus {
   running: boolean;
@@ -98,6 +101,25 @@ export async function runOnce() {
 
         const currentPrice = book.mid ?? market.lastPrice;
 
+        // === Rich feature collection for research & future ML ===
+        if (book && (book.bids?.length || book.asks?.length)) {
+          const topBid = book.bids?.[0]?.size || 0;
+          const topAsk = book.asks?.[0]?.size || 0;
+          const imbalance = topBid / (topBid + topAsk + 0.0001);
+
+          await saveBookSnapshot({
+            platform: market.platform,
+            marketExternalId: market.externalId,
+            bids: book.bids?.slice(0, 3) || [],
+            asks: book.asks?.slice(0, 3) || [],
+            mid: book.mid || currentPrice || 0,
+            spread: book.spread || 0,
+            timestamp: new Date(),
+            imbalance: parseFloat(imbalance.toFixed(4)),
+            topDepth: topBid + topAsk,
+          } as any);
+        }
+
         const signal = strategyImpl.evaluate(
           { market, book, currentPrice },
           config
@@ -106,14 +128,38 @@ export async function runOnce() {
         if (signal && signal.action !== 'HOLD') {
           signalsThisRun++;
 
-          // Persist signal
+          // === ADVANCED RISK SIZING (applied to both paper and real) ===
+          const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
+          const riskDecision = await portfolioRiskManager.calculateSafeSize({
+            platform: market.platform,
+            marketExternalId: market.externalId,
+            side: signal.action as 'BUY' | 'SELL',
+            edge: signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025, // rough mapping
+            confidence: signal.confidence ?? 0.65,
+            category: categoryInfo.category,
+            currentPrice: signal.price,
+          });
+
+          if (riskDecision.allowedSize < 5) {
+            await logAudit('runner_signal_rejected_risk', {
+              strategy: stratRow.name,
+              market: market.externalId,
+              signal,
+              reason: riskDecision.reason,
+            });
+            continue; // Skip this signal
+          }
+
+          const finalSize = Math.min(signal.size, riskDecision.allowedSize);
+
+          // Persist signal (with risk-adjusted size)
           await db.insert(signals).values({
             strategyId: stratRow.id,
-            marketId: market.id as any, // note: in real we'd resolve market id properly
+            marketId: market.id as any,
             action: signal.action as any,
             price: signal.price.toString(),
-            size: signal.size.toString(),
-            reason: signal.reason,
+            size: finalSize.toString(),
+            reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}`,
           });
 
           const isRealAllowed = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !stratRow.paperOnly;
@@ -125,8 +171,8 @@ export async function runOnce() {
               market,
               side: signal.action as 'BUY' | 'SELL',
               price: signal.price,
-              size: signal.size,
-              reason: `[REAL][${stratRow.name}] ${signal.reason}`,
+              size: finalSize,
+              reason: `[REAL][${stratRow.name}] ${signal.reason} (risk-adjusted)`,
             });
 
             if (result.success) {
@@ -146,8 +192,8 @@ export async function runOnce() {
               market,
               side: signal.action as 'BUY' | 'SELL',
               price: signal.price,
-              size: signal.size,
-              reason: `[${stratRow.name}] ${signal.reason}`,
+              size: finalSize,
+              reason: `[${stratRow.name}] ${signal.reason} (risk-adjusted)`,
             });
 
             if (fill) {
@@ -181,4 +227,14 @@ export async function runOnce() {
   if (signalsThisRun > 0) {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
   }
+}
+
+async function logAudit(action: string, payload: any) {
+  try {
+    await db.insert(auditEvents).values({
+      actor: 'runner',
+      action,
+      payload,
+    });
+  } catch {}
 }
