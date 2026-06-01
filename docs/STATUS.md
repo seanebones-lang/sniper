@@ -1,8 +1,10 @@
 # Sniper — Project Status (Authoritative)
 
-**Last updated:** 2026-06 (post FK + market sync fix)
+**Last updated:** 2026-06 (post major Kalshi + CI + safety improvements)
 
 This document is the single source of truth for capability, known issues, and roadmap. All other docs (README, wiki, etc.) should defer to this file.
+
+**Note to maintainers**: Please keep this file updated after any significant capability, safety, or infrastructure changes.
 
 ---
 
@@ -30,9 +32,9 @@ All references to this blocker in older docs/wiki are now historical.
 | Grok Research Agent + recommendations | Works | Requires `XAI_API_KEY` + `ENABLE_GROK_RESEARCH_AGENT=true` |
 | Settings UI for Grok key | Works | |
 | Polymarket live WebSocket | Partial | Only on market detail page |
-| Real Polymarket execution | Gated | `SNIPER_ENABLE_REAL_EXECUTION=true` + private key. Not CI-tested. Heavy warnings in UI. |
-| Real Kalshi execution | Not implemented | |
-| Full CI (lint + build + unit + smoke) | Good | Real GitHub Actions workflow at `.github/workflows/ci.yml`. Runs on every push/PR with Postgres, full test:ci, typecheck, build, and smoke test. E2E still pending. |
+| Real Polymarket execution | Gated + Improving | `SNIPER_ENABLE_REAL_EXECUTION=true` + private key. Basic kill-switch and reconciliation exist. Still not CI-tested for real paths. |
+| Real Kalshi execution | Partial / Experimental | Trading client skeleton + placeOrder integration exists. Fill confirmation and full flows still thin. |
+| Full CI | Good + Improving | Real GitHub Actions workflow (`.github/workflows/ci.yml`). Includes Postgres, lint, typecheck, build, unit tests, and smoke test. E2E/Playwright foundation started but not yet stable in CI. |
 | Risk system (PortfolioRiskManager, modes, temporary adjustments) | Strong | One of the most complete parts of the system |
 | Execution quality tracking + adverse selection detection | Strong | `ExecutionManager` |
 
@@ -40,17 +42,21 @@ All references to this blocker in older docs/wiki are now historical.
 
 ## Known Remaining Issues / Debt (Non-Blocking)
 
-- **Test surface**: README describes more test commands than currently declared in `package.json`. Smoke/e2e scripts need alignment.
-- **Documentation drift**: Older references may still exist in wiki or comments.
-- **Real execution**: Experimental but improving. Basic reconciliation + simple kill-switch (in-memory + exportable `disableRealExecution()`) added. Kalshi trading client skeleton exists.
-- **Kalshi WS**: Client library exists but not fully wired into UI/runner.
-- **AGENTS.md / CLAUDE.md**: Improved in June 2026 but can be expanded further.
+- **Lint / Type Safety Debt**: ~70-80+ `any` / `as any` usages remain (as of mid-2026). Heaviest in execution layer, runner, and some data files. Lint currently runs non-blocking in CI.
+- **Real Execution Maturity**: Still experimental. Kalshi support is partial. Reconciliation and position tracking for real trades need strengthening. Kill-switch is currently in-memory only.
+- **E2E & Test Coverage**: Basic Playwright config and one trivial test exist. No coverage reporting. E2E not yet running in CI.
+- **Documentation Gaps**: Operational runbooks for real money execution (especially Kalshi) are thin. Some older wiki/docs may be stale.
+- **AGENTS.md / CLAUDE.md**: Solid core rules exist but can be expanded with more specific guidance around real execution and risk invariants.
 
 ### Recently Resolved (June 2026)
-- **Repo hygiene (Major win)**: Removed a 1.4 GB nested duplicate `sniper/sniper/` directory that had been polluting the repository (contained full copy + `.env.local` + `.next/`). Hardened `.gitignore` to prevent recurrence. Project size dropped from ~2.4G to ~980M.
-- **signals.market_id FK** — Fixed.
-- **Testing foundation**: Made test suite actually executable. Added comprehensive unit tests for PortfolioRiskManager (7 tests) and ExecutionManager (4 tests). Total unit test coverage significantly increased. Working `npm run test:smoke` implemented. Multiple cycles of "test → build → commit → push" completed.
-- **Runner & Execution resilience**: Improved error handling and audit logging in the runner. Reduced some `any` usage in ExecutionManager.
+- **Repo hygiene (Major win)**: Removed a 1.4 GB nested duplicate `sniper/sniper/` directory. Hardened `.gitignore`.
+- **signals.market_id FK** — Fixed (core automated pipeline now works).
+- **Kalshi Support**: Significant progress — authenticated trading client skeleton, WebSocket integration in UI, real execution path started, Kalshi-specific reconciliation logic added.
+- **Real Execution Safety**: Basic in-memory kill-switch (`disableRealExecution()`) + reconciliation wired into the runner.
+- **Testing Foundation**: 16+ unit tests added across risk, execution, and Kalshi areas. Functional smoke test. Multiple "test → build → commit → push" cycles completed.
+- **CI**: Proper GitHub Actions workflow created and hardened (concurrency, Postgres, full verification steps).
+- **Runner & Execution Resilience**: Improved error handling, audit logging, and some `any` reduction in critical paths.
+- **Lint Debt**: Initial reduction campaign started on high-risk files (runner + execution layer).
 
 ---
 
