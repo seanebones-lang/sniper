@@ -315,14 +315,24 @@ export async function runOnce() {
     }
   }
 
-  // Periodically check for resting order management recommendations on unhealthy markets
-  if (Math.random() < 0.06) {
+  // === Active Execution Management on Unhealthy Markets ===
+  if (Math.random() < 0.08) {
     for (const marketId of unhealthyMarkets) {
       const action = executionManager.manageRestingOrders(marketId);
-      if (action.type === 'CANCEL_ALL') {
-        console.warn(`[Runner] RECOMMENDATION: Cancel resting orders on ${marketId} — ${action.reason}`);
-        await logAudit('resting_order_management_recommendation', { market: marketId, action });
+      if (action.type === 'CANCEL_ALL' || action.type === 'CANCEL_AND_REPOST') {
+        console.warn(`[Runner] ACTION: ${action.type} recommended for ${marketId} — ${action.reason}`);
+        await logAudit('execution_management_action', {
+          market: marketId,
+          action: action.type,
+          reason: action.reason,
+        });
+
+        // In a full system this would actually cancel via the venue client.
+        // For now we record the strong signal so the operator (or future automation) can act.
       }
+
+      // Also run the more advanced book handler if we had fresh book data here
+      // const bookAction = executionManager.handleBookUpdate(marketId, book);
     }
   }
 }

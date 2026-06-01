@@ -320,10 +320,78 @@ export class ExecutionManager {
       };
     }
 
-    // Could add price adjustment logic here in the future (move orders closer/further)
+    // Basic price adjustment logic: if book has moved significantly in our favor, consider improving price or canceling to re-post
+    if (latestBook && openOrders.length > 0) {
+      const ourSideOrders = openOrders.filter(o => o.side === 'BUY'); // simplify for now
+      if (ourSideOrders.length > 0 && latestBook.bids?.length) {
+        const bestBid = latestBook.bids[0].price;
+        const ourBest = Math.max(...ourSideOrders.map(o => o.price));
+        if (bestBid > ourBest + 0.01) {
+          return {
+            type: 'CANCEL_AND_REPOST',
+            price: bestBid - 0.001,
+            size: ourSideOrders[0].remainingSize,
+            reason: 'Book moved in our favor — re-posting at better price',
+          };
+        }
+      }
+    }
+
     return {
       type: 'WAIT',
       reason: 'Resting orders look okay for now',
+    };
+  }
+
+  /**
+   * Handle a live book update — this is the key method for passive execution intelligence.
+   * In a full implementation, the runner would call this frequently with fresh books.
+   */
+  handleBookUpdate(marketExternalId: string, book: any): ExecutionAction {
+    if (!book) return { type: 'WAIT', reason: 'No book data' };
+
+    const openOrders = this.getOpenOrdersForMarket(marketExternalId);
+    if (openOrders.length === 0) {
+      return { type: 'WAIT', reason: 'No resting orders' };
+    }
+
+    const health = this.getMarketHealth(marketExternalId);
+
+    // Strong adverse signal → cancel everything
+    if (health.healthScore < 0.35) {
+      return {
+        type: 'CANCEL_ALL',
+        reason: `Very poor health (${(health.healthScore * 100).toFixed(0)}%) — canceling resting orders`,
+      };
+    }
+
+    // Check for significant book movement against our positions
+    const ourBuyOrders = openOrders.filter(o => o.side === 'BUY');
+    const ourSellOrders = openOrders.filter(o => o.side === 'SELL');
+
+    if (ourBuyOrders.length > 0 && book.asks?.length) {
+      const bestAsk = book.asks[0].price;
+      if (bestAsk < Math.min(...ourBuyOrders.map(o => o.price)) - 0.015) {
+        return {
+          type: 'CANCEL_ALL',
+          reason: 'Book has moved significantly against our buy orders',
+        };
+      }
+    }
+
+    if (ourSellOrders.length > 0 && book.bids?.length) {
+      const bestBid = book.bids[0].price;
+      if (bestBid > Math.max(...ourSellOrders.map(o => o.price)) + 0.015) {
+        return {
+          type: 'CANCEL_ALL',
+          reason: 'Book has moved significantly against our sell orders',
+        };
+      }
+    }
+
+    return {
+      type: 'WAIT',
+      reason: 'No strong adjustment signal from book',
     };
   }
 

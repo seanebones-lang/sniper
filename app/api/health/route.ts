@@ -16,6 +16,7 @@ export async function GET() {
     recentPerformance: performance,
     activeVariants: variants.filter(v => v.status === 'testing' || v.status === 'promoted'),
     execution: {
+      systemHealthScore: parseFloat(executionManager.getSystemHealthScore().toFixed(3)),
       recentFills: execQuality.length,
       averageSlippage: parseFloat(avgSlippage.toFixed(5)),
       unhealthyMarkets: unhealthyMarkets,
