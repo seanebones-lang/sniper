@@ -24,8 +24,9 @@ export function getSmartExecutionDecision(params: {
   recentImbalance: number;
   timeSinceSignal: number; // seconds
   isRealMoney: boolean;
+  regime?: string;
 }): ExecutionDecision {
-  const { signal, book, recentImbalance, timeSinceSignal, isRealMoney } = params;
+  const { signal, book, recentImbalance, timeSinceSignal, isRealMoney, regime = 'normal' } = params;
 
   if (!book || !book.bids?.length || !book.asks?.length) {
     return {
@@ -36,54 +37,61 @@ export function getSmartExecutionDecision(params: {
     };
   }
 
-  const mid = book.mid || (book.bids[0].price + book.asks[0].price) / 2;
   const spread = book.spread || (book.asks[0].price - book.bids[0].price);
-
-  // Strong imbalance in our direction → be more aggressive
   const ourSideImbalance = signal.action === 'BUY' ? recentImbalance : -recentImbalance;
 
+  // In low liquidity regimes, almost always post passively
+  if (regime === 'low_liquidity') {
+    return {
+      recommendedAction: 'PASSIVE',
+      targetPriceImprovement: 0.006,
+      reason: 'Low liquidity regime — post passively to avoid adverse selection',
+      maxSlippageTolerance: 0.003,
+    };
+  }
+
   if (isRealMoney) {
-    // On real money we are much more conservative
-    if (ourSideImbalance > 0.25 && spread < 0.018) {
+    // Real capital: very conservative
+    if (ourSideImbalance > 0.30 && spread < 0.015 && timeSinceSignal < 20) {
       return {
         recommendedAction: 'AGGRESSIVE',
-        targetPriceImprovement: 0.001,
-        reason: 'Strong confirming imbalance on real capital',
-        maxSlippageTolerance: 0.004,
+        targetPriceImprovement: 0.0005,
+        reason: 'Very strong imbalance + tight spread on real capital',
+        maxSlippageTolerance: 0.0025,
       };
     }
 
     return {
       recommendedAction: 'PASSIVE',
-      targetPriceImprovement: 0.004,
-      reason: 'Default to passive on real money for better fills',
+      targetPriceImprovement: 0.005,
+      reason: 'Default safe passive posting on real money',
       maxSlippageTolerance: 0.003,
     };
   }
 
-  // Paper / research mode — we can be more aggressive for data collection
-  if (ourSideImbalance > 0.18) {
+  // Paper / research mode
+  if (ourSideImbalance > 0.22 && timeSinceSignal < 30) {
     return {
       recommendedAction: 'AGGRESSIVE',
       targetPriceImprovement: 0,
-      reason: 'Good imbalance confirmation',
-      maxSlippageTolerance: 0.006,
+      reason: 'Strong imbalance — taking aggressively for research',
+      maxSlippageTolerance: 0.007,
     };
   }
 
-  if (timeSinceSignal > 45) {
+  if (timeSinceSignal > 60) {
     return {
       recommendedAction: 'PASSIVE',
-      targetPriceImprovement: 0.003,
-      reason: 'Signal is aging — post passively',
+      targetPriceImprovement: 0.004,
+      reason: 'Signal aging — post passively',
       maxSlippageTolerance: 0.004,
     };
   }
 
   return {
     recommendedAction: 'PASSIVE',
-    targetPriceImprovement: 0.002,
-    reason: 'Default conservative execution',
+    targetPriceImprovement: 0.003,
+    reason: 'Default balanced execution',
     maxSlippageTolerance: 0.005,
   };
 }

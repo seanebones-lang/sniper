@@ -80,6 +80,14 @@ export default function BacktestPage() {
       alert(data.message || 'Variant created! Check the variants system or replay with the new config.');
       await loadProposals();
       await loadVariants();
+
+      if (data.comparisons && data.comparisons.length > 0) {
+        alert(`Variant created!\n\nAuto-comparison results:\n` + 
+          data.comparisons.map((c: any) => 
+            `${c.market.marketExternalId}: Base PnL ${c.base.totalPnl?.toFixed(2) || 0} | Variant PnL ${c.variant.totalPnl?.toFixed(2) || 0} | Delta ${c.deltaPnl?.toFixed(2) || 0}`
+          ).join('\n')
+        );
+      }
     } catch (e: any) {
       alert('Failed to apply: ' + e.message);
     } finally {

@@ -126,6 +126,18 @@ export default function StrategiesPage() {
         </a>
       </div>
 
+      {/* Strategy Health Snapshot */}
+      <div className="card mb-8">
+        <div className="flex justify-between items-center mb-3">
+          <div className="font-medium">Strategy Health (Last 3 days)</div>
+          <a href="/api/health" target="_blank" className="text-xs underline text-emerald-400">Full Health API</a>
+        </div>
+        <div className="text-sm text-zinc-400">
+          Live regime, recent edge, active variants, and allocator decisions will appear here in the next iteration.
+          For now, use the performance link above + the runner logs.
+        </div>
+      </div>
+
       {/* Real Execution Warning Banner */}
       {process.env.NEXT_PUBLIC_REAL_EXECUTION_ENABLED === 'true' || true /* we'll improve this */ ? (
         <div className="mb-8 rounded-xl border border-red-900/70 bg-red-950/60 p-4 text-sm">
