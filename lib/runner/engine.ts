@@ -441,6 +441,19 @@ export async function runOnce() {
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
   }
 
+  // === Real Trade Reconciliation (important for live execution) ===
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+    try {
+      const { reconcilePendingRealTrades } = await import('@/lib/execution/reconcile-real-trades');
+      const recon = await reconcilePendingRealTrades();
+      if (recon.checked > 0) {
+        console.log(`[Runner] Real trade reconciliation: checked=${recon.checked}, updated=${recon.updated}, errors=${recon.errors}`);
+      }
+    } catch (reconErr) {
+      console.warn('[Runner] Reconciliation error (non-fatal):', reconErr);
+    }
+  }
+
   // === Automated Intelligence Layer: Periodic Grok Analysis with Concrete Actions ===
   // Trigger roughly every 6-8 hours when enabled (more deterministic than pure random)
   const shouldRunGrokAnalysis = process.env.ENABLE_GROK_RESEARCH_AGENT === 'true' &&
