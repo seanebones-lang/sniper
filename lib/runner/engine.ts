@@ -17,6 +17,7 @@ import { categorizeMarket } from '@/lib/risk/categorizer';
 import { saveBookSnapshot } from '@/lib/data/historical';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
+import { executionManager } from '@/lib/execution/execution-manager';
 
 export interface RunnerStatus {
   running: boolean;
@@ -272,6 +273,17 @@ export async function runOnce() {
     } catch (e) {
       console.warn('[Runner] Grok Research Agent call failed (non-fatal)');
     }
+  }
+
+  // Basic edge decay / adverse execution monitoring
+  const recentQuality = executionManager.getRecentExecutionQuality(30);
+  const badSlippage = recentQuality.filter(q => q.slippage > 0.006).length;
+  if (recentQuality.length > 10 && badSlippage / recentQuality.length > 0.4) {
+    console.warn('[Runner] WARNING: High adverse execution rate detected. Consider pausing or reducing size.');
+    await logAudit('execution_quality_warning', {
+      badSlippageRate: (badSlippage / recentQuality.length).toFixed(2),
+      recentAvgSlippage: executionManager.getAverageSlippage(20),
+    });
   }
 }
 
