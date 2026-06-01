@@ -270,6 +270,73 @@ export class ExecutionManager {
     }
     return unhealthy;
   }
+
+  /**
+   * Advanced: Decide if we should cancel resting orders on a market right now
+   * due to adverse selection signals or regime shift.
+   */
+  shouldCancelRestingOrders(marketExternalId: string, currentBook: any = null): { shouldCancel: boolean; reason: string } {
+    const health = this.getMarketHealth(marketExternalId);
+
+    if (health.healthScore < 0.35) {
+      return {
+        shouldCancel: true,
+        reason: `Very poor recent execution health (${(health.healthScore * 100).toFixed(0)}%)`,
+      };
+    }
+
+    // If we have recent adverse fills and the book is moving against our side, cancel
+    const recentAdverse = this.executionHistory
+      .filter(q => q.wasAdverse)
+      .slice(-5);
+
+    if (recentAdverse.length >= 3) {
+      return {
+        shouldCancel: true,
+        reason: 'Multiple recent adverse selections detected',
+      };
+    }
+
+    return { shouldCancel: false, reason: 'No strong cancel signal' };
+  }
+
+  /**
+   * Get recommended action for managing existing resting orders on a market.
+   */
+  manageRestingOrders(marketExternalId: string, latestBook: any = null): ExecutionAction {
+    const health = this.getMarketHealth(marketExternalId);
+    const openOrders = this.getOpenOrdersForMarket(marketExternalId);
+
+    if (openOrders.length === 0) {
+      return { type: 'WAIT', reason: 'No resting orders to manage' };
+    }
+
+    const cancelCheck = this.shouldCancelRestingOrders(marketExternalId, latestBook);
+
+    if (cancelCheck.shouldCancel) {
+      return {
+        type: 'CANCEL_ALL',
+        reason: cancelCheck.reason,
+      };
+    }
+
+    // Could add price adjustment logic here in the future (move orders closer/further)
+    return {
+      type: 'WAIT',
+      reason: 'Resting orders look okay for now',
+    };
+  }
+
+  /**
+   * Overall system execution health score (0-1)
+   */
+  getSystemHealthScore(): number {
+    if (this.marketHealth.size === 0) return 1.0;
+
+    const scores = Array.from(this.marketHealth.values()).map(h => h.healthScore);
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    return avg;
+  }
 }
 
 export const executionManager = new ExecutionManager();

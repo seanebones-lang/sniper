@@ -81,6 +81,32 @@ export async function runOnce() {
 
   const markets = await getAllMarkets();
 
+  // === Calculate global and per-market protection factors upfront ===
+  const recentQuality = executionManager.getRecentExecutionQuality(30);
+  const badSlippage = recentQuality.filter(q => q.slippage > 0.006).length;
+  const adverseRate = recentQuality.length > 0 ? badSlippage / recentQuality.length : 0;
+
+  const systemHealth = executionManager.getSystemHealthScore();
+  let globalRiskMultiplier = 1.0;
+
+  if (systemHealth < 0.55) {
+    globalRiskMultiplier = Math.max(0.4, systemHealth * 0.9);
+  }
+
+  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
+
+  if (recentQuality.length > 8 && adverseRate > 0.45) {
+    console.warn(`[Runner] SELF-PROTECTION: High adverse execution rate (${(adverseRate * 100).toFixed(0)}%). Temporarily reducing risk.`);
+    await logAudit('execution_quality_warning', {
+      adverseRate: adverseRate.toFixed(2),
+      avgSlippage: executionManager.getAverageSlippage(20),
+    });
+  }
+
+  if (unhealthyMarkets.length > 0) {
+    console.warn(`[Runner] Markets with poor execution health: ${unhealthyMarkets.join(', ')}`);
+  }
+
   let signalsThisRun = 0;
   let fillsThisRun = 0;
 
@@ -186,12 +212,12 @@ export async function runOnce() {
             multiplier: allocatorMultiplier,
           });
 
-          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier;
+          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
 
           // Persist signal (with risk-adjusted size)
-          const sizeReason = healthMultiplier < 0.95 
-            ? ` | Health throttle ${healthMultiplier.toFixed(2)}` 
-            : '';
+          let sizeReason = '';
+          if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
+          if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 
           await db.insert(signals).values({
             strategyId: stratRow.id,
@@ -289,29 +315,15 @@ export async function runOnce() {
     }
   }
 
-  // === Automated Self-Protection based on Execution Quality ===
-  const recentQuality = executionManager.getRecentExecutionQuality(30);
-  const badSlippage = recentQuality.filter(q => q.slippage > 0.006).length;
-  const adverseRate = recentQuality.length > 0 ? badSlippage / recentQuality.length : 0;
-
-  if (recentQuality.length > 8 && adverseRate > 0.45) {
-    console.warn(`[Runner] SELF-PROTECTION: High adverse execution rate (${(adverseRate * 100).toFixed(0)}%). Temporarily reducing risk.`);
-    
-    await logAudit('execution_quality_warning', {
-      adverseRate: adverseRate.toFixed(2),
-      avgSlippage: executionManager.getAverageSlippage(20),
-      action: 'risk_reduction_triggered',
-    });
-
-    // Simple protection: we can reduce allocator weights or pause certain strategies in future iterations.
-    // For now we just log strongly so the operator sees it.
-  }
-
-  // Check per-market health from ExecutionManager
-  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
-  if (unhealthyMarkets.length > 0) {
-    console.warn(`[Runner] Markets with poor execution health: ${unhealthyMarkets.join(', ')}`);
-    await logAudit('unhealthy_markets_detected', { markets: unhealthyMarkets });
+  // Periodically check for resting order management recommendations on unhealthy markets
+  if (Math.random() < 0.06) {
+    for (const marketId of unhealthyMarkets) {
+      const action = executionManager.manageRestingOrders(marketId);
+      if (action.type === 'CANCEL_ALL') {
+        console.warn(`[Runner] RECOMMENDATION: Cancel resting orders on ${marketId} — ${action.reason}`);
+        await logAudit('resting_order_management_recommendation', { market: marketId, action });
+      }
+    }
   }
 }
 
