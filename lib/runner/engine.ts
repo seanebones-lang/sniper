@@ -103,7 +103,8 @@ export async function runOnce() {
   );
 
   if (riskModeResult.changed) {
-    console.warn(`[Runner] RISK MODE CHANGED → ${riskModeResult.newMode}: ${riskModeResult.reason}`);
+    const emoji = riskModeResult.newMode === 'EMERGENCY' ? '🚨' : riskModeResult.newMode === 'DEFENSIVE' ? '⚠️' : '✅';
+    console.warn(`${emoji} [Runner] RISK MODE CHANGED → ${riskModeResult.newMode}: ${riskModeResult.reason}`);
     await logAudit('risk_mode_change', {
       newMode: riskModeResult.newMode,
       previousMode: riskModeManager.getCurrentMode().previousMode,
@@ -138,17 +139,20 @@ export async function runOnce() {
     }
 
     if (currentRiskMode.current === 'EMERGENCY') {
-      marketEvaluationLimit = 4;
-      // Emergency: extremely restricted — only the strongest, most robust edges
+      marketEvaluationLimit = 3;
+      // Emergency: survival mode — only the absolute strongest, most battle-tested edges
       allowedStrategies = activeStrategies.filter(s => 
         ['orderbook-imbalance', 'resolution-proximity'].includes(s.type)
       );
       if (allowedStrategies.length === 0) allowedStrategies = activeStrategies.slice(0, 1);
 
-      // In true emergency, be willing to run almost nothing
-      if (systemHealth < 0.35) {
-        marketEvaluationLimit = 2;
+      // In deep emergency, run almost nothing
+      if (systemHealth < 0.4) {
+        marketEvaluationLimit = 1;
+        allowedStrategies = allowedStrategies.slice(0, 1);
       }
+
+      console.warn(`🚨 [Runner] EMERGENCY MODE ACTIVE — severely restricted: ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s). Most edges paused.`);
     }
 
     const allocations = await getDynamicAllocations(allowedStrategies.map(s => s.id));

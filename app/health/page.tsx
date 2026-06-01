@@ -60,6 +60,30 @@ export default function StrategyHealthPage() {
               </div>
             </div>
             <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason}</div>
+
+            {/* Current Active Restrictions */}
+            {health.risk?.mode !== 'NORMAL' && (
+              <div className="mt-4 pt-4 border-t border-white/10">
+                <div className="font-medium text-sm mb-2">Current Active Restrictions:</div>
+                <ul className="text-sm text-zinc-300 space-y-1 list-disc list-inside">
+                  {health.risk?.mode === 'DEFENSIVE' && (
+                    <>
+                      <li>Markets evaluated reduced to ~12</li>
+                      <li>Weaker strategies deprioritized</li>
+                      <li>Extra 25% sizing conservatism on top of allocator</li>
+                    </>
+                  )}
+                  {health.risk?.mode === 'EMERGENCY' && (
+                    <>
+                      <li>Extremely restricted: only 1–3 markets</li>
+                      <li>Only the strongest strategies allowed (OrderBook Imbalance + Resolution Proximity)</li>
+                      <li>Aggressive downweighting (as low as 0.4x)</li>
+                      <li>Strong recommendation to cancel resting orders on unhealthy markets</li>
+                    </>
+                  )}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">
