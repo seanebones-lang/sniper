@@ -68,6 +68,16 @@ const checks = [
     },
   },
   {
+    name: 'Kalshi trading client and reconciliation modules exist',
+    fn: () => {
+      const kalshiTrading = path.join(ROOT, 'lib/clients/kalshi-trading.ts');
+      const reconcile = path.join(ROOT, 'lib/execution/reconcile-real-trades.ts');
+      if (!fs.existsSync(kalshiTrading)) throw new Error('Missing kalshi-trading.ts');
+      if (!fs.existsSync(reconcile)) throw new Error('Missing reconcile-real-trades.ts');
+      return true;
+    },
+  },
+  {
     name: '.next build directory can be produced (or exists from previous build)',
     fn: () => {
       // Accept either a fresh build or existing .next (common in dev)
