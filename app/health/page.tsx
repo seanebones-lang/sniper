@@ -45,6 +45,23 @@ export default function StrategyHealthPage() {
             <div className="font-mono text-sm">{new Date(health.timestamp).toLocaleString()}</div>
           </div>
 
+          {/* Risk Mode Banner */}
+          <div className={`card border-2 ${health.risk?.mode === 'EMERGENCY' ? 'border-red-600 bg-red-950/40' : 
+            health.risk?.mode === 'DEFENSIVE' ? 'border-amber-500 bg-amber-950/30' : 'border-emerald-600'}`}>
+            <div className="flex items-center gap-3">
+              <div className="text-lg font-semibold">Current Risk Mode:</div>
+              <div className={`px-4 py-1 rounded-full text-sm font-bold tracking-wider
+                ${health.risk?.mode === 'EMERGENCY' ? 'bg-red-600 text-white' : 
+                  health.risk?.mode === 'DEFENSIVE' ? 'bg-amber-500 text-black' : 'bg-emerald-600 text-white'}`}>
+                {health.risk?.mode}
+              </div>
+              <div className="text-sm text-zinc-400 ml-4">
+                Multiplier: <span className="font-mono text-white">{health.risk?.riskMultiplier?.toFixed(2)}x</span>
+              </div>
+            </div>
+            <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason}</div>
+          </div>
+
           <div className="grid md:grid-cols-2 gap-6">
             <div className="card">
               <div className="font-medium mb-3">Recent Performance (3 days)</div>
@@ -71,13 +88,22 @@ export default function StrategyHealthPage() {
           </div>
 
           <div className="card">
+            <div className="font-medium mb-2">Execution Health</div>
+            <div className="text-sm text-zinc-300">
+              System Health Score: <span className="font-mono">{health.execution?.systemHealthScore}</span><br />
+              Avg Slippage (recent): <span className="font-mono">{health.execution?.averageSlippage}</span><br />
+              Unhealthy Markets: {health.execution?.unhealthyMarkets?.length || 0}
+            </div>
+          </div>
+
+          <div className="card">
             <div className="font-medium mb-2">System Summary</div>
             <div className="text-sm text-zinc-300">
               Active Strategies: {health.summary?.totalActiveStrategies}<br />
               Total Variants: {health.summary?.totalVariants}
             </div>
             <div className="text-[10px] text-zinc-500 mt-4">
-              This page will become much richer (live regime, recent signals, edge decay, allocator decisions, recent Grok insights) in upcoming iterations.
+              Risk mode now automatically shifts based on system health, adverse execution rate, and detected edge decay.
             </div>
           </div>
         </div>

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getStrategyPerformance } from '@/lib/research/performance';
 import { getAllVariants } from '@/lib/strategies/variants';
 import { executionManager } from '@/lib/execution/execution-manager';
+import { riskModeManager } from '@/lib/monitoring/risk-mode';
 
 export async function GET() {
   const performance = await getStrategyPerformance(3);
@@ -11,10 +12,18 @@ export async function GET() {
 
   const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.5);
 
+  const currentRiskMode = riskModeManager.getCurrentMode();
+
   const health = {
     timestamp: new Date().toISOString(),
     recentPerformance: performance,
     activeVariants: variants.filter(v => v.status === 'testing' || v.status === 'promoted'),
+    risk: {
+      mode: currentRiskMode.current,
+      reason: currentRiskMode.reason,
+      enteredAt: currentRiskMode.enteredAt,
+      riskMultiplier: riskModeManager.getRiskMultiplier(),
+    },
     execution: {
       systemHealthScore: parseFloat(executionManager.getSystemHealthScore().toFixed(3)),
       recentFills: execQuality.length,

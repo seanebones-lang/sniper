@@ -19,6 +19,7 @@ import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
+import { riskModeManager } from '@/lib/monitoring/risk-mode';
 
 export interface RunnerStatus {
   running: boolean;
@@ -90,9 +91,26 @@ export async function runOnce() {
   const systemHealth = executionManager.getSystemHealthScore();
   let globalRiskMultiplier = 1.0;
 
-  if (systemHealth < 0.55) {
-    globalRiskMultiplier = Math.max(0.4, systemHealth * 0.9);
+  // === Risk Mode Evaluation ===
+  const decayingCount = activeStrategies.filter(s => edgeDecayMonitor.isDecaying(s.id).decaying).length;
+  const riskModeResult = riskModeManager.evaluate(
+    systemHealth,
+    adverseRate,
+    decayingCount,
+    unhealthyMarkets.length
+  );
+
+  if (riskModeResult.changed) {
+    console.warn(`[Runner] RISK MODE CHANGED → ${riskModeResult.newMode}: ${riskModeResult.reason}`);
+    await logAudit('risk_mode_change', {
+      newMode: riskModeResult.newMode,
+      previousMode: riskModeManager.getCurrentMode().previousMode,
+      reason: riskModeResult.reason,
+    });
   }
+
+  const riskMode = riskModeManager.getCurrentMode();
+  globalRiskMultiplier = riskModeManager.getRiskMultiplier();
 
   const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
 
