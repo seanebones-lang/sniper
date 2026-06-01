@@ -64,24 +64,28 @@ export default function StrategyHealthPage() {
             {/* Current Active Restrictions */}
             {health.risk?.mode !== 'NORMAL' && (
               <div className="mt-4 pt-4 border-t border-white/10">
-                <div className="font-medium text-sm mb-2">Current Active Restrictions:</div>
+                <div className="font-medium text-sm mb-2">Current Active Restrictions (Risk Mode Effects):</div>
                 <ul className="text-sm text-zinc-300 space-y-1 list-disc list-inside">
                   {health.risk?.mode === 'DEFENSIVE' && (
                     <>
-                      <li>Markets evaluated reduced to ~12</li>
-                      <li>Weaker strategies deprioritized</li>
-                      <li>Extra 25% sizing conservatism on top of allocator</li>
+                      <li>Markets evaluated reduced to ~12 (instead of 25)</li>
+                      <li>Weaker / simpler strategies deprioritized or filtered</li>
+                      <li>Extra 25% sizing conservatism layered on top of allocator</li>
                     </>
                   )}
                   {health.risk?.mode === 'EMERGENCY' && (
                     <>
-                      <li>Extremely restricted: only 1–3 markets</li>
-                      <li>Only the strongest strategies allowed (OrderBook Imbalance + Resolution Proximity)</li>
-                      <li>Aggressive downweighting (as low as 0.4x)</li>
-                      <li>Strong recommendation to cancel resting orders on unhealthy markets</li>
+                      <li>Extremely restricted: only 1–2 markets evaluated</li>
+                      <li>Only the most proven strategies allowed (mainly OrderBook Imbalance + Resolution Proximity)</li>
+                      <li>Very aggressive downweighting (can go as low as 0.35–0.4x)</li>
+                      <li>Active recommendation to cancel resting orders on unhealthy markets</li>
+                      <li>Most strategies effectively paused</li>
                     </>
                   )}
                 </ul>
+                <div className="text-[10px] text-zinc-500 mt-2">
+                  These restrictions are applied automatically by the runner based on current system health and edge decay signals.
+                </div>
               </div>
             )}
           </div>
