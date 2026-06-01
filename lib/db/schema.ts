@@ -100,3 +100,41 @@ export const auditEvents = pgTable('audit_events', {
   payload: jsonb('payload'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * High-resolution market snapshots for research, backtesting, and feature engineering.
+ * This is one of the highest-leverage tables for building a real edge.
+ */
+export const marketSnapshots = pgTable('market_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  platform: varchar('platform', { length: 20 }).notNull(),
+  marketExternalId: varchar('market_external_id', { length: 120 }).notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+  
+  // Core market state
+  mid: decimal('mid', { precision: 5, scale: 4 }),
+  spread: decimal('spread', { precision: 5, scale: 4 }),
+  lastPrice: decimal('last_price', { precision: 5, scale: 4 }),
+  
+  // Order book features (top levels + aggregates)
+  bestBid: decimal('best_bid', { precision: 5, scale: 4 }),
+  bestAsk: decimal('best_ask', { precision: 5, scale: 4 }),
+  bidSizeTop: decimal('bid_size_top', { precision: 18, scale: 4 }),
+  askSizeTop: decimal('ask_size_top', { precision: 18, scale: 4 }),
+  totalBidDepth: decimal('total_bid_depth', { precision: 18, scale: 4 }), // top N levels
+  totalAskDepth: decimal('total_ask_depth', { precision: 18, scale: 4 }),
+  
+  // Derived features (critical for ML / advanced strategies)
+  imbalance: decimal('imbalance', { precision: 6, scale: 4 }), // (bid_depth - ask_depth) / (bid+ask)
+  microPrice: decimal('micro_price', { precision: 5, scale: 4 }), // weighted mid
+  pressure: decimal('pressure', { precision: 6, scale: 4 }), // custom pressure metric
+  
+  // Raw top levels for replay (JSON for flexibility)
+  topLevels: jsonb('top_levels'), // { bids: [...], asks: [...] }
+  
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  platformMarketTimeIdx: uniqueIndex('snapshots_platform_market_time_idx').on(
+    t.platform, t.marketExternalId, t.timestamp
+  ),
+}));
