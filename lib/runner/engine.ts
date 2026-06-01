@@ -15,6 +15,7 @@ import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
 import { saveBookSnapshot } from '@/lib/data/historical';
+import { getDynamicAllocations } from '@/lib/strategies/allocator';
 
 export interface RunnerStatus {
   running: boolean;
@@ -87,6 +88,10 @@ export async function runOnce() {
 
     const config = stratRow.config as unknown as StrategyConfig;
 
+    // Get dynamic allocations (this is the meta-layer advantage)
+    const allocations = await getDynamicAllocations(activeStrategies.map(s => s.id));
+    const allocation = allocations[stratRow.id] || { weight: 0.7, maxSizeMultiplier: 0.8, reason: 'Default' };
+
     // For MVP: evaluate on top volume markets the strategy cares about
     const relevantMarkets = markets
       .filter(m => m.status === 'open')
@@ -150,7 +155,14 @@ export async function runOnce() {
             continue; // Skip this signal
           }
 
-          const finalSize = Math.min(signal.size, riskDecision.allowedSize);
+          const allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
+
+          await logAudit('runner_allocator_decision', {
+            strategy: stratRow.name,
+            allocation: allocation.reason,
+            multiplier: allocatorMultiplier,
+          });
+          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier;
 
           // Persist signal (with risk-adjusted size)
           await db.insert(signals).values({
