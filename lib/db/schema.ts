@@ -64,6 +64,22 @@ export const paperTrades = pgTable('paper_trades', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Separate table for real trades (never mixed with paper for audit clarity)
+export const realTrades = pgTable('real_trades', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  signalId: uuid('signal_id').references(() => signals.id, { onDelete: 'set null' }),
+  platform: varchar('platform', { length: 20 }).notNull(),
+  marketExternalId: varchar('market_external_id', { length: 120 }).notNull(),
+  side: varchar('side', { length: 4 }).notNull(),
+  price: decimal('price', { precision: 5, scale: 4 }).notNull(),
+  size: decimal('size', { precision: 18, scale: 4 }).notNull(),
+  fee: decimal('fee', { precision: 12, scale: 4 }).default('0'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending, filled, rejected, cancelled
+  txHash: varchar('tx_hash', { length: 120 }), // for Polymarket on-chain
+  filledAt: timestamp('filled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const positions = pgTable('positions', {
   id: uuid('id').primaryKey().defaultRandom(),
   platform: varchar('platform', { length: 20 }).notNull(),

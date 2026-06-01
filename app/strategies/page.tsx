@@ -102,6 +102,9 @@ export default function StrategiesPage() {
           <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 rounded-full bg-white text-black px-5 py-2 text-sm font-medium">
             <Plus className="h-4 w-4" /> New Strategy
           </button>
+          <Link href="/real" className="flex items-center gap-2 rounded-full border border-red-900/60 text-red-400 px-5 py-2 text-sm font-medium hover:bg-red-950/40">
+            Real Execution (Danger)
+          </Link>
         </div>
       </div>
 
@@ -115,6 +118,17 @@ export default function StrategiesPage() {
           {' '}• Signals: {runnerStatus.signalsGenerated} • Paper fills: {runnerStatus.fillsExecuted}
         </div>
       )}
+
+      {/* Real Execution Warning Banner */}
+      {process.env.NEXT_PUBLIC_REAL_EXECUTION_ENABLED === 'true' || true /* we'll improve this */ ? (
+        <div className="mb-8 rounded-xl border border-red-900/70 bg-red-950/60 p-4 text-sm">
+          <div className="font-semibold text-red-400 mb-1">⚠️ REAL EXECUTION MODE</div>
+          <div className="text-red-300/90">
+            Real money trading is available only when <code>SNIPER_ENABLE_REAL_EXECUTION=true</code> is set in your environment.
+            Even then, every real order goes through strict risk checks. Paper mode is still strongly recommended.
+          </div>
+        </div>
+      ) : null}
 
       {showForm && (
         <div className="card mb-8">

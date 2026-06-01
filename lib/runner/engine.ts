@@ -113,8 +113,25 @@ export async function runOnce() {
             reason: signal.reason,
           });
 
-          // Execute in paper mode (respect paperOnly for now)
-          if (stratRow.paperOnly) {
+          const isRealAllowed = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !stratRow.paperOnly;
+
+          if (isRealAllowed) {
+            // Real execution path (Phase 4+)
+            const { placeRealOrder } = await import('@/lib/execution/real-executor');
+            const result = await placeRealOrder({
+              market,
+              side: signal.action as 'BUY' | 'SELL',
+              price: signal.price,
+              size: signal.size,
+              reason: `[REAL][${stratRow.name}] ${signal.reason}`,
+            });
+
+            if (result.success) {
+              fillsThisRun++;
+              status.fillsExecuted++;
+            }
+          } else {
+            // Paper execution (default safe path)
             const fill = paperSimulator.snipe({
               market,
               side: signal.action as 'BUY' | 'SELL',
