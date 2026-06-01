@@ -14,6 +14,8 @@ export default function BacktestPage() {
   const [loadingReplay, setLoadingReplay] = useState(false);
   const [proposals, setProposals] = useState<any[]>([]);
   const [applying, setApplying] = useState<string | null>(null);
+  const [variants, setVariants] = useState<any[]>([]);
+  const [selectedVariantId, setSelectedVariantId] = useState<string>('');
 
   function runSynthetic() {
     const prices = pricesInput.split(',').map(p => parseFloat(p.trim()) / 100);
@@ -42,9 +44,10 @@ export default function BacktestPage() {
         method: 'POST',
         body: JSON.stringify({
           platform: 'polymarket',
-          marketExternalId: '0x...', // user would fill real token id
+          marketExternalId: '0x...', // user would fill real token id in real use
           strategyType,
           hours: 24,
+          variantId: selectedVariantId || undefined,
         }),
       });
       const data = await res.json();
@@ -76,6 +79,7 @@ export default function BacktestPage() {
       const data = await res.json();
       alert(data.message || 'Variant created! Check the variants system or replay with the new config.');
       await loadProposals();
+      await loadVariants();
     } catch (e: any) {
       alert('Failed to apply: ' + e.message);
     } finally {
@@ -85,7 +89,16 @@ export default function BacktestPage() {
 
   useEffect(() => {
     loadProposals();
+    loadVariants();
   }, []);
+
+  async function loadVariants() {
+    try {
+      const res = await fetch('/api/strategies/variants');
+      const data = await res.json();
+      setVariants(data.variants || []);
+    } catch {}
+  }
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
@@ -122,6 +135,22 @@ export default function BacktestPage() {
             Replay strategies against real snapshots collected by the live runner. 
             This is how you actually discover and validate edges.
           </p>
+          <div className="mb-3">
+            <div className="text-xs mb-1 text-zinc-400">Compare against variant (optional)</div>
+            <select 
+              value={selectedVariantId} 
+              onChange={e => setSelectedVariantId(e.target.value)}
+              className="w-full bg-zinc-950 border border-white/10 rounded px-3 py-2 text-sm"
+            >
+              <option value="">Base strategy only</option>
+              {variants.length > 0 ? variants.map((v: any) => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              )) : (
+                <option disabled>No variants applied yet (apply from proposals above)</option>
+              )}
+            </select>
+          </div>
+
           <button 
             onClick={runHistoricalReplay} 
             disabled={loadingReplay}
@@ -129,6 +158,10 @@ export default function BacktestPage() {
           >
             {loadingReplay ? 'Replaying...' : 'Run Historical Replay (Last 24h)'}
           </button>
+
+          <div className="text-[10px] text-zinc-500 mt-2">
+            Tip: Apply a Grok proposal as a variant above, then select it here to directly compare base vs proposed on identical historical data.
+          </div>
           <div className="text-xs text-zinc-500 mt-2">
             Requires the runner to have collected snapshots (it now does automatically).
           </div>
