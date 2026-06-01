@@ -11,6 +11,7 @@ import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
 import type { Market } from '@/lib/types';
+import { alerts } from '@/lib/alerts/telegram';
 
 export interface RunnerStatus {
   running: boolean;
@@ -37,6 +38,7 @@ export async function startRunner(intervalMs = 15000) {
 
   status.running = true;
   console.log('[Runner] Starting 24/7 paper runner...');
+  alerts.runnerStarted();
 
   // Run immediately
   await runOnce();
@@ -57,6 +59,7 @@ export function stopRunner() {
   }
   status.running = false;
   console.log('[Runner] Stopped');
+  alerts.runnerStopped();
 }
 
 export async function runOnce() {
@@ -129,6 +132,13 @@ export async function runOnce() {
             if (result.success) {
               fillsThisRun++;
               status.fillsExecuted++;
+              alerts.realOrder({
+                platform: market.platform,
+                side: signal.action,
+                size: signal.size,
+                price: signal.price,
+                reason: signal.reason,
+              });
             }
           } else {
             // Paper execution (default safe path)
@@ -152,6 +162,8 @@ export async function runOnce() {
                 fee: fill.fee.toString(),
                 status: 'filled',
               });
+
+              alerts.paperFill(fill);
             }
           }
         }
