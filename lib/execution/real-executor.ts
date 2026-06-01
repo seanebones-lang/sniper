@@ -12,9 +12,10 @@
 import { db, realTrades, auditEvents } from '@/lib/db';
 import { riskEngine } from '@/lib/risk/engine';
 import type { Market } from '@/lib/types';
-import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket'; // we will extend later
+import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
 
 export interface RealOrderRequest {
   market: Market;
@@ -24,14 +25,18 @@ export interface RealOrderRequest {
   reason: string;
 }
 
+/**
+ * Place a real order.
+ * This is the actual execution path — only called when every gate is satisfied.
+ */
 export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: boolean; tradeId?: string; error?: string }> {
   if (!REAL_ENABLED) {
-    return { success: false, error: 'Real execution is disabled. Set SNIPER_ENABLE_REAL_EXECUTION=true to enable.' };
+    return { success: false, error: 'Real execution disabled (SNIPER_ENABLE_REAL_EXECUTION != true)' };
   }
 
   const usdValue = req.price * req.size;
 
-  // Risk gate
+  // 1. Risk engine gate (daily loss, size limits, etc.)
   const risk = riskEngine.checkRisk({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
@@ -42,14 +47,11 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   });
 
   if (!risk.allowed) {
-    await logAudit('real_order_blocked_by_risk', { ...req, reason: risk.reason });
+    await logAudit('real_order_blocked_risk', { ...req, reason: risk.reason });
     return { success: false, error: risk.reason };
   }
 
-  // For Phase 4 we log intent but do NOT yet place real orders on chain/exchange
-  // This prevents accidental loss while we harden further.
-  // Next step (fine tune) will wire actual SDK calls.
-
+  // Record the intent first (audit trail)
   const [trade] = await db.insert(realTrades).values({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
@@ -60,18 +62,53 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     status: 'pending',
   }).returning();
 
-  await logAudit('real_order_intent', {
+  await logAudit('real_order_attempt', {
     tradeId: trade.id,
     ...req,
     usdValue,
   });
 
-  console.warn('[REAL EXECUTOR] Intent logged but actual order placement still disabled in this build for safety.');
+  // 2. Polymarket execution
+  if (req.market.platform === 'polymarket') {
+    if (!POLYMARKET_PRIVATE_KEY) {
+      const msg = 'POLYMARKET_PRIVATE_KEY not set in environment';
+      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
+      return { success: false, error: msg };
+    }
 
-  return {
-    success: true,
-    tradeId: trade.id,
-  };
+    const result = await placePolymarketLimitOrder({
+      privateKey: POLYMARKET_PRIVATE_KEY,
+      tokenId: req.market.externalId,
+      price: req.price,
+      size: req.size,
+      side: req.side,
+    });
+
+    const newStatus = result.success ? 'filled' : 'rejected';
+
+    await db.update(realTrades)
+      .set({ 
+        status: newStatus,
+        txHash: result.orderId || undefined,
+      })
+      .where({ id: trade.id } as any);
+
+    await logAudit('real_order_result', { tradeId: trade.id, ...result });
+
+    return {
+      success: result.success,
+      tradeId: trade.id,
+      error: result.error,
+    };
+  }
+
+  // Kalshi real execution can be wired similarly later
+  if (req.market.platform === 'kalshi') {
+    await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
+    return { success: false, error: 'Kalshi real execution not yet implemented' };
+  }
+
+  return { success: false, error: 'Unsupported platform for real execution' };
 }
 
 async function logAudit(action: string, payload: any) {

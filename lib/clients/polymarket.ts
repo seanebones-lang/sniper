@@ -1,26 +1,52 @@
 /**
  * Polymarket client (CLOB V2 + Gamma)
- * Phase 1: Public market discovery + order book / price data only.
- * Real trading auth comes in Phase 4.
+ * Supports both public reads and (heavily gated) real trading.
  */
 
-import { ClobClient } from '@polymarket/clob-client-v2';
+import { ClobClient, Side } from '@polymarket/clob-client-v2';
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { polygon } from 'viem/chains';
 import type { Market, OrderBook, OrderBookLevel } from '../types';
 
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_HOST = 'https://clob.polymarket.com';
 
-let clobClient: ClobClient | null = null;
+let publicClient: ClobClient | null = null;
+let tradingClient: ClobClient | null = null;
 
-function getClobClient(): ClobClient {
-  if (!clobClient) {
-    // Public reads only for Phase 1 — no signer/creds needed for order books
-    clobClient = new ClobClient({
+function getPublicClient(): ClobClient {
+  if (!publicClient) {
+    publicClient = new ClobClient({
       host: CLOB_HOST,
-      chain: 137, // Polygon
+      chain: 137,
     });
   }
-  return clobClient;
+  return publicClient;
+}
+
+/**
+ * Returns an authenticated ClobClient for real trading.
+ * Only use this when SNIPER_ENABLE_REAL_EXECUTION=true and you have explicit user consent.
+ */
+export function getTradingClient(privateKey: string): ClobClient {
+  if (tradingClient) return tradingClient;
+
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+
+  const walletClient = createWalletClient({
+    account,
+    chain: polygon,
+    transport: http(),
+  });
+
+  tradingClient = new ClobClient({
+    host: CLOB_HOST,
+    chain: 137,
+    signer: walletClient as any, // viem wallet client works with the SDK
+  });
+
+  return tradingClient;
 }
 
 export interface GammaMarket {
@@ -75,7 +101,7 @@ export async function fetchPolymarketMarkets(limit = 50): Promise<Market[]> {
 }
 
 export async function fetchPolymarketOrderBook(tokenId: string): Promise<OrderBook> {
-  const client = getClobClient();
+  const client = getPublicClient();
 
   // The SDK method is getOrderBook or similar — adjust if the exact API differs
   const book = await client.getOrderBook(tokenId);
@@ -116,5 +142,48 @@ export async function fetchPolymarketPrice(tokenId: string): Promise<number | nu
     return book.mid ?? (book.bids[0]?.price ?? book.asks[0]?.price ?? null);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Place a real limit order on Polymarket.
+ * This should ONLY be called from the Real Executor after all risk checks pass.
+ */
+export async function placePolymarketLimitOrder(params: {
+  privateKey: string;
+  tokenId: string;
+  price: number;           // 0-1 decimal (e.g. 0.47)
+  size: number;            // in shares
+  side: 'BUY' | 'SELL';
+}): Promise<{ success: boolean; orderId?: string; error?: string }> {
+  try {
+    const client = getTradingClient(params.privateKey);
+
+    // Ensure we have L2 credentials (this will create/derive if needed)
+    const creds = await client.createOrDeriveApiKey();
+
+    const order = await client.createAndPostOrder(
+      {
+        tokenID: params.tokenId,
+        price: params.price,
+        size: params.size,
+        side: params.side === 'BUY' ? Side.BUY : Side.SELL,
+      },
+      {
+        tickSize: '0.01', // safe default, can be improved later
+        negRisk: false,
+      }
+    );
+
+    return {
+      success: true,
+      orderId: order?.orderID || 'submitted',
+    };
+  } catch (err: any) {
+    console.error('[Polymarket] Real order failed:', err);
+    return {
+      success: false,
+      error: err?.message || 'Unknown error placing order',
+    };
   }
 }
