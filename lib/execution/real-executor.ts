@@ -14,7 +14,7 @@ import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
-import { getSmartExecutionDecision } from './smart-router';
+import { executionManager } from './execution-manager';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
@@ -92,19 +92,29 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     usdValue,
   });
 
-  // === Smart Execution Decision ===
-  const execDecision = getSmartExecutionDecision({
-    signal: req,
-    book: null, // In real system we would pass current book here
-    recentImbalance: 0.1, // placeholder - should come from recent snapshots
-    timeSinceSignal: 12,
-    isRealMoney: true,
+  // === ExecutionManager Decision ===
+  // In a real implementation we would pass the live book here
+  const decision = executionManager.decideExecution(
+    { action: req.side, price: req.price, size: finalSize, reason: req.reason },
+    null, // book would come from live data
+    {
+      regime: 'normal', // should come from recent features
+      recentImbalance: 0.1,
+      timeSinceSignal: 12,
+      isRealMoney: true,
+      openOrders: executionManager.getOpenOrdersForMarket(req.market.externalId),
+    }
+  );
+
+  await logAudit('execution_manager_decision', {
+    tradeId: trade.id,
+    decision,
   });
 
-  await logAudit('smart_execution_decision', {
-    tradeId: trade.id,
-    decision: execDecision,
-  });
+  if (decision.type === 'CANCEL_ALL' || decision.type === 'WAIT') {
+    await db.update(realTrades).set({ status: 'cancelled' }).where({ id: trade.id } as any);
+    return { success: false, error: decision.reason };
+  }
 
   // 2. Polymarket execution
   if (req.market.platform === 'polymarket') {
@@ -114,16 +124,27 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       return { success: false, error: msg };
     }
 
-    // Adjust price based on smart router recommendation
-    const adjustedPrice = req.price + (req.side === 'BUY' ? -execDecision.targetPriceImprovement : execDecision.targetPriceImprovement);
+    const execPrice = decision.type === 'POST_PASSIVE' || decision.type === 'TAKE_AGGRESSIVE' 
+      ? decision.price 
+      : req.price;
 
     const result = await placePolymarketLimitOrder({
       privateKey: POLYMARKET_PRIVATE_KEY,
       tokenId: req.market.externalId,
-      price: Math.max(0.01, Math.min(0.99, adjustedPrice)),
+      price: Math.max(0.01, Math.min(0.99, execPrice)),
       size: finalSize,
       side: req.side,
     });
+
+    if (result.success) {
+      executionManager.recordOrderPosted(
+        req.market.externalId,
+        req.side,
+        execPrice,
+        finalSize,
+        true
+      );
+    }
 
     const newStatus = result.success ? 'filled' : 'rejected';
 

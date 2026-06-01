@@ -5,23 +5,25 @@
  */
 
 import type { Market } from '../types';
+import { executionManager } from './execution-manager';
 
 export interface PaperFill {
   id: string;
   marketExternalId: string;
   platform: string;
-  side: 'BUY' | 'SELL';        // normalized
-  price: number;               // 0-1
+  side: 'BUY' | 'SELL';
+  price: number;
   size: number;
   fee: number;
   timestamp: string;
   reason: string;
+  executionType?: 'PASSIVE' | 'AGGRESSIVE';
 }
 
 export interface PaperPosition {
   platform: string;
   marketExternalId: string;
-  size: number;                // positive = long, negative = short
+  size: number;
   avgPrice: number;
 }
 
@@ -33,37 +35,68 @@ export interface SnipeRequest {
   reason: string;
 }
 
-const FEE_RATE = 0.0005; // 5bps placeholder (adjust per platform later)
+const FEE_RATE = 0.0005;
 
 export class PaperSimulator {
   private fills: PaperFill[] = [];
-  private positions: Map<string, PaperPosition> = new Map(); // key: platform:externalId
+  private positions: Map<string, PaperPosition> = new Map();
 
   snipe(req: SnipeRequest): PaperFill | null {
     const { market, side, price, size, reason } = req;
 
-    // Basic realism checks (will be replaced by real risk engine in Phase 3)
     if (size <= 0 || price <= 0 || price >= 1) {
       console.warn('[PaperSimulator] Invalid snipe params');
       return null;
     }
 
-    const fee = size * price * FEE_RATE;
+    // Use ExecutionManager for decision (even in paper mode for realism)
+    const decision = executionManager.decideExecution(
+      { action: side, price, size, reason },
+      null,
+      {
+        regime: 'normal',
+        recentImbalance: 0.05,
+        timeSinceSignal: 5,
+        isRealMoney: false,
+        openOrders: executionManager.getOpenOrdersForMarket(market.externalId),
+      }
+    );
+
+    let execPrice = price;
+    let executionType: 'PASSIVE' | 'AGGRESSIVE' = 'AGGRESSIVE';
+
+    if (decision.type === 'POST_PASSIVE') {
+      execPrice = decision.price;
+      executionType = 'PASSIVE';
+    } else if (decision.type === 'TAKE_AGGRESSIVE') {
+      execPrice = decision.price;
+      executionType = 'AGGRESSIVE';
+    } else if (decision.type === 'WAIT' || decision.type === 'CANCEL_ALL') {
+      // For paper, we still simulate the fill but mark the reason
+      console.log(`[PaperSimulator] ExecutionManager suggested ${decision.type}: ${decision.reason}`);
+    }
+
+    const fee = size * execPrice * FEE_RATE;
 
     const fill: PaperFill = {
       id: `paper_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       marketExternalId: market.externalId,
       platform: market.platform,
       side,
-      price,
+      price: execPrice,
       size,
       fee,
       timestamp: new Date().toISOString(),
-      reason,
+      reason: `${reason} | ${decision.type}`,
+      executionType,
     };
 
     this.fills.push(fill);
     this._updatePosition(fill);
+
+    // Record with execution manager for quality tracking
+    const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size, false);
+    executionManager.recordFill(orderId, execPrice, size);
 
     console.log('[PaperSimulator] Fill recorded:', fill);
     return fill;
