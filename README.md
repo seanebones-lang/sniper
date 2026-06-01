@@ -139,6 +139,9 @@ Phases (executed slice-by-slice):
 - You are 100% responsible for every trade, every key, and every dollar.
 - Start with paper. Stay with paper until you have irrefutable evidence of edge on your specific strategies and risk tolerance.
 
+- <img width="1440" height="900" alt="Screenshot 2026-05-31 at 10 53 43 PM" src="https://github.com/user-attachments/assets/9a04c4fa-2457-405a-81bf-04d72f7a24a1" />
+
+
 ## License
 
 MIT (personal use strongly encouraged; commercial redistribution of the trading logic requires care).
