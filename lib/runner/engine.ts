@@ -16,6 +16,7 @@ import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
 import { saveBookSnapshot } from '@/lib/data/historical';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
+import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 
 export interface RunnerStatus {
   running: boolean;
@@ -112,6 +113,10 @@ export async function runOnce() {
           const topAsk = book.asks?.[0]?.size || 0;
           const imbalance = topBid / (topBid + topAsk + 0.0001);
 
+          // Compute advanced features
+          const recentSnapshotsForFeatures = []; // In production we'd query recent ones
+          const advanced = extractFeaturesFromRecentSnapshots(recentSnapshotsForFeatures);
+
           await saveBookSnapshot({
             platform: market.platform,
             marketExternalId: market.externalId,
@@ -122,6 +127,11 @@ export async function runOnce() {
             timestamp: new Date(),
             imbalance: parseFloat(imbalance.toFixed(4)),
             topDepth: topBid + topAsk,
+            extra: {
+              regime: advanced.regime,
+              volatilityProxy: advanced.volatilityProxy,
+              imbalancePersistence: advanced.imbalancePersistence,
+            },
           } as any);
         }
 
