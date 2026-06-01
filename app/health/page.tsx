@@ -103,7 +103,9 @@ export default function StrategyHealthPage() {
               Total Variants: {health.summary?.totalVariants}
             </div>
             <div className="text-[10px] text-zinc-500 mt-4">
-              Risk mode now automatically shifts behavior: In Defensive/Emergency it reduces markets evaluated, deprioritizes weaker strategies, and applies extra conservatism to sizing.
+              Risk mode now drives real behavioral changes:<br />
+              • <strong>DEFENSIVE</strong>: Fewer markets, extra sizing conservatism, weaker strategies deprioritized.<br />
+              • <strong>EMERGENCY</strong>: Extremely restricted (only strongest strategies + very few markets) + aggressive downweighting.
             </div>
           </div>
         </div>

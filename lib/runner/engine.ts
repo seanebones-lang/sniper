@@ -138,12 +138,17 @@ export async function runOnce() {
     }
 
     if (currentRiskMode.current === 'EMERGENCY') {
-      marketEvaluationLimit = 6;
-      // Emergency: only the most robust strategies
+      marketEvaluationLimit = 4;
+      // Emergency: extremely restricted — only the strongest, most robust edges
       allowedStrategies = activeStrategies.filter(s => 
         ['orderbook-imbalance', 'resolution-proximity'].includes(s.type)
       );
       if (allowedStrategies.length === 0) allowedStrategies = activeStrategies.slice(0, 1);
+
+      // In true emergency, be willing to run almost nothing
+      if (systemHealth < 0.35) {
+        marketEvaluationLimit = 2;
+      }
     }
 
     const allocations = await getDynamicAllocations(allowedStrategies.map(s => s.id));

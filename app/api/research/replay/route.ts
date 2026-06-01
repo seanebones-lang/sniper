@@ -39,6 +39,8 @@ export async function POST(req: Request) {
   const to = new Date();
   const from = new Date(Date.now() - hours * 3600 * 1000);
 
+  const useRealistic = body.realisticPassiveFills ?? false;
+
   try {
     const result = await replayStrategyOnHistory({
       platform,
@@ -47,12 +49,14 @@ export async function POST(req: Request) {
       to,
       strategy,
       config,
+      realisticPassiveFills: useRealistic,
     });
 
     return NextResponse.json({
       ...result,
       variantId: variantId || null,
       configUsed: config,
+      realisticPassiveFills: useRealistic,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

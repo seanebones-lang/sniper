@@ -16,6 +16,7 @@ export default function BacktestPage() {
   const [applying, setApplying] = useState<string | null>(null);
   const [variants, setVariants] = useState<any[]>([]);
   const [selectedVariantId, setSelectedVariantId] = useState<string>('');
+  const [useRealisticFills, setUseRealisticFills] = useState(true);
 
   function runSynthetic() {
     const prices = pricesInput.split(',').map(p => parseFloat(p.trim()) / 100);
@@ -48,6 +49,7 @@ export default function BacktestPage() {
           strategyType,
           hours: 24,
           variantId: selectedVariantId || undefined,
+          realisticPassiveFills: useRealisticFills,
         }),
       });
       const data = await res.json();
@@ -157,6 +159,19 @@ export default function BacktestPage() {
                 <option disabled>No variants applied yet (apply from proposals above)</option>
               )}
             </select>
+          </div>
+
+          <div className="flex items-center gap-2 mb-3">
+            <input 
+              type="checkbox" 
+              id="realisticFills" 
+              checked={useRealisticFills}
+              onChange={e => setUseRealisticFills(e.target.checked)}
+              className="accent-emerald-500"
+            />
+            <label htmlFor="realisticFills" className="text-xs text-zinc-400">
+              Use realistic passive fill simulation (recommended for serious research)
+            </label>
           </div>
 
           <button 
