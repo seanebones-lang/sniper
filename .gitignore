@@ -18,24 +18,45 @@
 /out/
 
 # production
+/build
+/dist
 
 # ============================================================================
-# SNIPER — NEVER COMMIT SECRETS OR TRADING KEYS
+# SNIPER — CRITICAL: NEVER COMMIT SECRETS OR TRADING KEYS
 # ============================================================================
 .env
 .env.local
 .env.*.local
+.envrc
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Private keys / RSA material (Polymarket wallet, Kalshi keys)
+# Private keys / wallets (Polymarket, Kalshi, etc.)
 *.pem
 *private*.key
 *secret*.key
+*.p12
+*.key
 
-# Local DB / logs
+# Local DB / logs / data
 *.db
 *.log
 data/
 db/data/
+*.sqlite
+*.sqlite3
+
+# ============================================================================
+# REPO HYGIENE — Prevent nested copies and bloat (learned the hard way)
+# ============================================================================
+# Never allow a full copy of the project inside itself
+sniper/
+# Common duplicate folder names seen in this project history
+sniper-*/
+backup*/
+old*/
+archive*/
 
 # OS / editor
 .DS_Store
@@ -43,24 +64,26 @@ db/data/
 *.swo
 .idea/
 .vscode/
-/build
+*.code-workspace
 
-# misc
-.DS_Store
-*.pem
+# Build artifacts
+*.tsbuildinfo
+next-env.d.ts
+*.map
+dist/
+build/
 
-# debug
+# Debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+lerna-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
+# Misc
 .vercel
+*.local
+*.cache
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# Allow specific env files if needed (commented for safety)
+# !.env.example

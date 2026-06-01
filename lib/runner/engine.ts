@@ -4,7 +4,7 @@
  */
 
 import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db';
-import { getAllMarkets } from '@/lib/markets';
+import { getAllMarkets, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
 import { getStrategy } from '@/lib/strategies';
@@ -90,6 +90,15 @@ export async function runOnce() {
   }
 
   const markets = await getAllMarkets();
+
+  // === Ensure all markets we are about to evaluate are persisted (critical for signal FKs) ===
+  // This is cheap due to onConflictDoUpdate and prevents the historic FK mismatch bug.
+  try {
+    const { syncMarketsToDb } = await import('@/lib/markets');
+    await syncMarketsToDb(markets);
+  } catch (syncErr) {
+    console.warn('[Runner] Non-fatal: failed to sync markets to DB before evaluation', syncErr);
+  }
 
   // === Calculate global and per-market protection factors upfront ===
   const recentQuality = executionManager.getRecentExecutionQuality(30);
@@ -306,13 +315,38 @@ export async function runOnce() {
           if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
           if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 
-          await db.insert(signals).values({
+          // === CRITICAL: Ensure market exists in DB before creating signal (fixes FK mismatch) ===
+          let marketDbId: string;
+          try {
+            marketDbId = await ensureMarketRecord(market);
+          } catch (ensureErr) {
+            console.error(`[Runner] Failed to ensure market record for ${market.platform}:${market.externalId}`, ensureErr);
+            await logAudit('runner_market_ensure_failed', {
+              strategy: stratRow.name,
+              market: market.externalId,
+              error: String(ensureErr),
+            });
+            continue; // Skip this signal — cannot create valid FK reference
+          }
+
+          const insertedSignal = await db.insert(signals).values({
             strategyId: stratRow.id,
-            marketId: market.id as any,
+            marketId: marketDbId,
             action: signal.action as any,
             price: signal.price.toString(),
             size: finalSize.toString(),
             reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}${sizeReason}`,
+          }).returning({ id: signals.id });
+
+          const signalId = insertedSignal[0]?.id;
+
+          await logAudit('runner_signal_created', {
+            strategy: stratRow.name,
+            market: market.externalId,
+            marketDbId,
+            signalId,
+            action: signal.action,
+            size: finalSize,
           });
 
           const isRealAllowed = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !stratRow.paperOnly;
@@ -355,6 +389,7 @@ export async function runOnce() {
               await db.insert(paperTrades).values({
                 platform: market.platform,
                 marketExternalId: market.externalId,
+                signalId: signalId ?? null, // Now properly linked (was previously impossible due to FK bug)
                 side: fill.side,
                 price: fill.price.toString(),
                 size: fill.size.toString(),

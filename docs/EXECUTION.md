@@ -2,6 +2,8 @@
 
 This is where theoretical edge becomes (or fails to become) real money.
 
+> **June 2026 Reliability Fix**: The automated runner → signal → paper fill pipeline (previously blocked by `signals.market_id` FK issues) is now functional. See `lib/db/ensure-market.ts`, updates to `lib/markets.ts` + `lib/runner/engine.ts`, and the authoritative `docs/STATUS.md`.
+
 ## Philosophy
 
 In prediction markets, **execution quality is often the difference between a positive and negative edge**.
