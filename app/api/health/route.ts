@@ -18,7 +18,7 @@ export async function GET() {
     execution: {
       recentFills: execQuality.length,
       averageSlippage: parseFloat(avgSlippage.toFixed(5)),
-      unhealthyMarkets,
+      unhealthyMarkets: unhealthyMarkets,
       lastFills: execQuality.slice(-5),
     },
     summary: {

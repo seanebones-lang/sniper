@@ -1,53 +1,86 @@
 # Sniper
 
-**Personal 24/7 web app for automated sniping/scalping on Polymarket and Kalshi.**
+**A research-first, self-protecting 24/7 automated trading system for Polymarket and Kalshi.**
 
-Paper trading first. Real money execution is opt-in, heavily guarded, and only after you have validated edges in simulation for weeks.
+Designed for small, consistent edges over long periods — not gambling or home runs.
 
-> ⚠️ **This is a high-risk personal tool, not a product that guarantees profits.** Prediction markets are competitive. Most automated strategies lose money after fees, slippage, and adverse selection. You can lose all capital. Use at your own risk.
+> ⚠️ **High risk personal tool.** Most automated prediction market strategies lose money after fees, slippage, and adverse selection. You can lose all capital. Paper mode is strongly recommended for extended periods before any real money.
 
-## Core Principles
+## Core Philosophy
 
-- **Paper mode is sacred** — the primary way to run this system.
-- Deterministic, fully auditable decisions (every signal explains exactly why).
-- Strong risk limits + kill switches at every layer.
-- Built with the stack you already trust: Next.js 16 + TypeScript + Drizzle + Railway + Vitest.
+- **Paper mode is sacred** — the default and primary way to operate.
+- **Self-protection first** — the system must detect when it is getting hurt and reduce risk automatically.
+- **Research flywheel** — rich data collection + Grok analysis + structured proposals + automated replay validation.
+- **Execution quality matters** — signals are only half the game. Adverse selection and poor fills destroy edges.
+- **Auditable everything** — every size decision has a traceable reason.
 
-## Quickstart (Paper Only — Recommended)
+## Current Capabilities (as of latest build)
+
+- Multi-venue data (Polymarket CLOB + Kalshi) with real-time WebSockets
+- Professional risk system (fractional Kelly + category limits + concentration + daily breakers)
+- Dynamic Strategy Allocator based on recent performance
+- Multiple edges including order book imbalance and resolution proximity
+- Central `ExecutionManager` with adverse selection detection and per-market health tracking
+- Self-protection: runner automatically downweights markets with poor recent execution
+- Historical snapshot collection + powerful replay engine
+- Grok Research Agent that analyzes your data and proposes testable improvements
+- Variants system: turn agent proposals into versioned configurations and compare them
+- Strong observability (`/health`, attribution, Telegram alerts)
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a deeper breakdown.
+
+## Quickstart (Paper Recommended)
 
 ```bash
 git clone https://github.com/seanebones-lang/sniper.git
 cd sniper
 cp .env.example .env.local
 npm install
-npm run db:push          # requires local Postgres or set DATABASE_URL
+npm run db:push
 npm run dev
 ```
 
-1. Open http://localhost:3000
-2. Create a simple strategy (spread scalper or threshold) on 2–3 liquid short-term markets.
-3. Watch the live decision log and paper PnL update.
-4. Let it run for hours/days. Export logs.
+1. Go to `/strategies`
+2. Create 1-2 strategies on liquid short-term markets
+3. Start the runner
+4. Let it run and observe
 
-See `specs/001-sniper-mvp/quickstart.md` and the in-app banners.
+## Important 48h+ Soak Test
 
-## 48-Hour Paper Soak Test (Before Considering Real Money)
+Before even considering tiny real sizes:
 
-- Configure 3–5 high-volume short-duration markets (e.g. BTC/ETH 5m/15m).
-- Run continuously (local + Railway deploy).
-- Verify: no crashes, correct reconnect behavior, no duplicate signals, sane PnL math, full reasoning in every log entry.
-- Kill switch works.
-- Export decision log and review every fill.
+- Run on multiple markets for at least 48–72 hours
+- Review execution quality (not just P&L)
+- Check that unhealthy market detection and health throttling are working
+- Export decision logs and review reasons
 
-Only after this (and ideally 1–2 weeks of positive simulated expectancy on your chosen edges) should you even think about tiny real sizes.
+See the in-app banners and `docs/` folder for more guidance.
 
-## Deployment (Railway — Matches Your Other Projects)
+## Key Documentation
 
-1. Create Railway project from this repo.
-2. Add **PostgreSQL** plugin (it injects `DATABASE_URL`).
-3. Set any trading secrets as Railway variables (never in code).
-4. After first deploy: run `npm run db:push` in the Railway shell.
-5. Redeploy. Use always-on / hobby / pro tier for 24/7.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — overall system design
+- [docs/RISK.md](docs/RISK.md) — risk philosophy and layers
+- [docs/EXECUTION.md](docs/EXECUTION.md) — execution quality focus
+- [docs/RESEARCH.md](docs/RESEARCH.md) — research flywheel and Grok agent
+
+## Deployment
+
+Primary target is Railway (Postgres + always-on).
+
+Critical secrets for real trading:
+- `SNIPER_ENABLE_REAL_EXECUTION=true`
+- `POLYMARKET_PRIVATE_KEY` (dedicated low-balance wallet strongly recommended)
+- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (highly recommended for alerts)
+- `XAI_API_KEY` (for Grok Research Agent)
+- `ENABLE_GROK_RESEARCH_AGENT=true` (optional)
+
+## Warning
+
+This is an advanced personal research and execution platform. It is not magic. Consistent small profits in prediction markets require real edge, excellent risk management, and patience.
+
+Most people who try this lose money.
+
+Use responsibly. Paper mode is your friend.
 
 ## Environment Variables
 

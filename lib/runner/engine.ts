@@ -108,6 +108,15 @@ export async function runOnce() {
 
         const currentPrice = book.mid ?? market.lastPrice;
 
+        // === Self-Protection: Execution Health Throttle ===
+        const marketHealth = executionManager.getMarketHealth(market.externalId);
+        let healthMultiplier = 1.0;
+
+        if (marketHealth.healthScore < 0.5) {
+          healthMultiplier = Math.max(0.15, marketHealth.healthScore * 0.8);
+          console.warn(`[Runner] Downweighting ${market.externalId} — poor execution health (${(marketHealth.healthScore * 100).toFixed(0)}%, ${marketHealth.recentAdverseCount}/${marketHealth.recentFills} adverse)`);
+        }
+
         // === Rich feature collection for research & future ML ===
         let currentRegime = 'normal';
 
@@ -176,16 +185,21 @@ export async function runOnce() {
             allocation: allocation.reason,
             multiplier: allocatorMultiplier,
           });
-          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier;
+
+          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier;
 
           // Persist signal (with risk-adjusted size)
+          const sizeReason = healthMultiplier < 0.95 
+            ? ` | Health throttle ${healthMultiplier.toFixed(2)}` 
+            : '';
+
           await db.insert(signals).values({
             strategyId: stratRow.id,
             marketId: market.id as any,
             action: signal.action as any,
             price: signal.price.toString(),
             size: finalSize.toString(),
-            reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}`,
+            reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}${sizeReason}`,
           });
 
           const isRealAllowed = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !stratRow.paperOnly;
