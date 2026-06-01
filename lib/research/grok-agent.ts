@@ -1,23 +1,15 @@
 /**
- * Grok Research Agent
+ * Grok Research Agent - Enhanced with Structured Proposals
  * 
- * This is one of the highest-leverage components for building a truly
- * advantageous, self-improving prediction market system.
- * 
- * It uses the rich data we collect (snapshots, performance attribution, replays)
- * and leverages Grok to:
- * - Analyze why strategies win or lose
- * - Propose new features or strategy tweaks
- * - Detect market regimes
- * - Generate hypotheses for new edges
- * 
- * This creates a real research flywheel.
+ * Now capable of returning actionable, structured recommendations
+ * that can be reviewed and potentially applied by the system.
  */
 
 import { generateText } from 'ai';
 import { xai } from '@ai-sdk/xai';
 import { getStrategyPerformance } from './performance';
 import { getSnapshotsForReplay } from '../data/historical';
+import { z } from 'zod';
 
 const MODEL = 'grok-4';
 
@@ -33,12 +25,36 @@ export interface ResearchQuery {
 export interface ResearchResult {
   query: ResearchQuery;
   analysis: string;
+  proposals?: StrategyProposal[];
   timestamp: Date;
   model: string;
 }
 
+export interface StrategyProposal {
+  strategyId: string;
+  type: 'parameter_change' | 'new_sub_strategy' | 'feature_addition' | 'regime_specific_rule';
+  description: string;
+  suggestedChange: Record<string, any>;
+  expectedImpact: string;
+  confidence: number; // 0-1
+  regime?: string;
+}
+
+const ProposalSchema = z.object({
+  proposals: z.array(z.object({
+    strategyId: z.string(),
+    type: z.enum(['parameter_change', 'new_sub_strategy', 'feature_addition', 'regime_specific_rule']),
+    description: z.string(),
+    suggestedChange: z.record(z.any()),
+    expectedImpact: z.string(),
+    confidence: z.number().min(0).max(1),
+    regime: z.string().optional(),
+  }))
+});
+
 /**
  * Main entry point for the Research Agent.
+ * Now attempts to extract structured proposals when possible.
  */
 export async function askGrokResearchAgent(query: ResearchQuery): Promise<ResearchResult> {
   if (!process.env.XAI_API_KEY) {
@@ -46,18 +62,44 @@ export async function askGrokResearchAgent(query: ResearchQuery): Promise<Resear
   }
 
   const context = await gatherResearchContext(query);
-
   const prompt = buildResearchPrompt(query, context);
 
   const { text } = await generateText({
     model: xai(MODEL),
     prompt,
-    temperature: 0.4, // slightly more analytical than creative
+    temperature: 0.35,
   });
+
+  // Try to extract structured proposals
+  let proposals: StrategyProposal[] = [];
+  try {
+    // Ask Grok for a clean JSON block at the end for proposals
+    const proposalPrompt = `${prompt}\n\nAt the very end, output ONLY a JSON object with this exact shape (no other text):\n` +
+      `{"proposals": [{"strategyId": "...", "type": "parameter_change|new_sub_strategy|feature_addition|regime_specific_rule", "description": "...", "suggestedChange": {...}, "expectedImpact": "...", "confidence": 0.0-1.0, "regime": "optional"}]}`;
+
+    const { text: proposalText } = await generateText({
+      model: xai(MODEL),
+      prompt: proposalPrompt,
+      temperature: 0.2,
+    });
+
+    const jsonMatch = proposalText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const validated = ProposalSchema.safeParse(parsed);
+      if (validated.success) {
+        proposals = validated.data.proposals;
+      }
+    }
+  } catch (e) {
+    // Structured proposals are optional — don't fail the whole analysis
+    console.warn('[Grok Agent] Could not extract structured proposals:', e);
+  }
 
   return {
     query,
     analysis: text,
+    proposals: proposals.length > 0 ? proposals : undefined,
     timestamp: new Date(),
     model: MODEL,
   };
@@ -81,80 +123,49 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   return {
     performance,
-    recentSnapshots: snapshots.slice(-30), // last 30 snapshots for context
+    recentSnapshots: snapshots.slice(-40),
     snapshotCount: snapshots.length,
     lookbackHours: lookback,
   };
 }
 
 function buildResearchPrompt(query: ResearchQuery, context: any): string {
-  const base = `You are an expert quantitative researcher specializing in prediction market microstructure and automated trading systems.
+  const base = `You are a world-class quantitative researcher for prediction market automated trading systems.
 
-You have access to:
-- Recent performance attribution for strategies
-- High-resolution order book snapshots (imbalance, depth, micro-price, etc.)
-- Replay results from historical data
+You have access to real order book snapshots (with imbalance, depth, micro-price, regime labels, etc.), performance attribution, and replay results.
 
-Current query type: ${query.type}
+Be extremely practical and data-driven. Focus on small, consistent edges rather than home-run ideas.
 
 `;
 
   if (query.type === 'strategy_analysis') {
     return base + `
-Analyze the recent performance of strategy "${query.strategyId || 'unknown'}".
+Analyze strategy "${query.strategyId}" over the last ${context.lookbackHours} hours.
 
-Performance data (last ${context.lookbackHours}h):
+Performance:
 ${JSON.stringify(context.performance, null, 2)}
 
-Recent snapshot features (sample):
-${JSON.stringify(context.recentSnapshots.slice(0, 8), null, 2)}
+Recent snapshot features (with regimes):
+${JSON.stringify(context.recentSnapshots.slice(-12), null, 2)}
 
-Provide:
-1. Why this strategy is likely winning or losing right now
-2. Any visible regime issues (e.g., only works in high-imbalance environments)
-3. Specific, actionable recommendations to improve it
-4. Risk of overfitting or degradation
-
-Be direct and data-driven.`;
+Deliver a sharp analysis of what is working / broken, and why.`;
   }
 
   if (query.type === 'feature_ideas') {
     return base + `
-Based on the recent order book snapshots below, propose 3-5 new, computable features that could improve existing strategies or form the basis of new ones.
+From the recent snapshot data, propose 4-6 high-quality, computable features that would help strategies adapt to different regimes or capture small persistent edges.
 
-Recent snapshots:
-${JSON.stringify(context.recentSnapshots, null, 2)}
-
-For each proposed feature, include:
-- Name
-- How to calculate it from snapshots
-- Why it might have predictive power in prediction markets
-- Which current strategy it would most help`;
+Data sample:
+${JSON.stringify(context.recentSnapshots.slice(0, 10), null, 2)}`;
   }
 
   if (query.type === 'regime_detection') {
     return base + `
-Analyze the recent snapshot data for signs of different market regimes (high vs low liquidity, trending vs mean-reverting imbalance, news-driven vs quiet periods, etc.).
+Using the recent snapshots (which already contain some regime labels), refine our regime classification and suggest simple, robust real-time regime detection rules we can implement in code.
 
-Recent snapshots:
-${JSON.stringify(context.recentSnapshots, null, 2)}
-
-Identify:
-- Clear regime shifts in the data
-- Which regimes current strategies are likely to perform well or poorly in
-- Simple rules or signals that could be used to detect the current regime in real time`;
+Recent data:
+${JSON.stringify(context.recentSnapshots.slice(-20), null, 2)}`;
   }
 
-  return base + `General research request: ${query.extraContext || 'Provide any interesting insights from the available performance and snapshot data.'}`;
-}
-
-/**
- * Convenience method for common research tasks.
- */
-export async function analyzeStrategyPerformance(strategyId: string, hours = 48) {
-  return askGrokResearchAgent({
-    type: 'strategy_analysis',
-    strategyId,
-    lookbackHours: hours,
-  });
+  return base + `Research request: ${query.extraContext || 'Provide the most valuable insights possible from the data.'}`;
 }

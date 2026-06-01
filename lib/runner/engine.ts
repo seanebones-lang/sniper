@@ -113,9 +113,8 @@ export async function runOnce() {
           const topAsk = book.asks?.[0]?.size || 0;
           const imbalance = topBid / (topBid + topAsk + 0.0001);
 
-          // Compute advanced features
-          const recentSnapshotsForFeatures = []; // In production we'd query recent ones
-          const advanced = extractFeaturesFromRecentSnapshots(recentSnapshotsForFeatures);
+          // Compute advanced features (in production we would query recent snapshots for this market)
+          const advanced = extractFeaturesFromRecentSnapshots([]);
 
           await saveBookSnapshot({
             platform: market.platform,
@@ -136,7 +135,12 @@ export async function runOnce() {
         }
 
         const signal = strategyImpl.evaluate(
-          { market, book, currentPrice },
+          { 
+            market, 
+            book, 
+            currentPrice,
+            regime: advanced?.regime || 'normal'   // pass regime to strategies
+          },
           config
         );
 

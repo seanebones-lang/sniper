@@ -22,14 +22,19 @@ export const OrderBookImbalance: Strategy = {
     const topAskSize = book.asks[0]?.size || 0;
     const totalTop = topBidSize + topAskSize;
 
-    if (totalTop < 50) return null; // too thin, ignore
+    if (totalTop < 50) return null;
 
     const bidPressure = topBidSize / totalTop;
     const askPressure = topAskSize / totalTop;
 
-    const imbalance = bidPressure - askPressure; // positive = buying pressure
+    const imbalance = bidPressure - askPressure;
 
-    const threshold = 0.35; // quite strong imbalance required
+    // Regime-aware thresholds (more aggressive in trending regimes)
+    const regime = (ctx as any).regime || 'normal';
+    let threshold = 0.35;
+
+    if (regime === 'trending') threshold = 0.22;      // easier to trigger in strong moves
+    if (regime === 'low_liquidity') threshold = 0.48; // much stricter in thin books
 
     if (Math.abs(imbalance) > threshold) {
       const direction = imbalance > 0 ? 'BUY' : 'SELL';
@@ -38,17 +43,14 @@ export const OrderBookImbalance: Strategy = {
         : book.asks[0].price * 1.005;
 
       const size = (config.maxSizeUsd || 150) / targetPrice;
-
-      // Better edge estimate: stronger imbalance = higher estimated edge
-      const estimatedEdge = Math.min(0.08, Math.abs(imbalance) * 0.18);
+      const estimatedEdge = Math.min(0.09, Math.abs(imbalance) * 0.20);
 
       return {
         action: direction,
         price: targetPrice,
         size: Math.max(20, Math.floor(size)),
-        reason: `Strong ${direction} imbalance ${(Math.abs(imbalance) * 100).toFixed(1)}% (top of book)`,
-        confidence: Math.min(0.88, 0.55 + Math.abs(imbalance) * 0.9),
-        // New: explicit edge for risk manager
+        reason: `Strong ${direction} imbalance ${(Math.abs(imbalance) * 100).toFixed(1)}% (regime: ${regime})`,
+        confidence: Math.min(0.9, 0.55 + Math.abs(imbalance) * 0.95),
         edge: estimatedEdge,
       };
     }

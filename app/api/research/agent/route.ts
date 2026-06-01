@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { askGrokResearchAgent } from '@/lib/research/grok-agent';
+import { saveProposals } from '@/lib/research/proposals';
 
 export async function POST(req: Request) {
   if (!process.env.XAI_API_KEY) {
@@ -10,6 +11,12 @@ export async function POST(req: Request) {
 
   try {
     const result = await askGrokResearchAgent(body);
+
+    // Automatically persist any structured proposals for review
+    if (result.proposals && result.proposals.length > 0) {
+      await saveProposals(result.proposals, result.query);
+    }
+
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
