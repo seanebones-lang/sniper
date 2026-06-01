@@ -19,38 +19,37 @@ export default function Dashboard() {
       <div className="grid md:grid-cols-3 gap-5 mb-10">
         <Link href="/markets" className="card hover:border-white/30 transition group">
           <TrendingUp className="h-6 w-6 text-blue-400 mb-4 group-hover:scale-110 transition" />
-          <div className="font-semibold mb-1">Markets</div>
-          <div className="text-sm text-zinc-400">Live discovery from Polymarket &amp; Kalshi. Click any row for order book.</div>
-          <div className="mt-4 text-xs text-emerald-400">Phase 1 ✓</div>
+          <div className="font-semibold mb-1">Markets + Live Snipe</div>
+          <div className="text-sm text-zinc-400">Real-time order books (Polymarket WS). Click any market for live view + manual paper snipe simulator.</div>
+          <div className="mt-4 text-xs text-emerald-400">Phase 2 ✓</div>
         </Link>
 
         <div className="card opacity-60">
           <Clock className="h-6 w-6 mb-4" />
-          <div className="font-semibold mb-1">Strategies &amp; Runner</div>
-          <div className="text-sm text-zinc-400">Configurable paper-first strategies + 24/7 background execution.</div>
+          <div className="font-semibold mb-1">Strategies &amp; 24/7 Runner</div>
+          <div className="text-sm text-zinc-400">Configurable paper-first strategies + background automated execution.</div>
           <div className="mt-4 text-xs">Phase 3</div>
         </div>
 
         <div className="card opacity-60">
           <Shield className="h-6 w-6 mb-4" />
-          <div className="font-semibold mb-1">Positions &amp; Logs</div>
+          <div className="font-semibold mb-1">Positions, Logs &amp; Risk</div>
           <div className="text-sm text-zinc-400">Paper + real trade history, PnL, kill switches, full audit trail.</div>
           <div className="mt-4 text-xs">Phase 3–4</div>
         </div>
       </div>
 
       <div className="card bg-zinc-900/40 text-sm">
-        <div className="font-medium mb-2">Current Status (Phase 1)</div>
+        <div className="font-medium mb-2">Current Status (Phase 2)</div>
         <ul className="text-zinc-400 space-y-1 text-sm">
-          <li>✓ Unified Market + OrderBook types</li>
-          <li>✓ Polymarket (Gamma + CLOB SDK) public client</li>
-          <li>✓ Kalshi public market + orderbook client (no auth)</li>
-          <li>✓ /api/markets + /api/markets/orderbook</li>
-          <li>✓ Working markets browser + per-market order book viewer</li>
-          <li>✓ Strong risk disclaimers + paper-first posture throughout</li>
+          <li>✓ All Phase 1 market data infrastructure</li>
+          <li>✓ Polymarket WebSocket client (price_change + book, heartbeats, reconnect)</li>
+          <li>✓ Kalshi WebSocket client stub</li>
+          <li>✓ Live updating order books on individual market pages</li>
+          <li>✓ Paper simulator with manual snipe + in-session fill log</li>
         </ul>
-        <div className="mt-4 text-xs text-zinc-500">
-          Next: Real-time WebSockets (Phase 2) → Strategy engine + paper simulator (Phase 3)
+        <div className="mt-4 text-xs text-emerald-400 font-medium">
+          Phase 2 complete. Ready for automated strategies + background runner (Phase 3).
         </div>
       </div>
     </div>
