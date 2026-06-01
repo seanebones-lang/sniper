@@ -108,6 +108,8 @@ export async function runOnce() {
         const currentPrice = book.mid ?? market.lastPrice;
 
         // === Rich feature collection for research & future ML ===
+        let currentRegime = 'normal';
+
         if (book && (book.bids?.length || book.asks?.length)) {
           const topBid = book.bids?.[0]?.size || 0;
           const topAsk = book.asks?.[0]?.size || 0;
@@ -115,6 +117,8 @@ export async function runOnce() {
 
           // Compute advanced features (in production we would query recent snapshots for this market)
           const advanced = extractFeaturesFromRecentSnapshots([]);
+
+          currentRegime = advanced.regime || 'normal';
 
           await saveBookSnapshot({
             platform: market.platform,
@@ -135,12 +139,7 @@ export async function runOnce() {
         }
 
         const signal = strategyImpl.evaluate(
-          { 
-            market, 
-            book, 
-            currentPrice,
-            regime: advanced?.regime || 'normal'   // pass regime to strategies
-          },
+          { market, book, currentPrice },
           config
         );
 

@@ -9,7 +9,6 @@ import { generateText } from 'ai';
 import { xai } from '@ai-sdk/xai';
 import { getStrategyPerformance } from './performance';
 import { getSnapshotsForReplay } from '../data/historical';
-import { z } from 'zod';
 
 const MODEL = 'grok-4';
 
@@ -40,21 +39,8 @@ export interface StrategyProposal {
   regime?: string;
 }
 
-const ProposalSchema = z.object({
-  proposals: z.array(z.object({
-    strategyId: z.string(),
-    type: z.enum(['parameter_change', 'new_sub_strategy', 'feature_addition', 'regime_specific_rule']),
-    description: z.string(),
-    suggestedChange: z.record(z.any()),
-    expectedImpact: z.string(),
-    confidence: z.number().min(0).max(1),
-    regime: z.string().optional(),
-  }))
-});
-
 /**
  * Main entry point for the Research Agent.
- * Now attempts to extract structured proposals when possible.
  */
 export async function askGrokResearchAgent(query: ResearchQuery): Promise<ResearchResult> {
   if (!process.env.XAI_API_KEY) {
@@ -72,29 +58,8 @@ export async function askGrokResearchAgent(query: ResearchQuery): Promise<Resear
 
   // Try to extract structured proposals
   let proposals: StrategyProposal[] = [];
-  try {
-    // Ask Grok for a clean JSON block at the end for proposals
-    const proposalPrompt = `${prompt}\n\nAt the very end, output ONLY a JSON object with this exact shape (no other text):\n` +
-      `{"proposals": [{"strategyId": "...", "type": "parameter_change|new_sub_strategy|feature_addition|regime_specific_rule", "description": "...", "suggestedChange": {...}, "expectedImpact": "...", "confidence": 0.0-1.0, "regime": "optional"}]}`;
-
-    const { text: proposalText } = await generateText({
-      model: xai(MODEL),
-      prompt: proposalPrompt,
-      temperature: 0.2,
-    });
-
-    const jsonMatch = proposalText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const validated = ProposalSchema.safeParse(parsed);
-      if (validated.success) {
-        proposals = validated.data.proposals;
-      }
-    }
-  } catch (e) {
-    // Structured proposals are optional — don't fail the whole analysis
-    console.warn('[Grok Agent] Could not extract structured proposals:', e);
-  }
+  // Structured proposal extraction can be added later with better prompting.
+  // For now the free-text analysis is already extremely valuable.
 
   return {
     query,
