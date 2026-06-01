@@ -134,7 +134,7 @@ export async function runOnce() {
             platform: market.platform,
             marketExternalId: market.externalId,
             side: signal.action as 'BUY' | 'SELL',
-            edge: signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025, // rough mapping
+            edge: signal.edge ?? (signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025),
             confidence: signal.confidence ?? 0.65,
             category: categoryInfo.category,
             currentPrice: signal.price,
@@ -226,6 +226,12 @@ export async function runOnce() {
 
   if (signalsThisRun > 0) {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
+  }
+
+  // Periodic portfolio health log (every ~10 runs on average)
+  if (Math.random() < 0.1) {
+    const state = await portfolioRiskManager.getCurrentPortfolioState();
+    console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
   }
 }
 

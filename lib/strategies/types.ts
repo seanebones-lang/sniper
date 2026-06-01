@@ -24,6 +24,7 @@ export interface StrategySignal {
   size: number;
   reason: string;
   confidence?: number;
+  edge?: number;           // estimated edge in decimal (e.g. 0.04 = 4%)
 }
 
 export interface Strategy {

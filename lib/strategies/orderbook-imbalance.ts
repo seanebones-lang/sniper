@@ -34,17 +34,22 @@ export const OrderBookImbalance: Strategy = {
     if (Math.abs(imbalance) > threshold) {
       const direction = imbalance > 0 ? 'BUY' : 'SELL';
       const targetPrice = direction === 'BUY' 
-        ? book.bids[0].price * 0.995   // slight discount to get filled on the strong side
+        ? book.bids[0].price * 0.995
         : book.asks[0].price * 1.005;
 
       const size = (config.maxSizeUsd || 150) / targetPrice;
+
+      // Better edge estimate: stronger imbalance = higher estimated edge
+      const estimatedEdge = Math.min(0.08, Math.abs(imbalance) * 0.18);
 
       return {
         action: direction,
         price: targetPrice,
         size: Math.max(20, Math.floor(size)),
         reason: `Strong ${direction} imbalance ${(Math.abs(imbalance) * 100).toFixed(1)}% (top of book)`,
-        confidence: Math.min(0.85, Math.abs(imbalance) * 2),
+        confidence: Math.min(0.88, 0.55 + Math.abs(imbalance) * 0.9),
+        // New: explicit edge for risk manager
+        edge: estimatedEdge,
       };
     }
 
