@@ -132,6 +132,25 @@ export default function StrategyHealthPage() {
             </div>
           </div>
 
+          {/* Active Temporary Adjustments from Grok */}
+          <div className="card">
+            <div className="font-medium mb-2">Active Temporary Adjustments (from Grok)</div>
+            {health.temporaryAdjustments?.active?.length > 0 ? (
+              <div className="text-sm text-amber-300 space-y-1">
+                {health.temporaryAdjustments.active.map((adj: any, i: number) => (
+                  <div key={i}>
+                    {adj.type}{adj.target ? ` (${adj.target})` : ''}: {adj.value} — {adj.reason} (expires in ~{adj.expiresAfterRuns} runs)
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-zinc-400">No active temporary adjustments.</div>
+            )}
+            <div className="text-[10px] text-zinc-500 mt-2">
+              These are automatically created from Grok recommendations and will revert automatically.
+            </div>
+          </div>
+
           {/* Recent AI Recommendations */}
           <div className="card">
             <div className="font-medium mb-3">Recent Grok Recommendations (Automated Intelligence)</div>

@@ -4,6 +4,7 @@ import { getAllVariants } from '@/lib/strategies/variants';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
+import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/temporary-adjustments';
 
 export async function GET() {
   const performance = await getStrategyPerformance(3);
@@ -38,8 +39,13 @@ export async function GET() {
     },
     aiRecommendations: getRecentRecommendations(5).map((rec, idx) => ({
       ...rec,
-      index: idx, // so UI can call apply-recommendation with this index
+      index: idx,
     })),
+
+    temporaryAdjustments: {
+      active: getActiveAdjustments(),
+      summary: getAdjustmentSummary(),
+    },
 
     summary: {
       totalActiveStrategies: Object.keys(performance.byStrategy || {}).length,

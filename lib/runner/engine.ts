@@ -21,6 +21,13 @@ import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations, getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
+import { 
+  applyTemporaryAdjustment, 
+  cleanupExpiredAdjustments, 
+  getEffectiveGlobalRiskMultiplier,
+  getStrategySizeMultiplier,
+  getAdjustmentSummary 
+} from '@/lib/monitoring/temporary-adjustments';
 
 export interface RunnerStatus {
   running: boolean;
@@ -92,7 +99,13 @@ export async function runOnce() {
   const systemHealth = executionManager.getSystemHealthScore();
   const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
 
-  let globalRiskMultiplier = 1.0;
+  // Clean up any expired temporary adjustments from previous Grok recommendations
+  const expiredAdjustments = cleanupExpiredAdjustments();
+  if (expiredAdjustments.length > 0) {
+    console.log(`[Runner] Reverted ${expiredAdjustments.length} expired temporary adjustment(s)`);
+  }
+
+  let globalRiskMultiplier = getEffectiveGlobalRiskMultiplier(1.0);
 
   // === Risk Mode Evaluation ===
   const decayingCount = activeStrategies.filter(s => edgeDecayMonitor.isDecaying(s.id).decaying).length;
@@ -275,7 +288,10 @@ export async function runOnce() {
             continue; // Skip this signal
           }
 
-          const allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
+          let allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
+
+          // Apply any temporary strategy-specific downweights from Grok recommendations
+          allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
 
           await logAudit('runner_allocator_decision', {
             strategy: stratRow.name,
@@ -431,17 +447,44 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
           parsedCount: stored.parsedActions.length,
         });
 
-        // Auto-apply very safe recommendations when the system is already in or heading toward trouble
+        // Auto-apply safe recommendations and create temporary adjustments
         for (const action of stored.parsedActions) {
           const a = action.action.toLowerCase();
+          const target = action.target;
+          const value = typeof action.value === 'number' ? action.value : 0.7; // default safe reduction
+
           if ((a.includes('reduce') && a.includes('risk')) || a.includes('defensive')) {
             if (systemHealth < 0.6 || currentRisk.current !== 'NORMAL') {
-              // Temporarily tighten global risk for the next several runs
-              // (simple implementation: we can adjust the risk mode multiplier logic in future)
-              console.warn(`[Runner] Auto-applying low-risk Grok recommendation: ${action.action} on ${action.target}`);
-              await logAudit('grok_auto_applied', { action: action.action, target: action.target });
-              // For now we just log it strongly; full auto-execution of risk changes can be wired later.
+              const expires = 12; // ~12 runs (~2-3 hours depending on frequency)
+              applyTemporaryAdjustment({
+                type: 'global_risk_multiplier',
+                value: Math.max(0.3, value),
+                reason: `Grok auto: ${action.reason}`,
+                expiresAfterRuns: expires,
+                source: 'grok_auto',
+              });
+              console.warn(`[Runner] Auto-applied temporary risk reduction from Grok (expires in ~${expires} runs)`);
+              await logAudit('grok_auto_applied', { 
+                action: action.action, 
+                target, 
+                value: Math.max(0.3, value),
+                expiresAfterRuns: expires 
+              });
             }
+          }
+
+          if (a.includes('downweight') || a.includes('pause_strategy')) {
+            const expires = 20;
+            applyTemporaryAdjustment({
+              type: 'strategy_downweight',
+              target: target,
+              value: a.includes('pause') ? 0.1 : Math.max(0.2, value),
+              reason: `Grok auto: ${action.reason}`,
+              expiresAfterRuns: expires,
+              source: 'grok_auto',
+            });
+            console.warn(`[Runner] Auto-applied temporary strategy adjustment for ${target}`);
+            await logAudit('grok_auto_applied', { action: action.action, target, expiresAfterRuns: expires });
           }
         }
 
