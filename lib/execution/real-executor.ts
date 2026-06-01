@@ -14,6 +14,7 @@ import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
+import { getSmartExecutionDecision } from './smart-router';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
@@ -91,6 +92,20 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     usdValue,
   });
 
+  // === Smart Execution Decision ===
+  const execDecision = getSmartExecutionDecision({
+    signal: req,
+    book: null, // In real system we would pass current book here
+    recentImbalance: 0.1, // placeholder - should come from recent snapshots
+    timeSinceSignal: 12,
+    isRealMoney: true,
+  });
+
+  await logAudit('smart_execution_decision', {
+    tradeId: trade.id,
+    decision: execDecision,
+  });
+
   // 2. Polymarket execution
   if (req.market.platform === 'polymarket') {
     if (!POLYMARKET_PRIVATE_KEY) {
@@ -99,10 +114,13 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       return { success: false, error: msg };
     }
 
+    // Adjust price based on smart router recommendation
+    const adjustedPrice = req.price + (req.side === 'BUY' ? -execDecision.targetPriceImprovement : execDecision.targetPriceImprovement);
+
     const result = await placePolymarketLimitOrder({
       privateKey: POLYMARKET_PRIVATE_KEY,
       tokenId: req.market.externalId,
-      price: req.price,
+      price: Math.max(0.01, Math.min(0.99, adjustedPrice)),
       size: finalSize,
       side: req.side,
     });
