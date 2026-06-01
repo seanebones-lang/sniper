@@ -36,7 +36,7 @@ export interface RunnerStatus {
   fillsExecuted: number;
 }
 
-let status: RunnerStatus = {
+const status: RunnerStatus = {
   running: false,
   lastRun: null,
   signalsGenerated: 0,
@@ -404,6 +404,12 @@ export async function runOnce() {
       } catch (e) {
         // Don't let one bad market kill the runner
         console.warn(`[Runner] Error on ${market.externalId}:`, e);
+        await logAudit('runner_market_error', {
+          market: market.externalId,
+          strategy: stratRow.name,
+          error: e instanceof Error ? e.message : String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
+        });
       }
     }
   }

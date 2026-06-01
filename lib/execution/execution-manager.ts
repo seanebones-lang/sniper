@@ -60,7 +60,7 @@ export class ExecutionManager {
 
   decideExecution(
     signal: { action: 'BUY' | 'SELL'; price: number; size: number; reason?: string },
-    book: any,
+    book: { marketExternalId?: string } | null | undefined,
     context: ExecutionContext
   ): ExecutionAction {
     const decision = getSmartExecutionDecision({

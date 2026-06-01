@@ -48,7 +48,9 @@ All references to this blocker in older docs/wiki are now historical.
 
 ### Recently Resolved (June 2026)
 - **Repo hygiene (Major win)**: Removed a 1.4 GB nested duplicate `sniper/sniper/` directory that had been polluting the repository (contained full copy + `.env.local` + `.next/`). Hardened `.gitignore` to prevent recurrence. Project size dropped from ~2.4G to ~980M.
-- **signals.market_id FK** — Fixed (see previous entry).
+- **signals.market_id FK** — Fixed.
+- **Testing foundation**: Made test suite actually executable. Added comprehensive unit tests for PortfolioRiskManager (7 tests) and ExecutionManager (4 tests). Total unit test coverage significantly increased. Working `npm run test:smoke` implemented. Multiple cycles of "test → build → commit → push" completed.
+- **Runner & Execution resilience**: Improved error handling and audit logging in the runner. Reduced some `any` usage in ExecutionManager.
 
 ---
 
