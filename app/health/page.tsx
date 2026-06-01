@@ -136,19 +136,59 @@ export default function StrategyHealthPage() {
           <div className="card">
             <div className="font-medium mb-3">Recent Grok Recommendations (Automated Intelligence)</div>
             {health.aiRecommendations && health.aiRecommendations.length > 0 ? (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {health.aiRecommendations.map((rec: any, idx: number) => (
                   <div key={idx} className="border border-white/10 rounded p-3 text-sm">
-                    <div className="text-xs text-zinc-500 mb-1">
-                      {new Date(rec.timestamp).toLocaleString()} • Risk Mode: {rec.riskMode}
+                    <div className="flex justify-between items-start">
+                      <div className="text-xs text-zinc-500">
+                        {new Date(rec.timestamp).toLocaleString()} • Mode: {rec.riskMode}
+                      </div>
+                      <div className={`text-[10px] px-2 py-0.5 rounded ${rec.status === 'applied' || rec.status === 'auto_applied' ? 'bg-emerald-900 text-emerald-300' : rec.status === 'ignored' ? 'bg-zinc-800' : 'bg-amber-900 text-amber-300'}`}>
+                        {rec.status || 'proposed'}
+                      </div>
                     </div>
-                    <div className="whitespace-pre-wrap text-zinc-200 text-xs">
-                      {rec.rawText.length > 600 ? rec.rawText.slice(0, 600) + '...' : rec.rawText}
+
+                    <div className="whitespace-pre-wrap text-zinc-200 text-xs mt-2">
+                      {rec.rawText.length > 550 ? rec.rawText.slice(0, 550) + '...' : rec.rawText}
                     </div>
+
                     {rec.parsedActions?.length > 0 && (
                       <div className="mt-2 text-[10px] text-emerald-400">
-                        Parsed {rec.parsedActions.length} action(s)
+                        Parsed actions: {rec.parsedActions.map((a: any) => `${a.action}(${a.target})`).join(', ')}
                       </div>
+                    )}
+
+                    {rec.status === 'proposed' && (
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={async () => {
+                            await fetch('/api/research/apply-recommendation', {
+                              method: 'POST',
+                              body: JSON.stringify({ index: rec.index, action: 'apply' }),
+                            });
+                            window.location.reload();
+                          }}
+                          className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600"
+                        >
+                          Apply
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await fetch('/api/research/apply-recommendation', {
+                              method: 'POST',
+                              body: JSON.stringify({ index: rec.index, action: 'ignore' }),
+                            });
+                            window.location.reload();
+                          }}
+                          className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600"
+                        >
+                          Ignore
+                        </button>
+                      </div>
+                    )}
+
+                    {rec.outcomeNote && (
+                      <div className="mt-2 text-[10px] text-zinc-400">Note: {rec.outcomeNote}</div>
                     )}
                   </div>
                 ))}

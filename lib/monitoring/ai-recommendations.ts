@@ -5,6 +5,8 @@
  * so they can be viewed, acted upon, or alerted on.
  */
 
+export type RecommendationStatus = 'proposed' | 'applied' | 'ignored' | 'expired' | 'auto_applied';
+
 export interface AIRecommendation {
   timestamp: Date;
   riskMode: string;
@@ -15,12 +17,15 @@ export interface AIRecommendation {
     value?: string | number;
     reason: string;
   }>;
+  status: RecommendationStatus;
+  appliedAt?: Date;
+  outcomeNote?: string;
 }
 
 const recentRecommendations: AIRecommendation[] = [];
 const MAX_RECOMMENDATIONS = 30;
 
-export function storeRecommendations(rawText: string, riskMode: string) {
+export function storeRecommendations(rawText: string, riskMode: string): AIRecommendation {
   const parsedActions = parseRecommendedActions(rawText);
 
   const rec: AIRecommendation = {
@@ -28,6 +33,7 @@ export function storeRecommendations(rawText: string, riskMode: string) {
     riskMode,
     rawText: rawText.trim(),
     parsedActions,
+    status: 'proposed',
   };
 
   recentRecommendations.unshift(rec);
@@ -41,6 +47,31 @@ export function storeRecommendations(rawText: string, riskMode: string) {
 
 export function getRecentRecommendations(limit = 10): AIRecommendation[] {
   return recentRecommendations.slice(0, limit);
+}
+
+export function applyRecommendation(index: number, outcomeNote?: string, auto = false): boolean {
+  if (index < 0 || index >= recentRecommendations.length) return false;
+
+  const rec = recentRecommendations[index];
+  if (rec.status !== 'proposed') return false;
+
+  rec.status = auto ? 'auto_applied' : 'applied';
+  rec.appliedAt = new Date();
+  if (outcomeNote) rec.outcomeNote = outcomeNote;
+
+  return true;
+}
+
+export function ignoreRecommendation(index: number, reason?: string): boolean {
+  if (index < 0 || index >= recentRecommendations.length) return false;
+
+  const rec = recentRecommendations[index];
+  if (rec.status !== 'proposed') return false;
+
+  rec.status = 'ignored';
+  if (reason) rec.outcomeNote = reason;
+
+  return true;
 }
 
 function parseRecommendedActions(text: string): AIRecommendation['parsedActions'] {

@@ -36,7 +36,10 @@ export async function GET() {
       unhealthyMarkets: unhealthyMarkets,
       lastFills: execQuality.slice(-5),
     },
-    aiRecommendations: getRecentRecommendations(5),
+    aiRecommendations: getRecentRecommendations(5).map((rec, idx) => ({
+      ...rec,
+      index: idx, // so UI can call apply-recommendation with this index
+    })),
 
     summary: {
       totalActiveStrategies: Object.keys(performance.byStrategy || {}).length,
