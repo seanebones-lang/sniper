@@ -11,6 +11,7 @@
 
 import { db, realTrades, auditEvents } from '@/lib/db';
 import { riskEngine } from '@/lib/risk/engine';
+import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
 
@@ -34,15 +35,37 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: 'Real execution disabled (SNIPER_ENABLE_REAL_EXECUTION != true)' };
   }
 
-  const usdValue = req.price * req.size;
+  // === ADVANCED PORTFOLIO RISK MANAGEMENT ===
+  const safeSizing = await portfolioRiskManager.calculateSafeSize({
+    platform: req.market.platform,
+    marketExternalId: req.market.externalId,
+    side: req.side,
+    edge: 0.03,                    // placeholder - in real system this would come from the strategy
+    confidence: 0.7,
+    category: 'crypto',            // TODO: proper market categorization
+    currentPrice: req.price,
+  });
 
-  // 1. Risk engine gate (daily loss, size limits, etc.)
+  if (safeSizing.allowedSize <= 5) {
+    await logAudit('real_order_blocked_portfolio_risk', { 
+      ...req, 
+      reason: safeSizing.reason,
+      suggestedSize: safeSizing.allowedSize 
+    });
+    return { success: false, error: `Portfolio risk rejected: ${safeSizing.reason}` };
+  }
+
+  // Use the risk-managed size instead of the strategy's requested size
+  const finalSize = Math.min(req.size, safeSizing.allowedSize);
+  const usdValue = req.price * finalSize;
+
+  // 1. Legacy risk engine gate (still useful as second layer)
   const risk = riskEngine.checkRisk({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
     side: req.side,
     price: req.price,
-    size: req.size,
+    size: finalSize,
     usdValue,
   });
 
@@ -80,7 +103,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       privateKey: POLYMARKET_PRIVATE_KEY,
       tokenId: req.market.externalId,
       price: req.price,
-      size: req.size,
+      size: finalSize,
       side: req.side,
     });
 
