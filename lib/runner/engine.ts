@@ -89,6 +89,8 @@ export async function runOnce() {
   const adverseRate = recentQuality.length > 0 ? badSlippage / recentQuality.length : 0;
 
   const systemHealth = executionManager.getSystemHealthScore();
+  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
+
   let globalRiskMultiplier = 1.0;
 
   // === Risk Mode Evaluation ===
@@ -111,20 +113,6 @@ export async function runOnce() {
 
   const riskMode = riskModeManager.getCurrentMode();
   globalRiskMultiplier = riskModeManager.getRiskMultiplier();
-
-  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
-
-  if (recentQuality.length > 8 && adverseRate > 0.45) {
-    console.warn(`[Runner] SELF-PROTECTION: High adverse execution rate (${(adverseRate * 100).toFixed(0)}%). Temporarily reducing risk.`);
-    await logAudit('execution_quality_warning', {
-      adverseRate: adverseRate.toFixed(2),
-      avgSlippage: executionManager.getAverageSlippage(20),
-    });
-  }
-
-  if (unhealthyMarkets.length > 0) {
-    console.warn(`[Runner] Markets with poor execution health: ${unhealthyMarkets.join(', ')}`);
-  }
 
   let signalsThisRun = 0;
   let fillsThisRun = 0;
