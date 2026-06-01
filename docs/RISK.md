@@ -17,18 +17,29 @@ Risk management is the single most important part of this system.
 - Max daily loss circuit breaker
 - Max total exposure
 
-### 2. Per-Market Execution Health (`ExecutionManager`)
-- Tracks adverse fill rate and slippage per market
-- Automatically downweights or pauses trading on markets with poor recent execution health
-- This is one of the most powerful self-protection mechanisms
+### 2. Explicit Risk Modes (`RiskModeManager`)
+The runner automatically shifts between three modes based on system health, adverse execution rate, and edge decay:
 
-### 3. Strategy Allocator
-- Dynamically increases or decreases size per strategy based on recent performance
-- Prevents over-allocating to strategies that are currently degraded
+- **NORMAL**: Full operation
+- **DEFENSIVE**: Fewer markets, extra sizing conservatism, weaker strategies deprioritized
+- **EMERGENCY**: Extremely restricted (1–2 markets, only the strongest strategies). Most strategies are paused.
 
-### 4. Runner Self-Protection
-- When many markets show poor execution health, the runner logs strong warnings and applies health multipliers
-- Future: automatic global risk reduction or strategy pausing
+Risk mode changes are logged and visible in the health dashboard.
+
+### 3. Temporary Adjustments System
+The Grok Research Agent can propose temporary risk changes (global risk reduction, strategy downweighting, etc.). These are automatically applied with expiration when safe, and revert automatically.
+
+### 4. Per-Market Execution Health (`ExecutionManager`)
+- Tracks adverse fill rate and slippage per market in real time
+- Automatically downweights unhealthy markets
+- Provides recommendations for canceling resting orders
+
+### 5. Strategy Allocator + Edge Decay Monitoring
+- Dynamically sizes strategies based on recent performance
+- Detects edge decay and feeds it into risk mode decisions
+
+### 6. Runner Self-Protection
+The runner actively combines all signals above and applies health multipliers + behavioral restrictions in real time.
 
 ## Why This Matters for 24/7
 

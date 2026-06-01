@@ -21,18 +21,21 @@ Sniper is designed as a **research + execution platform** first, trading bot sec
 
 4. **Risk Layer** (most important)
    - `PortfolioRiskManager` — Kelly sizing, category limits, concentration penalties
+   - `RiskModeManager` — explicit modes (NORMAL / DEFENSIVE / EMERGENCY) that change runner behavior
+   - `TemporaryAdjustments` system — allows Grok to temporarily modify risk parameters with auto-expiration
    - Per-market execution health (from ExecutionManager)
-   - Multi-level circuit breakers
+   - Multi-level circuit breakers + edge decay monitoring
 
 5. **Execution Layer**
-   - `ExecutionManager` — central brain for passive vs aggressive decisions, adverse selection detection, order lifecycle, and execution quality tracking
-   - Smart router + adverse selection heuristics
+   - `ExecutionManager` — central brain for passive vs aggressive decisions, adverse selection detection, order lifecycle management, and execution quality tracking
+   - Actively used by both paper simulator and real executor
 
 6. **Runner (24/7 brain)**
    - `lib/runner/engine.ts`
    - Evaluates active strategies on live data
-   - Applies risk sizing + allocator + execution health throttle
-   - Self-protection logic (detects bad execution health and downweights)
+   - Applies risk sizing + allocator + execution health throttle + risk mode behavioral changes
+   - Self-protection logic (automatically downweights unhealthy markets and follows ExecutionManager recommendations)
+   - Periodic Grok Research Agent calls with automated recommendation parsing
 
 7. **Observability**
    - Structured audit events

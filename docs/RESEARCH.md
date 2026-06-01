@@ -22,13 +22,14 @@ The long-term advantage in this game comes from the ability to **continuously di
 ## Grok Agent Capabilities
 
 The agent can currently:
-- Analyze why a strategy is winning or losing
-- Propose parameter changes
-- Suggest new features from snapshot data
-- Detect regime issues
-- Output structured proposals that can be applied as variants
+- Analyze performance and execution quality with rich context
+- Propose parameter changes, new features, and regime-specific rules
+- Output structured, actionable recommendations
+- These recommendations can be manually applied or **auto-applied** as temporary adjustments (with automatic expiration)
 
-Future direction: tighter closed-loop where the agent helps refine strategies based on actual replay results.
+The system tracks whether recommendations were followed and surfaces them in the health dashboard.
+
+This creates a real closed intelligence loop: Data → Analysis → Recommendations → Action → Measurement → Better future analysis.
 
 ## Philosophy
 

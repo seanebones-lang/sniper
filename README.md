@@ -16,16 +16,33 @@ Designed for small, consistent edges over long periods — not gambling or home 
 
 ## Current Capabilities (as of latest build)
 
+**Core System**
 - Multi-venue data (Polymarket CLOB + Kalshi) with real-time WebSockets
-- Professional risk system (fractional Kelly + category limits + concentration + daily breakers)
-- Dynamic Strategy Allocator based on recent performance
-- Multiple edges including order book imbalance and resolution proximity
-- Central `ExecutionManager` with adverse selection detection and per-market health tracking
-- Self-protection: runner automatically downweights markets with poor recent execution
-- Historical snapshot collection + powerful replay engine
-- Grok Research Agent that analyzes your data and proposes testable improvements
-- Variants system: turn agent proposals into versioned configurations and compare them
-- Strong observability (`/health`, attribution, Telegram alerts)
+- Central `ExecutionManager` with passive/adversarial decisioning, order lifecycle, and per-market health tracking
+- Realistic passive fill simulation in paper + replay modes
+
+**Risk & Autonomy**
+- Professional multi-layer risk (PortfolioRiskManager + Kelly + category limits)
+- Dynamic Strategy Allocator
+- Explicit **Risk Modes** (NORMAL / DEFENSIVE / EMERGENCY) that automatically change system behavior:
+  - Fewer markets evaluated
+  - Weaker strategies deprioritized or paused
+  - Aggressive global risk reduction
+- Real self-protection: runner actively throttles unhealthy markets and follows ExecutionManager recommendations
+
+**Research & Intelligence Flywheel**
+- Rich historical snapshot collection with advanced features (imbalance, regime, volatility, etc.)
+- Powerful replay engine with realistic passive fill simulation
+- Grok Research Agent that produces **structured, actionable recommendations**
+- Recommendations can be manually applied or **auto-applied** as temporary adjustments (with automatic expiration)
+- Full tracking of recommendation outcomes
+- Variants system for safe testing of agent-proposed changes
+
+**Observability**
+- Excellent `/health` dashboard (risk mode + active restrictions + execution health + AI recommendations)
+- Edge decay monitoring
+- Performance attribution
+- Telegram alerts for important events
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a deeper breakdown.
 

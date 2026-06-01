@@ -21,8 +21,9 @@ Current production strategies (as of latest build):
 ## Strategy System Features
 
 - **Allocator**: Dynamically sizes strategies based on recent performance
-- **Regime Awareness**: Some strategies already change behavior based on detected regimes
-- **Variants**: Any strategy can have multiple configurations (especially useful for testing Grok proposals)
+- **Risk Mode Awareness**: Strategy selection and evaluation limits change automatically based on current risk mode (NORMAL / DEFENSIVE / EMERGENCY)
+- **Regime Awareness**: Several strategies change behavior based on detected regimes
+- **Variants + Grok Proposals**: Grok can propose changes that become testable variants. Low-risk recommendations can be auto-applied temporarily.
 
 ## Adding New Strategies
 

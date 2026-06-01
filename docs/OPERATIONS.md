@@ -35,9 +35,15 @@ In an emergency, the fastest way to stop everything is to set the runner to stop
 ## Monitoring
 
 Useful endpoints:
-- `/health` — current system state + execution health
+- `/health` — current risk mode + active restrictions + execution health + recent Grok recommendations + temporary adjustments
 - `/api/research/performance` — recent attribution
 - `/api/research/proposals` — recent Grok ideas
+
+**Key things to watch:**
+- Current Risk Mode (especially when it enters DEFENSIVE or EMERGENCY)
+- Unhealthy markets
+- Recent Grok recommendations and whether they were applied
+- Active temporary adjustments from the intelligence layer
 
 ## Secrets Hygiene
 

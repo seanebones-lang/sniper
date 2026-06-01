@@ -26,11 +26,13 @@ Most systems focus too much on signal generation and not enough on how they actu
 
 ## Current Capabilities (as of latest build)
 
-- Smart decisioning for every signal
-- Basic passive posting with price improvement targets
-- Adverse selection heuristics
-- Market-level execution health scores
-- Integration with risk sizing (health multipliers)
+- Central `ExecutionManager` that decides passive vs aggressive for every signal
+- Real passive order lifecycle management (`handleBookUpdate`, `manageRestingOrders`)
+- Adverse selection detection with automatic response recommendations
+- Per-market execution health tracking (used for automatic downweighting)
+- Integration with Risk Modes and Temporary Adjustments from Grok
+- Realistic passive fill simulation in paper mode and replay engine
+- Execution quality scoring exposed in `/health`
 
 ## Future / High Priority
 
