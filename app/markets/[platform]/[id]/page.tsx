@@ -263,9 +263,24 @@ export default function LiveMarketDetail({ params }: Props) {
         </div>
       )}
 
-      <div className="mt-10 text-xs text-zinc-500 max-w-prose">
-        Phase 2: Live WebSocket updates (Polymarket price/book) + working paper simulator with manual snipe.
-        Background automated strategies + real 24/7 runner coming in Phase 3.
+      <div className="mt-8 card">
+        <button
+          onClick={async () => {
+            const res = await fetch('/api/grok/intel', {
+              method: 'POST',
+              body: JSON.stringify({ marketQuestion: `${platform} ${marketId}`, currentPrice: book?.mid }),
+            });
+            const data = await res.json();
+            alert(data.analysis || data.error);
+          }}
+          className="text-sm underline"
+        >
+          Ask Grok for quick market intel (requires XAI_API_KEY)
+        </button>
+      </div>
+
+      <div className="mt-6 text-xs text-zinc-500">
+        Phase 2-4 complete. Real execution + 24/7 runner + risk engine live. Grok intel is a bonus.
       </div>
     </div>
   );
