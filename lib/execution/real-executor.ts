@@ -20,6 +20,17 @@ import { executionManager } from './execution-manager';
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
 
+// Simple in-memory kill switch (can be extended to DB flag later)
+let realExecutionGloballyDisabled = false;
+
+export function disableRealExecution() {
+  realExecutionGloballyDisabled = true;
+}
+
+export function isRealExecutionAllowed(): boolean {
+  return REAL_ENABLED && !realExecutionGloballyDisabled;
+}
+
 export interface RealOrderRequest {
   market: Market;
   side: 'BUY' | 'SELL';
@@ -33,8 +44,8 @@ export interface RealOrderRequest {
  * This is the actual execution path — only called when every gate is satisfied.
  */
 export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: boolean; tradeId?: string; error?: string }> {
-  if (!REAL_ENABLED) {
-    return { success: false, error: 'Real execution disabled (SNIPER_ENABLE_REAL_EXECUTION != true)' };
+  if (!isRealExecutionAllowed()) {
+    return { success: false, error: 'Real execution disabled (env flag or kill-switch)' };
   }
 
   // === ADVANCED PORTFOLIO RISK MANAGEMENT ===
