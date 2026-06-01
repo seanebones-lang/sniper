@@ -265,7 +265,7 @@ export async function runOnce() {
               volatilityProxy: advanced.volatilityProxy,
               imbalancePersistence: advanced.imbalancePersistence,
             },
-          } as any);
+          } as unknown as Parameters<typeof saveBookSnapshot>[0]);
         }
 
         const signal = strategyImpl.evaluate(

@@ -124,7 +124,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   });
 
   if (decision.type === 'CANCEL_ALL' || decision.type === 'WAIT') {
-    await db.update(realTrades).set({ status: 'cancelled' }).where({ id: trade.id } as any);
+    await db.update(realTrades).set({ status: 'cancelled' }).where({ id: trade.id } as unknown as any);
     return { success: false, error: decision.reason };
   }
 
