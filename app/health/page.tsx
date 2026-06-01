@@ -86,6 +86,14 @@ export default function StrategyHealthPage() {
                 <div className="text-[10px] text-zinc-500 mt-2">
                   These restrictions are applied automatically by the runner based on current system health and edge decay signals.
                 </div>
+
+                {/* Currently Allowed Strategies Explanation */}
+                <div className="mt-3 text-sm text-zinc-300">
+                  <strong>Currently Allowed Strategies:</strong><br />
+                  {health.risk?.mode === 'NORMAL' && "All active strategies are eligible for evaluation."}
+                  {health.risk?.mode === 'DEFENSIVE' && "Weaker / simpler strategies are being deprioritized or skipped. Only stronger, more consistent edges are preferred."}
+                  {health.risk?.mode === 'EMERGENCY' && "Only the most proven, highest edge-quality strategies are active (mainly OrderBook Imbalance + Resolution Proximity). Everything else is effectively paused."}
+                </div>
               </div>
             )}
           </div>

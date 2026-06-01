@@ -106,6 +106,7 @@ export async function runOnce() {
     const emoji = riskModeResult.newMode === 'EMERGENCY' ? '🚨' : riskModeResult.newMode === 'DEFENSIVE' ? '⚠️' : '✅';
     console.warn(`${emoji} [Runner] RISK MODE TRANSITION → ${riskModeResult.newMode} (was ${riskModeManager.getCurrentMode().previousMode})`);
     console.warn(`   Reason: ${riskModeResult.reason}`);
+    console.warn(`   Effect: Strategy selection and market limits are now being restricted according to the new mode.`);
     await logAudit('risk_mode_change', {
       newMode: riskModeResult.newMode,
       previousMode: riskModeManager.getCurrentMode().previousMode,
@@ -143,19 +144,31 @@ export async function runOnce() {
 
     if (currentRiskMode.current === 'EMERGENCY') {
       marketEvaluationLimit = 2;
-      // Emergency: true survival mode — only the most proven, highest edge-quality strategies
-      allowedStrategies = activeStrategies.filter(s => 
-        ['orderbook-imbalance', 'resolution-proximity'].includes(s.type)
-      );
-      if (allowedStrategies.length === 0) allowedStrategies = activeStrategies.slice(0, 1);
 
-      // In deep emergency, run extremely minimal
+      // Define the absolute survival set — only the most proven, battle-tested edges
+      const SURVIVAL_STRATEGY_TYPES = ['orderbook-imbalance', 'resolution-proximity'];
+
+      allowedStrategies = activeStrategies.filter(s => 
+        SURVIVAL_STRATEGY_TYPES.includes(s.type)
+      );
+
+      if (allowedStrategies.length === 0) {
+        allowedStrategies = activeStrategies.slice(0, 1);
+      }
+
+      // In deep emergency, collapse to the absolute minimum
       if (systemHealth < 0.38) {
         marketEvaluationLimit = 1;
         allowedStrategies = allowedStrategies.slice(0, 1);
       }
 
-      console.warn(`🚨 [Runner] EMERGENCY MODE — survival posture: only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s). Most strategies paused.`);
+      const pausedStrategies = activeStrategies.filter(s => !allowedStrategies.some(a => a.id === s.id));
+
+      console.warn(`🚨 [Runner] EMERGENCY MODE — survival posture only.`);
+      if (pausedStrategies.length > 0) {
+        console.warn(`   PAUSED STRATEGIES due to Emergency: ${pausedStrategies.map(s => s.name).join(', ')}`);
+      }
+      console.warn(`   Evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s).`);
     }
 
     const allocations = await getDynamicAllocations(allowedStrategies.map(s => s.id));
