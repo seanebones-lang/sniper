@@ -23,6 +23,10 @@ export async function GET() {
       reason: currentRiskMode.reason,
       enteredAt: currentRiskMode.enteredAt,
       riskMultiplier: riskModeManager.getRiskMultiplier(),
+      behavioralRestrictions: {
+        marketLimit: currentRiskMode.current === 'EMERGENCY' ? 6 : currentRiskMode.current === 'DEFENSIVE' ? 12 : 25,
+        strategyFilteringActive: currentRiskMode.current !== 'NORMAL',
+      },
     },
     execution: {
       systemHealthScore: parseFloat(executionManager.getSystemHealthScore().toFixed(3)),

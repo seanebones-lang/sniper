@@ -103,7 +103,7 @@ export default function StrategyHealthPage() {
               Total Variants: {health.summary?.totalVariants}
             </div>
             <div className="text-[10px] text-zinc-500 mt-4">
-              Risk mode now automatically shifts based on system health, adverse execution rate, and detected edge decay.
+              Risk mode now automatically shifts behavior: In Defensive/Emergency it reduces markets evaluated, deprioritizes weaker strategies, and applies extra conservatism to sizing.
             </div>
           </div>
         </div>

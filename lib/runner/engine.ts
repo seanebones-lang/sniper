@@ -123,14 +123,52 @@ export async function runOnce() {
 
     const config = stratRow.config as unknown as StrategyConfig;
 
-    // Get dynamic allocations (this is the meta-layer advantage)
-    const allocations = await getDynamicAllocations(activeStrategies.map(s => s.id));
-    const allocation = allocations[stratRow.id] || { weight: 0.7, maxSizeMultiplier: 0.8, reason: 'Default' };
+    // === Risk Mode Behavioral Adaptation ===
+    const currentRiskMode = riskModeManager.getCurrentMode();
+    let marketEvaluationLimit = 25;
+    let allowedStrategies = activeStrategies;
 
-    // For MVP: evaluate on top volume markets the strategy cares about
+    if (currentRiskMode.current === 'DEFENSIVE') {
+      marketEvaluationLimit = 12;
+      // In defensive mode, prefer stronger/more consistent strategies (simple heuristic for now)
+      allowedStrategies = activeStrategies.filter(s => 
+        !['threshold'].includes(s.type) // example: deprioritize simpler strategies
+      );
+      if (allowedStrategies.length === 0) allowedStrategies = activeStrategies;
+    }
+
+    if (currentRiskMode.current === 'EMERGENCY') {
+      marketEvaluationLimit = 6;
+      // Emergency: only the most robust strategies
+      allowedStrategies = activeStrategies.filter(s => 
+        ['orderbook-imbalance', 'resolution-proximity'].includes(s.type)
+      );
+      if (allowedStrategies.length === 0) allowedStrategies = activeStrategies.slice(0, 1);
+    }
+
+    const allocations = await getDynamicAllocations(allowedStrategies.map(s => s.id));
+    let allocation = allocations[stratRow.id] || { weight: 0.7, maxSizeMultiplier: 0.8, reason: 'Default' };
+
+    // Further conservatism in worse risk modes
+    if (currentRiskMode.current === 'DEFENSIVE') {
+      allocation = {
+        ...allocation,
+        maxSizeMultiplier: allocation.maxSizeMultiplier * 0.75,
+        reason: allocation.reason + ' + Defensive mode conservatism'
+      };
+    }
+    if (currentRiskMode.current === 'EMERGENCY') {
+      allocation = {
+        ...allocation,
+        maxSizeMultiplier: allocation.maxSizeMultiplier * 0.4,
+        reason: allocation.reason + ' + Emergency mode conservatism'
+      };
+    }
+
+    // Reduce market sample based on risk mode
     const relevantMarkets = markets
       .filter(m => m.status === 'open')
-      .slice(0, 25); // limit for speed
+      .slice(0, marketEvaluationLimit);
 
     for (const market of relevantMarkets) {
       try {
