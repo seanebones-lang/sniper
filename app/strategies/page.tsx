@@ -129,12 +129,11 @@ export default function StrategiesPage() {
       {/* Strategy Health Snapshot */}
       <div className="card mb-8">
         <div className="flex justify-between items-center mb-3">
-          <div className="font-medium">Strategy Health (Last 3 days)</div>
-          <a href="/api/health" target="_blank" className="text-xs underline text-emerald-400">Full Health API</a>
+          <div className="font-medium">Strategy Health</div>
+          <Link href="/health" className="text-xs underline text-emerald-400">Open Full Health Dashboard →</Link>
         </div>
         <div className="text-sm text-zinc-400">
           Live regime, recent edge, active variants, and allocator decisions will appear here in the next iteration.
-          For now, use the performance link above + the runner logs.
         </div>
       </div>
 
