@@ -10,6 +10,7 @@
  */
 
 import { db, realTrades, auditEvents } from '@/lib/db';
+import { eq } from 'drizzle-orm';
 import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market } from '@/lib/types';
@@ -134,7 +135,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   });
 
   if (decision.type === 'CANCEL_ALL' || decision.type === 'WAIT') {
-    await db.update(realTrades).set({ status: 'cancelled' }).where({ id: trade.id } as unknown as any);
+    await db.update(realTrades).set({ status: 'cancelled' }).where(eq(realTrades.id, trade.id));
     return { success: false, error: decision.reason };
   }
 
@@ -142,7 +143,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   if (req.market.platform === 'polymarket') {
     if (!POLYMARKET_PRIVATE_KEY) {
       const msg = 'POLYMARKET_PRIVATE_KEY not set in environment';
-      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as unknown as any);
+      await db.update(realTrades).set({ status: 'rejected' }).where(eq(realTrades.id, trade.id));
       return { success: false, error: msg };
     }
 
@@ -175,7 +176,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         status: newStatus,
         txHash: result.orderId || undefined,
       })
-      .where({ id: trade.id } as unknown as any);
+      .where(eq(realTrades.id, trade.id));
 
     await logAudit('real_order_result', { tradeId: trade.id, ...result });
 
@@ -211,7 +212,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
           status: newStatus,
           txHash: orderResult.order_id || undefined,
         })
-        .where({ id: trade.id } as any);
+        .where(eq(realTrades.id, trade.id));
 
       await logAudit('kalshi_real_order_result', {
         tradeId: trade.id,
@@ -235,7 +236,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       };
     } catch (kalshiErr: unknown) {
       const errorMessage = kalshiErr instanceof Error ? kalshiErr.message : String(kalshiErr);
-      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as unknown as any);
+      await db.update(realTrades).set({ status: 'rejected' }).where(eq(realTrades.id, trade.id));
       await logAudit('kalshi_real_order_failed', {
         tradeId: trade.id,
         error: errorMessage,

@@ -11,6 +11,8 @@
  * This layer is one of the biggest differentiators between amateur and professional systems.
  */
 
+import type { OrderBookLevel } from '../types';
+
 export interface ExecutionDecision {
   recommendedAction: 'AGGRESSIVE' | 'PASSIVE' | 'WAIT' | 'CANCEL';
   targetPriceImprovement: number; // how much better than mid we should try for
@@ -18,14 +20,16 @@ export interface ExecutionDecision {
   maxSlippageTolerance: number;
 }
 
-export function getSmartExecutionDecision(params: {
-  signal: any;
-  book: any;
+export interface SmartExecutionInput {
+  signal: { action: 'BUY' | 'SELL'; price: number; size: number; reason?: string };
+  book: { marketExternalId?: string; bids?: OrderBookLevel[]; asks?: OrderBookLevel[]; spread?: number } | null | undefined;
   recentImbalance: number;
-  timeSinceSignal: number; // seconds
+  timeSinceSignal: number;
   isRealMoney: boolean;
   regime?: string;
-}): ExecutionDecision {
+}
+
+export function getSmartExecutionDecision(params: SmartExecutionInput): ExecutionDecision {
   const { signal, book, recentImbalance, timeSinceSignal, isRealMoney, regime = 'normal' } = params;
 
   if (!book || !book.bids?.length || !book.asks?.length) {
