@@ -579,7 +579,7 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
   }
 }
 
-async function logAudit(action: string, payload: any) {
+async function logAudit(action: string, payload: Record<string, unknown>) {
   try {
     await db.insert(auditEvents).values({
       actor: 'runner',

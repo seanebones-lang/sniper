@@ -132,7 +132,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   if (req.market.platform === 'polymarket') {
     if (!POLYMARKET_PRIVATE_KEY) {
       const msg = 'POLYMARKET_PRIVATE_KEY not set in environment';
-      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
+      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as unknown as any);
       return { success: false, error: msg };
     }
 
@@ -165,7 +165,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         status: newStatus,
         txHash: result.orderId || undefined,
       })
-      .where({ id: trade.id } as any);
+      .where({ id: trade.id } as unknown as any);
 
     await logAudit('real_order_result', { tradeId: trade.id, ...result });
 
@@ -223,13 +223,14 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         tradeId: trade.id,
         error: orderResult.error,
       };
-    } catch (kalshiErr: any) {
-      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as any);
+    } catch (kalshiErr: unknown) {
+      const errorMessage = kalshiErr instanceof Error ? kalshiErr.message : String(kalshiErr);
+      await db.update(realTrades).set({ status: 'rejected' }).where({ id: trade.id } as unknown as any);
       await logAudit('kalshi_real_order_failed', {
         tradeId: trade.id,
-        error: kalshiErr?.message || String(kalshiErr),
+        error: errorMessage,
       });
-      return { success: false, error: kalshiErr?.message || 'Kalshi order failed' };
+      return { success: false, error: errorMessage || 'Kalshi order failed' };
     }
   }
 
