@@ -245,6 +245,21 @@ export async function runOnce() {
     const state = await portfolioRiskManager.getCurrentPortfolioState();
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
   }
+
+  // Occasional Grok Research Agent trigger (very lightweight, for continuous improvement)
+  if (process.env.ENABLE_GROK_RESEARCH_AGENT === 'true' && Math.random() < 0.015) {
+    try {
+      const { askGrokResearchAgent } = await import('@/lib/research/grok-agent');
+      const analysis = await askGrokResearchAgent({
+        type: 'strategy_analysis',
+        lookbackHours: 36,
+      });
+      await logAudit('grok_research_agent', { summary: analysis.analysis.slice(0, 800) });
+      console.log('[Runner] Grok Research Agent analysis completed and logged');
+    } catch (e) {
+      console.warn('[Runner] Grok Research Agent call failed (non-fatal)');
+    }
+  }
 }
 
 async function logAudit(action: string, payload: any) {

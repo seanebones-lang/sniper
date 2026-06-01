@@ -123,8 +123,62 @@ export default function BacktestPage() {
         </div>
       )}
 
-      <div className="mt-8 text-xs text-zinc-500 max-w-prose">
-        This lab is the foundation for real edge discovery. The more the runner collects data, the more powerful your research becomes.
+      <div className="card mt-8">
+        <div className="font-medium mb-4">Grok Research Agent</div>
+        <p className="text-sm text-zinc-400 mb-4">
+          Use Grok to analyze your strategies and data. This is how you turn raw snapshots and attribution into real edge improvements.
+        </p>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={async () => {
+              const res = await fetch('/api/research/agent', {
+                method: 'POST',
+                body: JSON.stringify({
+                  type: 'strategy_analysis',
+                  strategyId: strategyType,
+                  lookbackHours: 48,
+                }),
+              });
+              const data = await res.json();
+              alert(data.analysis || data.error);
+            }}
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/5"
+          >
+            Analyze Current Strategy Performance
+          </button>
+
+          <button
+            onClick={async () => {
+              const res = await fetch('/api/research/agent', {
+                method: 'POST',
+                body: JSON.stringify({ type: 'feature_ideas', lookbackHours: 24 }),
+              });
+              const data = await res.json();
+              alert(data.analysis || data.error);
+            }}
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/5"
+          >
+            Suggest New Features from Recent Data
+          </button>
+
+          <button
+            onClick={async () => {
+              const res = await fetch('/api/research/agent', {
+                method: 'POST',
+                body: JSON.stringify({ type: 'regime_detection', lookbackHours: 36 }),
+              });
+              const data = await res.json();
+              alert(data.analysis || data.error);
+            }}
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/5"
+          >
+            Detect Market Regimes
+          </button>
+        </div>
+        <div className="text-[10px] text-zinc-500 mt-3">
+          Requires XAI_API_KEY. Analyses are logged and can be used to improve strategies over time.
+        </div>
       </div>
     </div>
   );
