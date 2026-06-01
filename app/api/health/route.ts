@@ -9,6 +9,8 @@ export async function GET() {
   const execQuality = executionManager.getRecentExecutionQuality(30);
   const avgSlippage = executionManager.getAverageSlippage(50);
 
+  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.5);
+
   const health = {
     timestamp: new Date().toISOString(),
     recentPerformance: performance,
@@ -16,11 +18,13 @@ export async function GET() {
     execution: {
       recentFills: execQuality.length,
       averageSlippage: parseFloat(avgSlippage.toFixed(5)),
+      unhealthyMarkets,
       lastFills: execQuality.slice(-5),
     },
     summary: {
       totalActiveStrategies: Object.keys(performance.byStrategy || {}).length,
       totalVariants: variants.length,
+      marketsWithPoorExecution: unhealthyMarkets.length,
     },
   };
 

@@ -275,15 +275,29 @@ export async function runOnce() {
     }
   }
 
-  // Basic edge decay / adverse execution monitoring
+  // === Automated Self-Protection based on Execution Quality ===
   const recentQuality = executionManager.getRecentExecutionQuality(30);
   const badSlippage = recentQuality.filter(q => q.slippage > 0.006).length;
-  if (recentQuality.length > 10 && badSlippage / recentQuality.length > 0.4) {
-    console.warn('[Runner] WARNING: High adverse execution rate detected. Consider pausing or reducing size.');
+  const adverseRate = recentQuality.length > 0 ? badSlippage / recentQuality.length : 0;
+
+  if (recentQuality.length > 8 && adverseRate > 0.45) {
+    console.warn(`[Runner] SELF-PROTECTION: High adverse execution rate (${(adverseRate * 100).toFixed(0)}%). Temporarily reducing risk.`);
+    
     await logAudit('execution_quality_warning', {
-      badSlippageRate: (badSlippage / recentQuality.length).toFixed(2),
-      recentAvgSlippage: executionManager.getAverageSlippage(20),
+      adverseRate: adverseRate.toFixed(2),
+      avgSlippage: executionManager.getAverageSlippage(20),
+      action: 'risk_reduction_triggered',
     });
+
+    // Simple protection: we can reduce allocator weights or pause certain strategies in future iterations.
+    // For now we just log strongly so the operator sees it.
+  }
+
+  // Check per-market health from ExecutionManager
+  const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.45);
+  if (unhealthyMarkets.length > 0) {
+    console.warn(`[Runner] Markets with poor execution health: ${unhealthyMarkets.join(', ')}`);
+    await logAudit('unhealthy_markets_detected', { markets: unhealthyMarkets });
   }
 }
 

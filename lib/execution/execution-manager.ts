@@ -1,16 +1,7 @@
 /**
- * ExecutionManager
+ * ExecutionManager (v2)
  * 
- * The central brain for all order execution decisions.
- * This is one of the highest-leverage components for turning theoretical edge
- * into realized, consistent profit.
- *
- * Responsibilities:
- * - Decide passive vs aggressive execution
- * - Manage lifecycle of resting orders (post, adjust, cancel)
- * - Detect and respond to adverse selection in real time
- * - Track execution quality per fill and per strategy
- * - Provide a clean interface for both paper simulation and real trading
+ * Now with stronger adverse selection tracking and market-level health.
  */
 
 import { getSmartExecutionDecision, detectPotentialAdverseSelection } from './smart-router';
@@ -47,19 +38,26 @@ export interface ExecutionQuality {
   signalId?: string;
   expectedPrice: number;
   realizedPrice: number;
-  slippage: number;           // positive = worse than expected
+  slippage: number;
   fillTimeMs: number;
   wasAdverse: boolean;
   notes: string;
 }
 
-export class ExecutionManager {
-  private openOrders: Map<string, OpenOrder> = new Map(); // key = marketExternalId
-  private executionHistory: ExecutionQuality[] = [];
+export interface MarketExecutionHealth {
+  marketExternalId: string;
+  recentAdverseCount: number;
+  recentFills: number;
+  avgSlippage: number;
+  lastAdverseAt?: Date;
+  healthScore: number; // 0-1, lower = worse
+}
 
-  /**
-   * Main decision function. Called for every signal before any order is sent.
-   */
+export class ExecutionManager {
+  private openOrders: Map<string, OpenOrder> = new Map();
+  private executionHistory: ExecutionQuality[] = [];
+  private marketHealth: Map<string, MarketExecutionHealth> = new Map();
+
   decideExecution(
     signal: { action: 'BUY' | 'SELL'; price: number; size: number; reason?: string },
     book: any,
@@ -76,7 +74,16 @@ export class ExecutionManager {
 
     const existingOrders = this.getOpenOrdersForMarket(book?.marketExternalId || '');
 
-    // If we already have resting orders on the wrong side or in bad conditions, cancel them
+    const marketHealth = this.getMarketHealth(book?.marketExternalId || '');
+
+    // If this market has been very adverse recently, be extremely conservative
+    if (marketHealth.healthScore < 0.4 && context.isRealMoney) {
+      return {
+        type: 'WAIT',
+        reason: `Market has poor recent execution health (${(marketHealth.healthScore * 100).toFixed(0)}%) — pausing`,
+      };
+    }
+
     if (existingOrders.length > 0) {
       const wrongSide = existingOrders.some(o => o.side !== signal.action);
       if (wrongSide || decision.recommendedAction === 'CANCEL') {
@@ -97,7 +104,6 @@ export class ExecutionManager {
     }
 
     if (decision.recommendedAction === 'PASSIVE') {
-      // Post a passive limit slightly better than the decision target for queue priority
       const improvedPrice = signal.action === 'BUY'
         ? Math.max(0.01, signal.price - decision.targetPriceImprovement)
         : Math.min(0.99, signal.price + decision.targetPriceImprovement);
@@ -106,7 +112,7 @@ export class ExecutionManager {
         type: 'POST_PASSIVE',
         price: improvedPrice,
         size: signal.size,
-        reason: `${decision.reason} (posting passive at ${improvedPrice.toFixed(4)})`,
+        reason: `${decision.reason} (posting passive)`,
       };
     }
 
@@ -116,10 +122,6 @@ export class ExecutionManager {
     };
   }
 
-  /**
-   * Called when we actually post or take an order (paper or real).
-   * Tracks the order for lifecycle management.
-   */
   recordOrderPosted(
     marketExternalId: string,
     side: 'BUY' | 'SELL',
@@ -144,9 +146,6 @@ export class ExecutionManager {
     return id;
   }
 
-  /**
-   * Called on every fill (paper or real). Updates state and checks for adverse selection.
-   */
   recordFill(
     orderId: string,
     fillPrice: number,
@@ -163,7 +162,6 @@ export class ExecutionManager {
       this.openOrders.delete(orderId);
     }
 
-    // Basic adverse selection check
     const adverse = this.checkAdverseSelection(order, fillPrice, timestamp);
 
     const quality: ExecutionQuality = {
@@ -179,7 +177,9 @@ export class ExecutionManager {
 
     this.executionHistory.push(quality);
 
-    // Keep history bounded
+    // Update per-market health
+    this.updateMarketHealth(order.marketExternalId, quality);
+
     if (this.executionHistory.length > 500) {
       this.executionHistory.shift();
     }
@@ -191,13 +191,51 @@ export class ExecutionManager {
   }
 
   private checkAdverseSelection(order: OpenOrder, fillPrice: number, fillTime: Date): boolean {
-    // Simple heuristic: filled quickly and price has already moved against us
     const timeToFill = fillTime.getTime() - order.postedAt.getTime();
     const priceMove = order.side === 'BUY' 
       ? fillPrice - order.price 
       : order.price - fillPrice;
 
-    return timeToFill < 8000 && priceMove > 0.008; // filled fast + price moved against us
+    return timeToFill < 8000 && priceMove > 0.008;
+  }
+
+  private updateMarketHealth(marketExternalId: string, quality: ExecutionQuality) {
+    let health = this.marketHealth.get(marketExternalId);
+
+    if (!health) {
+      health = {
+        marketExternalId,
+        recentAdverseCount: 0,
+        recentFills: 0,
+        avgSlippage: 0,
+        healthScore: 1.0,
+      };
+      this.marketHealth.set(marketExternalId, health);
+    }
+
+    health.recentFills += 1;
+    if (quality.wasAdverse) {
+      health.recentAdverseCount += 1;
+      health.lastAdverseAt = new Date();
+    }
+
+    // Simple exponential moving average for slippage
+    const alpha = 0.2;
+    health.avgSlippage = health.avgSlippage * (1 - alpha) + quality.slippage * alpha;
+
+    // Health score: penalize high adverse rate and high slippage
+    const adverseRate = health.recentAdverseCount / Math.max(1, health.recentFills);
+    health.healthScore = Math.max(0.1, 1 - (adverseRate * 0.7) - (Math.max(0, health.avgSlippage) * 40));
+  }
+
+  getMarketHealth(marketExternalId: string): MarketExecutionHealth {
+    return this.marketHealth.get(marketExternalId) || {
+      marketExternalId,
+      recentAdverseCount: 0,
+      recentFills: 0,
+      avgSlippage: 0,
+      healthScore: 1.0,
+    };
   }
 
   getOpenOrdersForMarket(marketExternalId: string): OpenOrder[] {
@@ -214,15 +252,24 @@ export class ExecutionManager {
     return recent.reduce((sum, q) => sum + q.slippage, 0) / recent.length;
   }
 
-  /**
-   * Emergency cancel all open orders (used by kill switches etc.)
-   */
   cancelAll(): OpenOrder[] {
     const cancelled = Array.from(this.openOrders.values());
     this.openOrders.clear();
     return cancelled;
   }
+
+  /**
+   * Returns markets that currently have poor execution health (for risk throttling)
+   */
+  getUnhealthyMarkets(threshold = 0.5): string[] {
+    const unhealthy: string[] = [];
+    for (const [market, health] of this.marketHealth.entries()) {
+      if (health.healthScore < threshold) {
+        unhealthy.push(market);
+      }
+    }
+    return unhealthy;
+  }
 }
 
-// Singleton for the whole app (paper + real share the same manager for now)
 export const executionManager = new ExecutionManager();
