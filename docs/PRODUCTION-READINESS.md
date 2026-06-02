@@ -10,7 +10,7 @@ This document provides an honest assessment of Sniper’s readiness to manage re
 
 ## Executive Summary
 
-**Overall Assessment: Not yet ready for unsupervised real capital deployment.**
+**Overall Assessment (June 2026): Not yet ready for unsupervised real capital deployment.**
 
 Sniper has made **substantial and meaningful progress** toward being a responsible system for real money. The most dangerous class of failure (loss of safety state on restart) has been directly addressed through durable risk snapshots and persistent kill switch / risk mode state.
 
@@ -41,9 +41,9 @@ However, the system remains **experimental** for real capital. Key gaps remain i
 ### Critical (Blocks unsupervised real capital)
 
 1. **Reconciliation Completeness**
-   - Kalshi has good active polling, but still lacks robust partial fill and fee handling.
-   - Polymarket reconciliation is basic (open order detection only).
-   - No reliable automatic position marks or cross-platform netting.
+   - Kalshi has active order + fill polling and calls `recordRealFill` on confirmed fills. Still needs stronger partial fill and fee handling.
+   - Polymarket has basic open-order detection.
+   - `recordRealFill` now defensively calls `ensureMarket` before writing positions.
 
 2. **Real-Time Position & PnL Accuracy**
    - `getCurrentPortfolioState()` is much better but still relies on imperfect position data.
@@ -85,9 +85,9 @@ However, the system remains **experimental** for real capital. Key gaps remain i
 - `getCurrentPortfolioState()` improved to use positions table + real categorization.
 
 **Phase 2 – Reconciliation**
-- Kalshi: Full `getOrder` / `getOrders` / `getFills` + active polling in recon.
+- Kalshi: Full `getOrder`/`getOrders`/`getFills` + active polling. `recordRealFill` now defensively ensures market records.
 - Polymarket: Basic open-order reconciliation added.
-- `recordRealFill` is now meaningfully exercised with real exchange data.
+- `recordRealFill` meaningfully exercised on both platforms.
 
 **Phase 3 – Testing**
 - Direct tests added for maxDrawdown and durability paths.

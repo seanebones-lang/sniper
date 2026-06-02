@@ -14,10 +14,11 @@ Sniper is designed as a **research + execution platform** first, trading bot sec
    - Variants system — turn proposals into testable configurations
    - Backtesting + comparison tools
 
-3. **Strategy Layer**
-   - Pluggable strategies (`lib/strategies/`)
-   - Strategy Allocator — dynamically sizes strategies based on recent performance
-   - Regime awareness (via feature extraction)
+3. **Strategy + Risk Layer**
+   - Pluggable strategies
+   - `PortfolioRiskManager` with real exposure, category limits, and maxDrawdown circuit breaker
+   - Durable risk snapshots persisted by the runner for restart resilience
+   - Dynamic allocator + risk mode manager
 
 4. **Risk Layer** (most important)
    - `PortfolioRiskManager` — Kelly sizing, category limits, concentration penalties

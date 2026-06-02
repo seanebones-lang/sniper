@@ -1,10 +1,12 @@
 # Sniper — Project Status (Authoritative)
 
-**Last updated:** 2026-06 (post 4-phase production readiness push: durability + maxDrawdown + reconciliation symmetry + testing + observability — 22 tests)
+**Last updated:** 2026-06 (post durability + risk hardening + reconciliation improvements — 22 tests)
 
 This document is the single source of truth for capability, known issues, and roadmap. All other docs (README, wiki, etc.) should defer to this file.
 
 **Note to maintainers**: Please keep this file updated after any significant capability, safety, or infrastructure changes.
+
+**Overall Readiness (June 2026)**: Paper trading is reliable. Real execution has strong durability (persistent kill switch + risk snapshots) and improving reconciliation, but remains experimental for unsupervised real capital. See docs/PRODUCTION-READINESS.md for a detailed gap analysis.
 
 ---
 

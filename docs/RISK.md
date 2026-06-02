@@ -16,7 +16,7 @@ Risk management is the single most important part of this system.
 - Concentration penalties
 - Max daily loss circuit breaker
 - Max total exposure
-- Max drawdown circuit breaker (tracked from peak bankroll via `recordOutcome`)
+- Max drawdown circuit breaker (tracked from peak bankroll via `recordOutcome` and enforced in `calculateSafeSize`)
 
 ### 2. Explicit Risk Modes (`RiskModeManager`)
 The runner automatically shifts between three modes based on system health, adverse execution rate, and edge decay:

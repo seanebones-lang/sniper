@@ -43,7 +43,7 @@
 - Always use `ensureMarket` before any direct position writes.
 
 ## Future Work (Prioritized)
-- Deeper partial fill + fee accurate reconciliation.
-- Full parity with improved Polymarket reconciliation.
-- Wire Kalshi WS into runner/strategies for live micro-structure features.
-- Stronger automated alerting on recon failures or stuck real trades.
+- Stronger partial fill, fee, and position marking accuracy in reconciliation.
+- Better Polymarket reconciliation parity.
+- Integration of Kalshi WebSocket data into the runner and strategies.
+- Proactive alerting for stuck real trades or kill-switch events.

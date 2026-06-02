@@ -28,7 +28,7 @@ Most systems focus too much on signal generation and not enough on how they actu
 
 ## Current Capabilities (as of latest build)
 
-Real execution paths now benefit from durable risk snapshots and active reconciliation that can confirm fills from the exchanges. ExecutionManager health data is periodically persisted as part of the overall risk posture.
+Real execution paths benefit from durable risk snapshots (including exposure and maxDrawdown), active exchange polling in reconciliation (Kalshi + basic Polymarket), and `recordRealFill` now defensively ensuring market records before writing positions.
 
 - Central `ExecutionManager` that decides passive vs aggressive for every signal
 - Real passive order lifecycle management (`handleBookUpdate`, `manageRestingOrders`)

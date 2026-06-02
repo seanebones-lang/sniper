@@ -6,7 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [Unreleased] — June 2026 Production Hardening
+
+### Added
+- **Durable Risk State** (`system_state` table + rich `risk_snapshot`)
+  - Kill switch, risk mode, daily loss, execution health, exposure, and maxDrawdown now persist across restarts.
+  - Runner recovers previous risk posture on startup and can react defensively.
+- **MaxDrawdown Tracking + Circuit Breaker**
+  - `PortfolioRiskManager` now tracks peak bankroll and running drawdown.
+  - `calculateSafeSize` enforces maxDrawdown limit.
+- **Reconciliation Hardening**
+  - KalshiTradingClient: real `getOrder`, `getOrders`, `getFills`.
+  - `reconcilePendingRealTrades` actively polls and auto-reconciles confirmed fills.
+  - Basic open-order reconciliation for Polymarket.
+  - `recordRealFill` now defensively calls `ensureMarket`.
+- **Observability**
+  - `/api/health` now surfaces last persisted risk snapshot, kill switch state, and execution health.
+- **Testing**
+  - Test count increased to 22 with direct coverage of durability and risk mechanisms.
+
+### Changed
+- Real orders on Polymarket now start as `pending` (with order ID) instead of optimistically `filled`.
+- Stronger ID discipline enforcement in reconciliation paths.
+
+## [Previous]
 
 ### Added
 - **Risk Mode System** (`NORMAL` / `DEFENSIVE` / `EMERGENCY`)

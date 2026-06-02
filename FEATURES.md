@@ -1,6 +1,6 @@
 # Standout Features
 
-This document highlights what makes Sniper a particularly comprehensive and advantageous 24/7 prediction market trading system.
+This document highlights what makes Sniper a comprehensive 24/7 prediction market research + execution system (June 2026).
 
 ## 1. True Self-Protection & Autonomy
 
@@ -13,6 +13,7 @@ Most trading systems only *warn* you when things go wrong. Sniper actively prote
 - Per-market execution health tracking with automatic downweighting.
 - Edge decay detection that feeds directly into risk decisions.
 - Temporary adjustments from the intelligence layer that auto-expire.
+- **Durable risk state**: Kill switch, risk mode, exposure, maxDrawdown, and execution health now persist across restarts via the `system_state` table and rich snapshots.
 
 ## 2. Professional Research Flywheel
 

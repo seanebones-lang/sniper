@@ -100,9 +100,9 @@ In code / logs: look for `runner_signal_created` with real context, `real_fill_r
 - After kill switch: runner continues in paper mode for strategies that have `paperOnly=true` (safe default).
 - Re-enable: Remove env var + restart or clear the in-memory flag (add a `resetRealExecution()` helper if operating frequently).
 
-## Known Limitations (Updated)
-- Kalshi: Strong order + fills polling in recon. Still needs deeper partial fill and fee handling.
-- Polymarket: Basic open-order detection added. Full status polling is thinner than Kalshi.
-- MaxDrawdown is now tracked and acts as a circuit breaker (basic historical peak tracking).
-- Rich durable `risk_snapshot`s are persisted on every runner cycle and recovered on startup.
-- Position math remains pragmatic; full mark-to-market and sophisticated cost basis are future work.
+## Known Limitations (Updated June 2026)
+- Kalshi reconciliation is active (order + fills polling) but still needs stronger partial-fill and fee accuracy.
+- Polymarket reconciliation is basic (detects when orders are no longer open).
+- MaxDrawdown tracking + circuit breaker exists (peak bankroll based).
+- Durable risk snapshots (exposure, mode, health, maxDrawdown) are now persisted and recovered by the runner.
+- Position math is pragmatic. Live marks and advanced cost-basis tracking are future work.
