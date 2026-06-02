@@ -94,7 +94,7 @@ async function gatherResearchContext(query: ResearchQuery) {
   };
 }
 
-function buildResearchPrompt(query: ResearchQuery, context: Record<string, unknown>): string {
+function buildResearchPrompt(query: ResearchQuery, context: any): string {
   const base = `You are a world-class quantitative researcher for prediction market automated trading systems.
 
 You have access to real order book snapshots (with imbalance, depth, micro-price, regime labels, etc.), performance attribution, and replay results.
@@ -127,7 +127,7 @@ Example:
 From the recent snapshot data, propose 4-6 high-quality, computable features that would help strategies adapt to different regimes or capture small persistent edges.
 
 Data sample:
-${JSON.stringify(((context.recentSnapshots as unknown) as Record<string, unknown>[] || []).slice(0, 10), null, 2)}`;
+${JSON.stringify(((context as Record<string, unknown>).recentSnapshots as Record<string, unknown>[] || []).slice(0, 10), null, 2)}`;
   }
 
   if (query.type === 'regime_detection') {
@@ -135,7 +135,7 @@ ${JSON.stringify(((context.recentSnapshots as unknown) as Record<string, unknown
 Using the recent snapshots (which already contain some regime labels), refine our regime classification and suggest simple, robust real-time regime detection rules we can implement in code.
 
 Recent data:
-${JSON.stringify(((context.recentSnapshots as unknown) as Record<string, unknown>[] || []).slice(-20), null, 2)}`;
+${JSON.stringify(((context as Record<string, unknown>).recentSnapshots as Record<string, unknown>[] || []).slice(-20), null, 2)}`;
   }
 
   return base + `Research request: ${query.extraContext || 'Provide the most valuable insights possible from the data.'}`;
