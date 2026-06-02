@@ -9,7 +9,7 @@
  * This is intentionally minimal and heavily logged.
  */
 
-import { db, realTrades, auditEvents } from '@/lib/db';
+import { db, realTrades, positions, auditEvents } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
@@ -167,6 +167,15 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         finalSize,
         true
       );
+
+      // Basic position tracking for real trades (advances audit-real-2)
+      await recordRealFillForPosition({
+        platform: req.market.platform,
+        marketExternalId: req.market.externalId,
+        side: req.side,
+        size: finalSize,
+        price: execPrice,
+      });
     }
 
     const newStatus = result.success ? 'filled' : 'rejected';
@@ -246,6 +255,63 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   }
 
   return { success: false, error: 'Unsupported platform for real execution' };
+}
+
+/**
+ * Basic helper to update positions table after a successful real fill.
+ * This is a pragmatic step toward better real trade position tracking.
+ */
+async function recordRealFillForPosition(params: {
+  platform: string;
+  marketExternalId: string;
+  side: 'BUY' | 'SELL';
+  size: number;
+  price: number;
+}) {
+  try {
+    // Find or create the internal market id
+    const market = await db.query.markets.findFirst({
+      where: (m, { and, eq }) => and(
+        eq(m.platform, params.platform),
+        eq(m.externalId, params.marketExternalId)
+      ),
+    });
+
+    if (!market) return;
+
+    const signedSize = params.side === 'BUY' ? params.size : -params.size;
+
+    const existing = await db.query.positions.findFirst({
+      where: (p, { and, eq }) => and(
+        eq(p.platform, params.platform),
+        eq(p.marketId, market.id)
+      ),
+    });
+
+    if (existing) {
+      const newSize = parseFloat(existing.sizeShares) + signedSize;
+      // Very simplified average price update
+      const totalCost = parseFloat(existing.sizeShares) * parseFloat(existing.avgPrice) + signedSize * params.price;
+      const newAvg = newSize !== 0 ? totalCost / newSize : params.price;
+
+      await db.update(positions).set({
+        sizeShares: newSize.toString(),
+        avgPrice: newAvg.toString(),
+        updatedAt: new Date(),
+      }).where(eq(positions.id, existing.id));
+    } else {
+      await db.insert(positions).values({
+        platform: params.platform,
+        marketId: market.id,
+        side: params.side,
+        sizeShares: signedSize.toString(),
+        avgPrice: params.price.toString(),
+      });
+    }
+  } catch (err) {
+    // Best effort — don't fail the whole order because of position tracking
+    console.warn('[Real Executor] Position tracking failed (non-fatal)', err);
+  }
 }
 
 async function logAudit(action: string, payload: Record<string, unknown>) {
