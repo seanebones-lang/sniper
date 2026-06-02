@@ -498,6 +498,7 @@ export async function runOnce() {
         currentRiskMode: currentRisk.current,
         systemHealthScore: healthScore,
         adverseRate: avgSlip,
+        currentBankroll: (portfolioRiskManager as any).currentBankroll ?? 0, // best effort
         snapshotAt: new Date().toISOString(),
       }, 'periodic rich risk snapshot');
     } catch {}
