@@ -9,14 +9,14 @@ describe('Real Executor Safety', () => {
     // Production kill-switch is also backed by env var SNIPER_DISABLE_REAL_EXECUTION.
   });
 
-  it('should respect the in-memory kill switch (disable flips allowed to false)', () => {
+  it('should respect the durable kill switch (disable flips allowed to false)', async () => {
     // Initial state depends on env, but calling disable must force false thereafter
-    disableRealExecution();
-    expect(isRealExecutionAllowed()).toBe(false);
+    await disableRealExecution('test disable');
+    expect(await isRealExecutionAllowed()).toBe(false);
   });
 
   it('should early-return disabled error from placeRealOrder when kill switch active (no side effects)', async () => {
-    disableRealExecution();
+    await disableRealExecution('test disable for placeRealOrder');
 
     const dummyMarket: Partial<Market> = {
       platform: 'polymarket',

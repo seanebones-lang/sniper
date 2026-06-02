@@ -56,6 +56,26 @@ export async function startRunner(intervalMs = 15000) {
 
   status.running = true;
   console.log('[Runner] Starting 24/7 paper runner...');
+
+  // === Durable Safety State Recovery (critical for real capital) ===
+  try {
+    const { loadCriticalSafetyState } = await import('@/lib/monitoring/system-state');
+    const safety = await loadCriticalSafetyState();
+
+    if (safety.killSwitch.disabled) {
+      console.warn('🚨 [Runner] KILL SWITCH RECOVERED FROM PERSISTED STATE');
+      console.warn(`   Reason: ${safety.killSwitch.reason}`);
+      console.warn(`   Disabled at: ${safety.killSwitch.disabledAt}`);
+      // The real-executor will respect the persisted state on next isRealExecutionAllowed() call
+    }
+
+    if (safety.riskMode.current !== 'NORMAL') {
+      console.warn(`⚠️ [Runner] RISK MODE RECOVERED: ${safety.riskMode.current} — ${safety.riskMode.reason}`);
+    }
+  } catch (e) {
+    console.warn('[Runner] Could not load durable safety state (non-fatal):', e);
+  }
+
   alerts.runnerStarted();
 
   // Run immediately

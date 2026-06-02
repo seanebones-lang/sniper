@@ -18,28 +18,53 @@ import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
 import { getKalshiTradingClient } from '@/lib/clients/kalshi-trading';
 import { executionManager } from './execution-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
+import {
+  loadKillSwitchState,
+  persistKillSwitchDisabled,
+  persistKillSwitchEnabled,
+} from '@/lib/monitoring/system-state';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
 
-// Kill switch support
+// Kill switch support (now durable for 24/7 real capital safety)
 // Priority (highest first):
-// 1. SNIPER_DISABLE_REAL_EXECUTION env var (deployment-level kill switch)
-// 2. In-memory disable (runtime)
+// 1. SNIPER_DISABLE_REAL_EXECUTION env var (deployment-level, survives everything)
+// 2. Persisted runtime disable (survives restarts/deploys)
 // 3. SNIPER_ENABLE_REAL_EXECUTION env var (positive enable)
-let realExecutionGloballyDisabled = false;
+let realExecutionGloballyDisabled = false; // hot cache
 
-export function disableRealExecution() {
+export async function disableRealExecution(reason = 'Manual runtime disable') {
   realExecutionGloballyDisabled = true;
+  await persistKillSwitchDisabled(reason, 'runtime');
 }
 
-export function isRealExecutionAllowed(): boolean {
+export async function enableRealExecution(reason = 'Manual runtime re-enable') {
+  realExecutionGloballyDisabled = false;
+  await persistKillSwitchEnabled(reason);
+}
+
+export async function isRealExecutionAllowed(): Promise<boolean> {
   if (process.env.SNIPER_DISABLE_REAL_EXECUTION === 'true') {
     return false;
   }
+
+  // Check hot cache first
   if (realExecutionGloballyDisabled) {
     return false;
   }
+
+  // On cold start or after possible external change, check durable state
+  try {
+    const persisted = await loadKillSwitchState();
+    if (persisted.disabled) {
+      realExecutionGloballyDisabled = true; // hydrate cache
+      return false;
+    }
+  } catch {
+    // If DB is unavailable we conservatively allow the env gate only
+  }
+
   return REAL_ENABLED;
 }
 
@@ -56,7 +81,7 @@ export interface RealOrderRequest {
  * This is the actual execution path — only called when every gate is satisfied.
  */
 export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: boolean; tradeId?: string; error?: string }> {
-  if (!isRealExecutionAllowed()) {
+  if (!(await isRealExecutionAllowed())) {
     return { success: false, error: 'Real execution disabled (kill-switch or env flag)' };
   }
 
