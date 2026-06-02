@@ -63,6 +63,11 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sniper_test
           SNIPER_ENABLE_REAL_EXECUTION: 'false'
 
+      - name: Test Coverage
+        run: npm run test:coverage
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sniper_test
+
       - name: Smoke Test
         run: npm run test:smoke
 

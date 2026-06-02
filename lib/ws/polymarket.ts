@@ -74,9 +74,9 @@ export class PolymarketWSClient {
       }
     };
 
-    this.ws.onerror = () => {
-      // Error is already logged above if needed
-      this.options.onError?.();
+    this.ws.onerror = (err) => {
+      console.error('[PolymarketWS] Error', err);
+      this.options.onError?.(err);
     };
   }
 
