@@ -6,7 +6,7 @@
  * not because the signals were bad.
  */
 
-import { db, positions, realTrades, paperTrades } from '@/lib/db';
+import { db } from '@/lib/db';
 
 export interface PortfolioState {
   totalExposureUsd: number;
@@ -67,7 +67,7 @@ export class PortfolioRiskManager {
       return sum + (parseFloat(t.size) * parseFloat(t.price));
     }, 0);
 
-    const dailyPnl = recentRealTrades.reduce((sum, t) => {
+    const dailyPnl = recentRealTrades.reduce((sum) => {
       // This is placeholder - real PnL requires position tracking + current marks
       return sum;
     }, 0);
@@ -141,7 +141,7 @@ export class PortfolioRiskManager {
   /**
    * Record realized outcome for learning + bankroll adjustment
    */
-  async recordOutcome(pnlUsd: number, marketCategory?: string) {
+  async recordOutcome(pnlUsd: number) {
     this.currentBankroll += pnlUsd;
     // In future: update running volatility estimates, strategy performance, etc.
   }

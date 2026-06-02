@@ -37,23 +37,25 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
         if (trade.platform === 'kalshi') {
           // Kalshi-specific reconciliation
           try {
-            const { getKalshiTradingClient } = await import('@/lib/clients/kalshi-trading');
-            const client = getKalshiTradingClient();
+            // Future: const client = getKalshiTradingClient(); then client.getOrderStatus(...) etc.
+            // For now lightweight time-based + audit (no client call yet to avoid unused)
 
-            // In a real implementation, we would call client.getOrder(trade.txHash) or similar
-            // For now we do a lightweight time-based + audit approach
+            // Future improvement: actually call client to check order status using trade.txHash
+            // For now we do a lightweight time-based + audit approach with better structure
             const ageMs = Date.now() - new Date(trade.createdAt).getTime();
+            const ageMinutes = Math.round(ageMs / 60000);
 
-            if (ageMs > 1000 * 60 * 10) {
+            if (ageMinutes > 10) {
               await logAudit('kalshi_real_trade_pending_review', {
                 tradeId: trade.id,
                 marketExternalId: trade.marketExternalId,
-                ageMinutes: Math.round(ageMs / 60000),
+                ageMinutes,
+                note: 'Trade has been pending for a long time - manual review recommended',
               });
             }
 
-            // Placeholder: assume some fills for demo purposes in future
-            // result.updated++;
+            // Placeholder for future real status checking
+            // if (await client.isOrderFilled(trade.txHash)) { ... }
           } catch (kalshiReconErr) {
             result.errors++;
             await logAudit('kalshi_reconciliation_error', {

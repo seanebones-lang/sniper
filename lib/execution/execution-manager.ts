@@ -319,7 +319,6 @@ export class ExecutionManager {
    * Get recommended action for managing existing resting orders on a market.
    */
   manageRestingOrders(marketExternalId: string, latestBook: OrderBook | null = null): ExecutionAction {
-    const health = this.getMarketHealth(marketExternalId);
     const openOrders = this.getOpenOrdersForMarket(marketExternalId);
 
     if (openOrders.length === 0) {

@@ -6,6 +6,8 @@
  * Run via: npm run test:smoke
  */
 
+/* eslint-disable @typescript-eslint/no-require-imports -- Standalone Node script; intentional CJS requires for zero-dep smoke check */
+
 const fs = require('fs');
 const path = require('path');
 

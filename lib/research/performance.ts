@@ -4,8 +4,7 @@
  * This is essential for knowing what to keep, kill, or scale.
  */
 
-import { db, signals, paperTrades, realTrades } from '@/lib/db';
-import { eq, gte } from 'drizzle-orm';
+import { db } from '@/lib/db';
 
 export async function getStrategyPerformance(days = 7) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000);
@@ -23,7 +22,7 @@ export async function getStrategyPerformance(days = 7) {
   });
 
   // Very lightweight attribution (production version would be much richer)
-  const byStrategy: Record<string, any> = {};
+  const byStrategy: Record<string, { signals: number; paperFills: number; realFills: number; estimatedPnl: number }> = {};
 
   recentSignals.forEach(sig => {
     const key = sig.strategyId || 'unknown';
@@ -33,7 +32,7 @@ export async function getStrategyPerformance(days = 7) {
     byStrategy[key].signals++;
   });
 
-  recentPaper.forEach(trade => {
+  recentPaper.forEach(() => {
     // Rough association - in real system we'd join properly
     Object.keys(byStrategy).forEach(k => {
       byStrategy[k].paperFills = (byStrategy[k].paperFills || 0) + 1;

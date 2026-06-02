@@ -59,7 +59,7 @@ export class PolymarketWSClient {
       try {
         const data = JSON.parse(event.data);
         this.options.onMessage(data);
-      } catch (e) {
+      } catch {
         console.warn('[PolymarketWS] Failed to parse message', event.data);
       }
     };

@@ -94,7 +94,7 @@ async function gatherResearchContext(query: ResearchQuery) {
   };
 }
 
-function buildResearchPrompt(query: ResearchQuery, context: any): string {
+function buildResearchPrompt(query: ResearchQuery, context: Record<string, unknown>): string {
   const base = `You are a world-class quantitative researcher for prediction market automated trading systems.
 
 You have access to real order book snapshots (with imbalance, depth, micro-price, regime labels, etc.), performance attribution, and replay results.
@@ -111,7 +111,7 @@ Performance:
 ${JSON.stringify(context.performance, null, 2)}
 
 Recent snapshot features (with regimes):
-${JSON.stringify(context.recentSnapshots.slice(-12), null, 2)}
+${JSON.stringify((context.recentSnapshots as unknown[] | undefined)?.slice(-12) || [], null, 2)}
 
 Deliver a sharp analysis of what is working / broken, and why.
 

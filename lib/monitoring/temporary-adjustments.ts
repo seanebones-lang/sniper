@@ -91,8 +91,6 @@ export function isMarketPaused(marketExternalId: string): boolean {
  * Clean up expired adjustments. Call this at the start of every run.
  */
 export function cleanupExpiredAdjustments(): TemporaryAdjustment[] {
-  const before = activeAdjustments.length;
-  
   const stillActive = activeAdjustments.filter(adj => {
     const age = currentRunCount - adj.appliedAtRun;
     return age < adj.expiresAfterRuns;

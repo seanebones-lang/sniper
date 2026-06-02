@@ -133,7 +133,7 @@ describe('PortfolioRiskManager', () => {
 
   it('should record outcomes and adjust bankroll', async () => {
     const initialBankroll = (riskManager as any).currentBankroll;
-    await riskManager.recordOutcome(250, 'crypto');
+    await riskManager.recordOutcome(250);
     const newBankroll = (riskManager as any).currentBankroll;
 
     expect(newBankroll).toBe(initialBankroll + 250);

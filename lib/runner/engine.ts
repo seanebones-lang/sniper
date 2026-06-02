@@ -3,15 +3,14 @@
  * This is the core that makes the system "know when to buy and sell".
  */
 
-import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db';
+import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db'; // eslint-disable-line @typescript-eslint/no-unused-vars -- strategies used via db.query.strategies (Drizzle table ref)
 import { getAllMarkets, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
 // TODO: Deeper Kalshi WS integration in runner (currently wired in UI only)
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
-import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
-import type { Market } from '@/lib/types';
+import type { StrategyConfig } from '@/lib/strategies/types';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
@@ -21,13 +20,12 @@ import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
-import { storeRecommendations, getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
+import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { 
   applyTemporaryAdjustment, 
   cleanupExpiredAdjustments, 
   getEffectiveGlobalRiskMultiplier,
   getStrategySizeMultiplier,
-  getAdjustmentSummary 
 } from '@/lib/monitoring/temporary-adjustments';
 
 export interface RunnerStatus {
@@ -138,7 +136,6 @@ export async function runOnce() {
     });
   }
 
-  const riskMode = riskModeManager.getCurrentMode();
   globalRiskMultiplier = riskModeManager.getRiskMultiplier();
 
   let signalsThisRun = 0;
@@ -238,8 +235,6 @@ export async function runOnce() {
         }
 
         // === Rich feature collection for research & future ML ===
-        let currentRegime = 'normal';
-
         if (book && (book.bids?.length || book.asks?.length)) {
           const topBid = book.bids?.[0]?.size || 0;
           const topAsk = book.asks?.[0]?.size || 0;
@@ -247,8 +242,6 @@ export async function runOnce() {
 
           // Compute advanced features (in production we would query recent snapshots for this market)
           const advanced = extractFeaturesFromRecentSnapshots([]);
-
-          currentRegime = advanced.regime || 'normal';
 
           await saveBookSnapshot({
             platform: market.platform,

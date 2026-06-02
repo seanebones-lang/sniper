@@ -107,7 +107,7 @@ function parseRecommendedActions(text: string): AIRecommendation['parsedActions'
       if (action && target) {
         actions.push({ action, target, value, reason });
       }
-    } catch (e) {
+    } catch {
       // Ignore malformed lines
     }
   }

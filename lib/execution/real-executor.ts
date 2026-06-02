@@ -269,17 +269,15 @@ async function recordRealFillForPosition(params: {
   price: number;
 }) {
   try {
-    // Ensure the market exists in our DB (important for real trades)
-    const { ensureMarketRecord } = await import('@/lib/markets');
-    const fakeMarketForEnsure = {
+    // Ensure the market exists in our DB (important for real trades) — use the minimal form to avoid casts
+    const { ensureMarket } = await import('@/lib/markets');
+
+    const marketId = await ensureMarket({
       platform: params.platform as 'polymarket' | 'kalshi',
       externalId: params.marketExternalId,
       question: 'Real Execution Market',
-      status: 'open' as const,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const marketId = await ensureMarketRecord(fakeMarketForEnsure);
+      status: 'open',
+    });
 
     // Find or create the internal market row (we just ensured it)
     const market = await db.query.markets.findFirst({
