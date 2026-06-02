@@ -129,8 +129,10 @@ export default function BacktestPage() {
 
    
   useEffect(() => {
-    loadProposals();
-    loadVariants();
+    void (async () => {
+      await loadProposals();
+      await loadVariants();
+    })();
   }, []);
 
   return (
