@@ -219,7 +219,7 @@ export function parsePolymarketWSBook(
     };
   }
 
-  if (kind === 'best_bid_ask' && 'bid' in msg && 'ask' in msg) {
+  if (kind === 'best_bid_ask' && 'bid' in msg && 'ask' in msg && msg.bid != null && msg.ask != null) {
     const bid = parseFloat(msg.bid);
     const ask = parseFloat(msg.ask);
     if (Number.isNaN(bid) || Number.isNaN(ask)) return null;

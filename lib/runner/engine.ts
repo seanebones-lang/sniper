@@ -14,7 +14,7 @@ import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
 import { resolveStrategyConfig, shouldUseImmediateFill } from '@/lib/strategies/run-profile';
 import { evaluateExitSignal } from '@/lib/strategies/exit-engine';
-import { getStrategyOpenPositions, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
+import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
@@ -27,7 +27,7 @@ import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
-import { loadPaperRiskState, invalidatePaperRiskCache } from '@/lib/paper/risk-state';
+import { loadPaperRiskState } from '@/lib/paper/risk-state';
 import { computeStrategyPnlWindows, statsToPerformanceWindow } from '@/lib/paper/strategy-pnl';
 import { CycleBookCache } from '@/lib/runner/book-cache';
 import { getRunnerBookHub } from '@/lib/runner/book-hub';
@@ -373,6 +373,7 @@ export async function runOnce() {
   const allAllocations = await getDynamicAllocations(activeStrategies.map((s) => s.id));
 
   const bookCache = new CycleBookCache();
+  const evalMarketsToFetch: Array<{ platform: string; externalId: string }> = [];
   const marketsToFetch: Array<{ platform: string; externalId: string }> = [];
   const marketByKey = new Map(markets.map((m) => [`${m.platform}:${m.externalId}`, m]));
 
@@ -388,24 +389,23 @@ export async function runOnce() {
       openPool = openPool.length > 0 ? rankQuickFlipMarkets(openPool) : [];
     }
     for (const m of openPool.slice(0, stratLimit)) {
+      evalMarketsToFetch.push({ platform: m.platform, externalId: m.externalId });
       marketsToFetch.push({ platform: m.platform, externalId: m.externalId });
     }
   }
 
-  const openPositionsByStrategy = new Map<string, Awaited<ReturnType<typeof getStrategyOpenPositions>>>();
-  await Promise.all(
-    allowedStrategies.map(async (stratRow) => {
-      const positions = await getStrategyOpenPositions(stratRow.id);
-      openPositionsByStrategy.set(stratRow.id, positions);
-      for (const pos of positions) {
-        marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
-      }
-    }),
+  const openPositionsByStrategy = await getOpenPositionsByStrategy(
+    allowedStrategies.map((s) => s.id),
   );
+  for (const positions of openPositionsByStrategy.values()) {
+    for (const pos of positions) {
+      marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
+    }
+  }
 
   const syncKeys = new Set<string>();
   const marketsToSync: typeof markets = [];
-  for (const m of marketsToFetch) {
+  for (const m of evalMarketsToFetch) {
     const key = `${m.platform}:${m.externalId}`;
     if (syncKeys.has(key)) continue;
     syncKeys.add(key);
@@ -424,7 +424,7 @@ export async function runOnce() {
   await bookCache.fetchBooks(marketsToFetch);
 
   const snapshotBatch = await getRecentSnapshotsBatch(
-    marketsToFetch.map((m) => ({ platform: m.platform, marketExternalId: m.externalId })),
+    evalMarketsToFetch.map((m) => ({ platform: m.platform, marketExternalId: m.externalId })),
     8,
   );
 
@@ -768,7 +768,6 @@ export async function runOnce() {
             if (fill) {
               fillsThisRun++;
               lastSignalAtByKey.set(cooldownKey, Date.now());
-              invalidatePaperRiskCache();
 
               await db.insert(paperTrades).values({
                 platform: market.platform,

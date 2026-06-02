@@ -1,5 +1,5 @@
 import { db, paperTrades } from '@/lib/db';
-import { count, gte } from 'drizzle-orm';
+import { and, count, gt, gte } from 'drizzle-orm';
 import { getPaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 import { aggregatePaperPositions } from '@/lib/paper/positions';
@@ -23,7 +23,10 @@ let ledgerCache: {
   ledger: PaperLedgerSummary;
   positions: ReturnType<typeof aggregatePaperPositions>;
   budgetUsd: number;
+  lastFilledAt: Date | null;
 } | null = null;
+
+const MAX_INCREMENTAL_FILLS = 80;
 
 export function invalidatePaperRiskCache(): void {
   ledgerCache = null;
@@ -68,12 +71,41 @@ export async function loadPaperRiskState(markPrices?: MarkPriceMap): Promise<Pap
   let ledger = ledgerCache?.ledger;
   let positions = ledgerCache?.positions;
 
-  if (
-    !ledgerCache ||
-    ledgerCache.fillCount !== fillCount ||
-    ledgerCache.runStartIso !== runStartIso ||
-    ledgerCache.budgetUsd !== budget.paperBudgetUsd
+  const cacheValid =
+    ledgerCache &&
+    ledgerCache.runStartIso === runStartIso &&
+    ledgerCache.budgetUsd === budget.paperBudgetUsd;
+
+  const delta = cacheValid ? fillCount - ledgerCache!.fillCount : fillCount;
+
+  if (cacheValid && delta === 0) {
+    // use cached trades/ledger/positions
+  } else if (
+    cacheValid &&
+    delta > 0 &&
+    delta <= MAX_INCREMENTAL_FILLS &&
+    ledgerCache!.lastFilledAt
   ) {
+    const newRows = await db.query.paperTrades.findMany({
+      where: runFilter
+        ? and(runFilter, gt(paperTrades.filledAt, ledgerCache!.lastFilledAt!))
+        : gt(paperTrades.filledAt, ledgerCache!.lastFilledAt!),
+      orderBy: (t, { asc }) => [asc(t.filledAt)],
+    });
+    trades = [...ledgerCache!.trades, ...newRows];
+    const ledgerTrades = toLedgerTrades(trades);
+    ledger = computePaperLedger(budget.paperBudgetUsd, ledgerTrades);
+    positions = aggregatePaperPositions(trades);
+    ledgerCache = {
+      fillCount,
+      runStartIso,
+      trades,
+      ledger,
+      positions,
+      budgetUsd: budget.paperBudgetUsd,
+      lastFilledAt: trades[trades.length - 1]?.filledAt ?? ledgerCache!.lastFilledAt,
+    };
+  } else {
     trades = await db.query.paperTrades.findMany({
       where: runFilter,
       orderBy: (t, { asc }) => [asc(t.filledAt)],
@@ -88,6 +120,7 @@ export async function loadPaperRiskState(markPrices?: MarkPriceMap): Promise<Pap
       ledger,
       positions,
       budgetUsd: budget.paperBudgetUsd,
+      lastFilledAt: trades[trades.length - 1]?.filledAt ?? null,
     };
   }
 

@@ -1,5 +1,5 @@
 import { db, paperTrades, signals } from '@/lib/db';
-import { eq, gte, and } from 'drizzle-orm';
+import { eq, gte, and, inArray } from 'drizzle-orm';
 import type { StrategyOpenPosition } from '@/lib/strategies/exit-engine';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 
@@ -7,26 +7,21 @@ import { getPaperRunStartedAt } from '@/lib/paper/run-session';
  * Open positions for one strategy, derived from paper_trades joined to signals.
  */
 export async function getStrategyOpenPositions(strategyId: string): Promise<StrategyOpenPosition[]> {
-  const runStart = await getPaperRunStartedAt();
+  const map = await getOpenPositionsByStrategy([strategyId]);
+  return map.get(strategyId) ?? [];
+}
 
-  const rows = await db
-    .select({
-      platform: paperTrades.platform,
-      marketExternalId: paperTrades.marketExternalId,
-      side: paperTrades.side,
-      size: paperTrades.size,
-      price: paperTrades.price,
-      filledAt: paperTrades.filledAt,
-    })
-    .from(paperTrades)
-    .innerJoin(signals, eq(paperTrades.signalId, signals.id))
-    .where(
-      runStart
-        ? and(eq(signals.strategyId, strategyId), gte(paperTrades.filledAt, runStart))
-        : eq(signals.strategyId, strategyId),
-    )
-    .orderBy(paperTrades.filledAt);
-
+function aggregateOpenPositions(
+  rows: Array<{
+    platform: string;
+    marketExternalId: string;
+    side: string;
+    size: string;
+    price: string;
+    filledAt: Date;
+  }>,
+  strategyId: string,
+): StrategyOpenPosition[] {
   const byMarket = new Map<string, {
     platform: string;
     marketExternalId: string;
@@ -79,6 +74,52 @@ export async function getStrategyOpenPositions(strategyId: string): Promise<Stra
       openedAt: p.openedAt!,
       strategyId,
     }));
+}
+
+/** Batch-load open positions for many strategies in one DB query. */
+export async function getOpenPositionsByStrategy(
+  strategyIds: string[],
+): Promise<Map<string, StrategyOpenPosition[]>> {
+  const result = new Map<string, StrategyOpenPosition[]>();
+  if (strategyIds.length === 0) return result;
+
+  for (const id of strategyIds) {
+    result.set(id, []);
+  }
+
+  const runStart = await getPaperRunStartedAt();
+  const rows = await db
+    .select({
+      strategyId: signals.strategyId,
+      platform: paperTrades.platform,
+      marketExternalId: paperTrades.marketExternalId,
+      side: paperTrades.side,
+      size: paperTrades.size,
+      price: paperTrades.price,
+      filledAt: paperTrades.filledAt,
+    })
+    .from(paperTrades)
+    .innerJoin(signals, eq(paperTrades.signalId, signals.id))
+    .where(
+      runStart
+        ? and(inArray(signals.strategyId, strategyIds), gte(paperTrades.filledAt, runStart))
+        : inArray(signals.strategyId, strategyIds),
+    )
+    .orderBy(paperTrades.filledAt);
+
+  const byStrategy = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const bucket = byStrategy.get(row.strategyId) ?? [];
+    bucket.push(row);
+    byStrategy.set(row.strategyId, bucket);
+  }
+
+  for (const strategyId of strategyIds) {
+    const stratRows = byStrategy.get(strategyId) ?? [];
+    result.set(strategyId, aggregateOpenPositions(stratRows, strategyId));
+  }
+
+  return result;
 }
 
 /**
