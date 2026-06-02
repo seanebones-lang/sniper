@@ -1,6 +1,9 @@
 /**
  * Strategy Engine + Background Runner (Phase 3)
  * This is the core that makes the system "know when to buy and sell".
+ *
+ * Arch note: ~580 LOC orchestrates riskMode, portfolioRisk, executionManager, recon, Grok agent, snapshots, dynamic alloc.
+ * If adding significantly more (e.g. full WS strategies), consider splitting into RiskOrchestrator + EvaluationLoop.
  */
 
 import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db'; // eslint-disable-line @typescript-eslint/no-unused-vars -- strategies used via db.query.strategies (Drizzle table ref)

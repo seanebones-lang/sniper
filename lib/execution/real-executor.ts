@@ -17,6 +17,7 @@ import type { Market } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
 import { getKalshiTradingClient } from '@/lib/clients/kalshi-trading';
 import { executionManager } from './execution-manager';
+import { categorizeMarket } from '@/lib/risk/categorizer';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
@@ -66,7 +67,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     side: req.side,
     edge: 0.03,                    // placeholder - in real system this would come from the strategy
     confidence: 0.7,
-    category: 'crypto',            // TODO: proper market categorization
+    category: categorizeMarket(req.market.question || '', req.market.platform, req.market.externalId).category,
     currentPrice: req.price,
   });
 
