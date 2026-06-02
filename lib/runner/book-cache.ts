@@ -1,7 +1,6 @@
-import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
-import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
 import type { OrderBook } from '@/lib/types';
 import type { MarkPriceMap } from '@/lib/paper/mark-to-market';
+import { getRunnerBookHub } from '@/lib/runner/book-hub';
 
 export type BookKey = `${string}:${string}`;
 
@@ -12,38 +11,26 @@ export function bookKey(platform: string, externalId: string): BookKey {
 export class CycleBookCache {
   private books = new Map<BookKey, OrderBook | null>();
   private markPrices = new Map<BookKey, number | null>();
+  lastHubStats: { wsHits: number; restFetched: number; watchlistSize: number } | null = null;
 
   async fetchBooks(
     markets: Array<{ platform: string; externalId: string }>,
-    concurrency = 8,
+    concurrency = 16,
   ): Promise<number> {
-    const unique = [...new Map(markets.map((m) => [bookKey(m.platform, m.externalId), m])).values()];
-    let fetched = 0;
+    const hub = getRunnerBookHub();
+    const stats = await hub.ensureBooks(markets, concurrency);
+    this.lastHubStats = stats;
 
-    for (let i = 0; i < unique.length; i += concurrency) {
-      const batch = unique.slice(i, i + concurrency);
-      await Promise.all(
-        batch.map(async (m) => {
-          const key = bookKey(m.platform, m.externalId);
-          if (this.books.has(key)) return;
-          try {
-            const book =
-              m.platform === 'polymarket'
-                ? await fetchPolymarketOrderBook(m.externalId)
-                : await fetchKalshiOrderBook(m.externalId);
-            this.books.set(key, book);
-            const mark = book.mid ?? book.bids[0]?.price ?? book.asks[0]?.price ?? null;
-            this.markPrices.set(key, mark);
-            fetched++;
-          } catch {
-            this.books.set(key, null);
-            this.markPrices.set(key, null);
-          }
-        }),
-      );
+    const unique = [...new Map(markets.map((m) => [bookKey(m.platform, m.externalId), m])).values()];
+    for (const m of unique) {
+      const key = bookKey(m.platform, m.externalId);
+      const book = hub.getBook(m.platform, m.externalId);
+      this.books.set(key, book);
+      const mark = book?.mid ?? book?.bids[0]?.price ?? book?.asks[0]?.price ?? null;
+      this.markPrices.set(key, mark);
     }
 
-    return fetched;
+    return stats.restFetched;
   }
 
   getBook(platform: string, externalId: string): OrderBook | null {

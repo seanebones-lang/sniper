@@ -18,7 +18,10 @@ import { QUICK_FLIP_MAX_RESOLUTION_HOURS } from './markets/fast-moving';
 
 let cachedMarkets: Market[] | null = null;
 let lastFetch = 0;
+let cachedQuickFlip: Market[] | null = null;
+let lastQuickFlipFetch = 0;
 const CACHE_TTL = 25_000; // ~25s
+const QUICK_FLIP_CACHE_TTL = 20_000; // refresh fast markets slightly faster
 const FETCH_TIMEOUT_MS = 15_000;
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -65,6 +68,11 @@ export async function getAllMarkets(force = false): Promise<Market[]> {
 
 /** Near-term + live sports + leaderboard for quick-flip runner. */
 export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
+  const now = Date.now();
+  if (!force && cachedQuickFlip && now - lastQuickFlipFetch < QUICK_FLIP_CACHE_TTL) {
+    return cachedQuickFlip;
+  }
+
   const seen = new Set<string>();
   const merged: Market[] = [];
 
@@ -115,6 +123,8 @@ export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
     console.warn('[markets] Base market fetch failed (non-fatal):', err);
   }
 
+  cachedQuickFlip = merged;
+  lastQuickFlipFetch = Date.now();
   return merged;
 }
 
@@ -133,15 +143,24 @@ export { ensureMarketRecord, ensureMarket };
  * Sync a batch of markets to the database (idempotent upsert).
  * Call this periodically or before heavy runner/signal activity.
  */
-export async function syncMarketsToDb(markets: Market[]): Promise<string[]> {
-  const ids: string[] = [];
-  for (const m of markets) {
-    try {
-      const id = await ensureMarketRecord(m);
-      ids.push(id);
-    } catch (err) {
-      console.warn(`[markets] Failed to sync market ${m.platform}:${m.externalId}`, err);
-    }
+export async function syncMarketsToDb(
+  markets: Market[],
+  concurrency = 12,
+): Promise<Map<string, string>> {
+  const ids = new Map<string, string>();
+  for (let i = 0; i < markets.length; i += concurrency) {
+    const batch = markets.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (m) => {
+        const key = `${m.platform}:${m.externalId}`;
+        try {
+          const id = await ensureMarketRecord(m);
+          ids.set(key, id);
+        } catch (err) {
+          console.warn(`[markets] Failed to sync market ${m.platform}:${m.externalId}`, err);
+        }
+      }),
+    );
   }
   return ids;
 }

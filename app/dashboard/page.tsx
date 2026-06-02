@@ -103,12 +103,20 @@ export default function Dashboard() {
           </div>
           <p className="text-zinc-400">Paper mode · live portfolio &amp; system status</p>
         </div>
-        <Link
-          href="/health"
-          className="text-sm rounded-full border border-white/20 px-4 py-2 hover:bg-white/5 transition"
-        >
-          Full health view →
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/zen"
+            className="text-sm rounded-full border border-emerald-500/30 bg-emerald-950/20 px-4 py-2 text-emerald-300 hover:bg-emerald-950/40 transition"
+          >
+            Zen mode
+          </Link>
+          <Link
+            href="/health"
+            className="text-sm rounded-full border border-white/20 px-4 py-2 hover:bg-white/5 transition"
+          >
+            Full health view →
+          </Link>
+        </div>
       </div>
 
       {/* Runner strip */}

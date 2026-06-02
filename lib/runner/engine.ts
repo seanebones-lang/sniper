@@ -22,14 +22,15 @@ import { saveBookSnapshot } from '@/lib/data/historical';
 import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
-import { getRecentSnapshotsForMarket } from '@/lib/data/historical';
+import { getRecentSnapshotsBatch } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
-import { loadPaperRiskState } from '@/lib/paper/risk-state';
+import { loadPaperRiskState, invalidatePaperRiskCache } from '@/lib/paper/risk-state';
 import { computeStrategyPnlWindows, statsToPerformanceWindow } from '@/lib/paper/strategy-pnl';
 import { CycleBookCache } from '@/lib/runner/book-cache';
+import { getRunnerBookHub } from '@/lib/runner/book-hub';
 import { computeFinalShareSize } from '@/lib/risk/sizing';
 import { 
   applyTemporaryAdjustment, 
@@ -37,6 +38,7 @@ import {
   getEffectiveGlobalRiskMultiplier,
   getStrategySizeMultiplier,
   incrementRunCount,
+  getCurrentRunCount,
 } from '@/lib/monitoring/temporary-adjustments';
 
 export interface ActiveStrategyProfile {
@@ -60,6 +62,13 @@ export interface RunnerCycleDiagnostics {
   skipReason: string | null;
   riskMode: string;
   activeProfiles: ActiveStrategyProfile[];
+  bookFetch?: {
+    wsHits: number;
+    restFetched: number;
+    watchlistSize: number;
+    polyConnected: boolean;
+    kalshiConnected: boolean;
+  };
 }
 
 export interface RunnerStatus {
@@ -116,18 +125,29 @@ function persistStatus() {
 syncStatusFromStore();
 
 /** Faster loop when quick-flip strategies are active (live sports / fast markets). */
+let cachedIntervalMs: { value: number; expiresAt: number } | null = null;
+
 export async function getRunnerIntervalMs(): Promise<number> {
+  const now = Date.now();
+  if (cachedIntervalMs && now < cachedIntervalMs.expiresAt) {
+    return cachedIntervalMs.value;
+  }
+
   const activeStrategies = await db.query.strategies.findMany({
     where: (s, { eq }) => eq(s.isActive, true),
   });
 
+  let value = 12000;
   for (const strat of activeStrategies) {
     const config = resolveStrategyConfig(strat.config as unknown as StrategyConfig);
     if (config.tradingGoal === 'quick-flip' || strat.type === 'live-quick-flip') {
-      return 4000;
+      value = 4000;
+      break;
     }
   }
-  return 12000;
+
+  cachedIntervalMs = { value, expiresAt: now + 30_000 };
+  return value;
 }
 
 export function getRunnerStatus(): RunnerStatus {
@@ -154,6 +174,7 @@ export async function startRunner(intervalMs = 15000) {
 
   status.running = true;
   persistStatus();
+  getRunnerBookHub().start();
   console.log('[Runner] Starting 24/7 paper runner...');
 
   // === Durable Safety State Recovery (critical for real capital) ===
@@ -239,6 +260,7 @@ export function stopRunner() {
   }
   status.running = false;
   persistStatus();
+  getRunnerBookHub().stop();
   console.log('[Runner] Stopped');
   alerts.runnerStopped();
 }
@@ -275,17 +297,8 @@ export async function runOnce() {
   });
 
   const markets = hasQuickFlipStrategy
-    ? await getMarketsForQuickFlip(true)
+    ? await getMarketsForQuickFlip()
     : await getAllMarkets();
-
-  // === Ensure all markets we are about to evaluate are persisted (critical for signal FKs) ===
-  // This is cheap due to onConflictDoUpdate and prevents the historic FK mismatch bug.
-  try {
-    const { syncMarketsToDb } = await import('@/lib/markets');
-    await syncMarketsToDb(markets);
-  } catch (syncErr) {
-    console.warn('[Runner] Non-fatal: failed to sync markets to DB before evaluation', syncErr);
-  }
 
   // === Calculate global and per-market protection factors upfront ===
   const recentQuality = executionManager.getRecentExecutionQuality(30);
@@ -361,6 +374,8 @@ export async function runOnce() {
 
   const bookCache = new CycleBookCache();
   const marketsToFetch: Array<{ platform: string; externalId: string }> = [];
+  const marketByKey = new Map(markets.map((m) => [`${m.platform}:${m.externalId}`, m]));
+
   for (const stratRow of allowedStrategies) {
     const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
     const isQuickFlipStrat =
@@ -375,13 +390,43 @@ export async function runOnce() {
     for (const m of openPool.slice(0, stratLimit)) {
       marketsToFetch.push({ platform: m.platform, externalId: m.externalId });
     }
-
-    const openPositions = await getStrategyOpenPositions(stratRow.id);
-    for (const pos of openPositions) {
-      marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
-    }
   }
+
+  const openPositionsByStrategy = new Map<string, Awaited<ReturnType<typeof getStrategyOpenPositions>>>();
+  await Promise.all(
+    allowedStrategies.map(async (stratRow) => {
+      const positions = await getStrategyOpenPositions(stratRow.id);
+      openPositionsByStrategy.set(stratRow.id, positions);
+      for (const pos of positions) {
+        marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
+      }
+    }),
+  );
+
+  const syncKeys = new Set<string>();
+  const marketsToSync: typeof markets = [];
+  for (const m of marketsToFetch) {
+    const key = `${m.platform}:${m.externalId}`;
+    if (syncKeys.has(key)) continue;
+    syncKeys.add(key);
+    const found = marketByKey.get(key);
+    if (found) marketsToSync.push(found);
+  }
+
+  let marketDbIds = new Map<string, string>();
+  try {
+    const { syncMarketsToDb } = await import('@/lib/markets');
+    marketDbIds = await syncMarketsToDb(marketsToSync);
+  } catch (syncErr) {
+    console.warn('[Runner] Non-fatal: failed to sync evaluated markets to DB', syncErr);
+  }
+
   await bookCache.fetchBooks(marketsToFetch);
+
+  const snapshotBatch = await getRecentSnapshotsBatch(
+    marketsToFetch.map((m) => ({ platform: m.platform, marketExternalId: m.externalId })),
+    8,
+  );
 
   const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
   portfolioRiskManager.setCyclePortfolioState(
@@ -420,7 +465,7 @@ export async function runOnce() {
     if (!strategyImpl) continue;
 
     const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
-    const openPositions = await getStrategyOpenPositions(stratRow.id);
+    const openPositions = openPositionsByStrategy.get(stratRow.id) ?? [];
     const openByMarket = new Map(
       openPositions.map((p) => [`${p.platform}:${p.marketExternalId}`, p]),
     );
@@ -488,7 +533,8 @@ export async function runOnce() {
 
         const currentPrice = book?.mid ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
 
-        const recentSnaps = await getRecentSnapshotsForMarket(market.platform, market.externalId, 8);
+        const recentSnaps =
+          snapshotBatch.get(`${market.platform}:${market.externalId}`) ?? [];
         const advanced = extractFeaturesFromRecentSnapshots(recentSnaps);
 
         // === Self-Protection: Execution Health Throttle ===
@@ -507,7 +553,7 @@ export async function runOnce() {
 
           snapshotSaveCounter++;
           if (snapshotSaveCounter % 3 === 0) {
-            await saveBookSnapshot({
+            void saveBookSnapshot({
               platform: market.platform,
               marketExternalId: market.externalId,
               bids: book.bids?.slice(0, 3) || [],
@@ -594,7 +640,7 @@ export async function runOnce() {
 
           const minAllowedUsd = isQuickFlip ? 0.5 : 5;
           if (riskDecision.allowedSize < minAllowedUsd) {
-            await logAudit('runner_signal_rejected_risk', {
+            void logAudit('runner_signal_rejected_risk', {
               strategy: stratRow.name,
               market: market.externalId,
               signal,
@@ -610,12 +656,6 @@ export async function runOnce() {
             allocatorMultiplier *= Math.max(0.05, Math.min(1, config.allocationDownweight));
           }
           allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
-
-          await logAudit('runner_allocator_decision', {
-            strategy: stratRow.name,
-            allocation: allocation.reason,
-            multiplier: allocatorMultiplier,
-          });
 
           const riskCapUsd =
             riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
@@ -639,17 +679,21 @@ export async function runOnce() {
           if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 
           // === CRITICAL: Ensure market exists in DB before creating signal (fixes FK mismatch) ===
-          let marketDbId: string;
-          try {
-            marketDbId = await ensureMarketRecord(market);
-          } catch (ensureErr) {
-            console.error(`[Runner] Failed to ensure market record for ${market.platform}:${market.externalId}`, ensureErr);
-            await logAudit('runner_market_ensure_failed', {
-              strategy: stratRow.name,
-              market: market.externalId,
-              error: String(ensureErr),
-            });
-            continue; // Skip this signal — cannot create valid FK reference
+          const marketKey = `${market.platform}:${market.externalId}`;
+          let marketDbId = marketDbIds.get(marketKey);
+          if (!marketDbId) {
+            try {
+              marketDbId = await ensureMarketRecord(market);
+              marketDbIds.set(marketKey, marketDbId);
+            } catch (ensureErr) {
+              console.error(`[Runner] Failed to ensure market record for ${market.platform}:${market.externalId}`, ensureErr);
+              void logAudit('runner_market_ensure_failed', {
+                strategy: stratRow.name,
+                market: market.externalId,
+                error: String(ensureErr),
+              });
+              continue;
+            }
           }
 
           const insertedSignal = await db.insert(signals).values({
@@ -663,7 +707,7 @@ export async function runOnce() {
 
           const signalId = insertedSignal[0]?.id;
 
-          await logAudit('runner_signal_created', {
+          void logAudit('runner_signal_created', {
             strategy: stratRow.name,
             market: market.externalId,
             marketDbId,
@@ -724,6 +768,7 @@ export async function runOnce() {
             if (fill) {
               fillsThisRun++;
               lastSignalAtByKey.set(cooldownKey, Date.now());
+              invalidatePaperRiskCache();
 
               await db.insert(paperTrades).values({
                 platform: market.platform,
@@ -773,6 +818,13 @@ export async function runOnce() {
     skipReason: signalsThisRun === 0 ? skipReason : null,
     riskMode: riskModeManager.getCurrentMode().current,
     activeProfiles,
+    bookFetch: bookCache.lastHubStats
+      ? {
+          ...bookCache.lastHubStats,
+          polyConnected: getRunnerBookHub().getLastStats().polyConnected,
+          kalshiConnected: getRunnerBookHub().getLastStats().kalshiConnected,
+        }
+      : undefined,
   };
   persistStatus();
 
@@ -782,19 +834,21 @@ export async function runOnce() {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
   }
 
-  // === Edge Decay Monitoring — feed rolling PnL windows ===
-  try {
-    const pnlStats = await computeStrategyPnlWindows(
-      activeStrategies.map((s) => s.id),
-      6,
-    );
-    for (const [, stats] of pnlStats) {
-      if (stats.fills >= 3) {
-        edgeDecayMonitor.recordWindow(stats.strategyId, statsToPerformanceWindow(stats, 6));
+  // === Edge Decay Monitoring — feed rolling PnL windows (every 5 cycles) ===
+  if (getCurrentRunCount() % 5 === 0) {
+    try {
+      const pnlStats = await computeStrategyPnlWindows(
+        activeStrategies.map((s) => s.id),
+        6,
+      );
+      for (const [, stats] of pnlStats) {
+        if (stats.fills >= 3) {
+          edgeDecayMonitor.recordWindow(stats.strategyId, statsToPerformanceWindow(stats, 6));
+        }
       }
+    } catch (e) {
+      console.warn('[Runner] Edge decay window update failed (non-fatal):', e);
     }
-  } catch (e) {
-    console.warn('[Runner] Edge decay window update failed (non-fatal):', e);
   }
 
   for (const strat of activeStrategies) {

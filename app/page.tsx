@@ -25,6 +25,12 @@ export default function SniperLanding() {
           >
             Open Dashboard
           </Link>
+          <Link
+            href="/zen"
+            className="inline-flex h-12 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-950/30 px-8 font-medium text-emerald-300 transition hover:bg-emerald-950/50"
+          >
+            Zen Mode
+          </Link>
           <a
             href="https://github.com/seanebones-lang/sniper"
             target="_blank"

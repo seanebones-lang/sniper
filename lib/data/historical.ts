@@ -2,7 +2,7 @@
  * Historical snapshot storage + strategy replay on collected order book data.
  */
 
-import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, or } from 'drizzle-orm';
 import { db, marketSnapshots } from '@/lib/db';
 import type { BacktestResult } from '@/lib/backtest/engine';
 import type { Strategy, StrategyConfig } from '@/lib/strategies/types';
@@ -131,6 +131,44 @@ export async function getRecentSnapshotsForMarket(
     orderBy: desc(marketSnapshots.timestamp),
     limit,
   });
+}
+
+type SnapshotRow = Awaited<ReturnType<typeof getRecentSnapshotsForMarket>>[number];
+
+/** Batch-load recent snapshots for many markets (one query, grouped client-side). */
+export async function getRecentSnapshotsBatch(
+  keys: Array<{ platform: string; marketExternalId: string }>,
+  limitPerMarket = 8,
+): Promise<Map<string, SnapshotRow[]>> {
+  const result = new Map<string, SnapshotRow[]>();
+  if (keys.length === 0) return result;
+
+  const unique = [...new Map(keys.map((k) => [`${k.platform}:${k.marketExternalId}`, k])).values()];
+  for (const k of unique) {
+    result.set(`${k.platform}:${k.marketExternalId}`, []);
+  }
+
+  const rows = await db.query.marketSnapshots.findMany({
+    where: or(
+      ...unique.map((k) =>
+        and(
+          eq(marketSnapshots.platform, k.platform),
+          eq(marketSnapshots.marketExternalId, k.marketExternalId),
+        ),
+      ),
+    ),
+    orderBy: desc(marketSnapshots.timestamp),
+    limit: unique.length * limitPerMarket,
+  });
+
+  for (const row of rows) {
+    const key = `${row.platform}:${row.marketExternalId}`;
+    const bucket = result.get(key);
+    if (!bucket || bucket.length >= limitPerMarket) continue;
+    bucket.push(row);
+  }
+
+  return result;
 }
 
 export async function getSnapshotsForReplay(

@@ -30,3 +30,53 @@ body {
 .table-header {
   @apply text-xs font-medium uppercase tracking-widest text-zinc-500;
 }
+
+/* Zen mode — meditative equity view */
+.zen-hero-number {
+  font-size: clamp(3rem, 12vw, 7.5rem);
+  line-height: 1;
+  text-shadow: 0 0 60px rgba(52, 211, 153, 0.25);
+  animation: zen-breathe 6s ease-in-out infinite;
+}
+.zen-fade-in {
+  animation: zen-fade 1.2s ease-out both;
+}
+.zen-fade-in-delay {
+  animation: zen-fade 1.6s ease-out 0.3s both;
+}
+.zen-stat-orb {
+  animation: zen-float 8s ease-in-out infinite;
+}
+.zen-arc-glow {
+  filter: drop-shadow(0 0 8px rgba(52, 211, 153, 0.45));
+}
+@keyframes zen-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.008);
+    filter: brightness(1.06);
+  }
+}
+@keyframes zen-fade {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes zen-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}

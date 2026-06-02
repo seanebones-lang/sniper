@@ -1,5 +1,5 @@
 import { db, paperTrades } from '@/lib/db';
-import { gte } from 'drizzle-orm';
+import { count, gte } from 'drizzle-orm';
 import { getPaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 import { aggregatePaperPositions } from '@/lib/paper/positions';
@@ -14,6 +14,19 @@ export interface PaperRiskSnapshot {
   cashUsd: number;
   startingBudgetUsd: number;
   ledger: PaperLedgerSummary;
+}
+
+let ledgerCache: {
+  fillCount: number;
+  runStartIso: string | null;
+  trades: Awaited<ReturnType<typeof db.query.paperTrades.findMany>>;
+  ledger: PaperLedgerSummary;
+  positions: ReturnType<typeof aggregatePaperPositions>;
+  budgetUsd: number;
+} | null = null;
+
+export function invalidatePaperRiskCache(): void {
+  ledgerCache = null;
 }
 
 function toLedgerTrades(
@@ -44,33 +57,58 @@ export async function loadPaperRiskState(markPrices?: MarkPriceMap): Promise<Pap
   ]);
 
   const runFilter = runStart ? gte(paperTrades.filledAt, runStart) : undefined;
-  const trades = await db.query.paperTrades.findMany({
-    where: runFilter,
-    orderBy: (t, { asc }) => [asc(t.filledAt)],
-  });
+  const runStartIso = runStart?.toISOString() ?? null;
+
+  const [{ value: fillCount }] = await db
+    .select({ value: count() })
+    .from(paperTrades)
+    .where(runFilter ?? undefined);
+
+  let trades = ledgerCache?.trades;
+  let ledger = ledgerCache?.ledger;
+  let positions = ledgerCache?.positions;
+
+  if (
+    !ledgerCache ||
+    ledgerCache.fillCount !== fillCount ||
+    ledgerCache.runStartIso !== runStartIso ||
+    ledgerCache.budgetUsd !== budget.paperBudgetUsd
+  ) {
+    trades = await db.query.paperTrades.findMany({
+      where: runFilter,
+      orderBy: (t, { asc }) => [asc(t.filledAt)],
+    });
+    const ledgerTrades = toLedgerTrades(trades);
+    ledger = computePaperLedger(budget.paperBudgetUsd, ledgerTrades);
+    positions = aggregatePaperPositions(trades);
+    ledgerCache = {
+      fillCount,
+      runStartIso,
+      trades,
+      ledger,
+      positions,
+      budgetUsd: budget.paperBudgetUsd,
+    };
+  }
 
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
 
-  const tradesBeforeToday = trades.filter((t) => t.filledAt < todayStart);
-  const ledgerTrades = toLedgerTrades(trades);
-  const ledger = computePaperLedger(budget.paperBudgetUsd, ledgerTrades);
-
-  const positions = aggregatePaperPositions(trades);
-  const mtm = await computeMarkToMarket(positions, markPrices);
-  const equityUsd = ledger.cashUsd + mtm.openMarkValueUsd;
-
+  const tradesBeforeToday = trades!.filter((t) => t.filledAt < todayStart);
   const ledgerStartOfDay = computePaperLedger(
     budget.paperBudgetUsd,
     toLedgerTrades(tradesBeforeToday),
   );
   const positionsStartOfDay = aggregatePaperPositions(tradesBeforeToday);
   const startOfDayExposure = positionsStartOfDay.reduce((sum, p) => sum + p.notionalUsd, 0);
+
+  const mtm = await computeMarkToMarket(positions!, markPrices);
+  const equityUsd = ledger!.cashUsd + mtm.openMarkValueUsd;
   const equityStartOfDay = ledgerStartOfDay.cashUsd + startOfDayExposure;
   const dailyPnl = equityUsd - equityStartOfDay;
 
   const categoryExposures: Record<string, number> = {};
-  for (const p of positions) {
+  for (const p of positions!) {
     const cat = categorizeMarket('', p.platform, p.marketExternalId).category;
     const markKey = `${p.platform}:${p.marketExternalId}`;
     const mark = markPrices?.get(markKey);
@@ -89,8 +127,8 @@ export async function loadPaperRiskState(markPrices?: MarkPriceMap): Promise<Pap
   return {
     state,
     equityUsd,
-    cashUsd: ledger.cashUsd,
+    cashUsd: ledger!.cashUsd,
     startingBudgetUsd: budget.paperBudgetUsd,
-    ledger,
+    ledger: ledger!,
   };
 }
