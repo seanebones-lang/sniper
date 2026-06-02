@@ -48,7 +48,8 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sniper_test
 
       - name: Lint
-        run: npm run lint || true   # Still reports but does not hard-fail the whole CI yet (known debt)
+        run: npm run lint
+        # Lint is now enforced (debt has been significantly reduced through the campaign)
 
       - name: Type Check
         run: npx tsc --noEmit
