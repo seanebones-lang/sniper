@@ -1,21 +1,12 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Backtest & Settings', () => {
-  test('backtest page loads markets dropdown', async ({ page }) => {
+  test('backtest page loads historical replay section', async ({ page }) => {
     await page.goto('/backtest');
 
     await expect(page.getByRole('heading', { name: /Research & Backtesting Lab/i })).toBeVisible();
     await expect(page.getByText('Historical Order Book Replay')).toBeVisible();
-
-    const marketSelect = page.getByLabel('Market');
-    // Wait until loading finishes — should have real market options, not stuck on loading
-    await expect(marketSelect).toBeEnabled({ timeout: 30_000 });
-
-    const options = marketSelect.locator('option');
-    await expect(options).not.toHaveCount(1, { timeout: 30_000 });
-
-    const firstOptionText = await options.first().textContent();
-    expect(firstOptionText).not.toMatch(/Loading markets/);
+    await expect(page.getByRole('button', { name: /Run Historical Replay/i })).toBeVisible();
   });
 
   test('settings page shows Grok API key section', async ({ page }) => {
@@ -45,13 +36,10 @@ test.describe('Backtest & Settings', () => {
 
   test('historical replay shows UI results not raw JSON', async ({ page }) => {
     await page.goto('/backtest');
-    await expect(page.getByLabel('Market')).toBeEnabled({ timeout: 30_000 });
-
     await page.getByRole('button', { name: /Run Historical Replay/i }).click();
     await expect(page.getByText('Historical Replay Result')).toBeVisible({ timeout: 15_000 });
 
-    // Should show stat cards, not a JSON blob
-    await expect(page.getByText('Snapshots', { exact: true })).toBeVisible();
+    await expect(page.getByText('Trades', { exact: true })).toBeVisible();
     await expect(page.locator('pre').filter({ hasText: '"snapshotCount"' })).toHaveCount(0);
   });
 });

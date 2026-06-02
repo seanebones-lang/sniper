@@ -16,9 +16,10 @@ test.describe('Strategies', () => {
     await expect(page.getByText('Create New Strategy')).toBeVisible();
     await expect(page.getByText('Strategy name')).toBeVisible();
     await expect(page.getByText('Strategy type')).toBeVisible();
+    await expect(page.getByText('Trading style')).toBeVisible();
+    await expect(page.getByText('Trading goal')).toBeVisible();
     await expect(page.getByText('Max size per trade (USD)')).toBeVisible();
-    await expect(page.getByText('Target profit (%)')).toBeVisible();
-    await expect(page.getByText('Cooldown between signals (seconds)')).toBeVisible();
+    await expect(page.getByText('Profit multiple (×)')).toBeVisible();
     await expect(page.getByRole('button', { name: /Create & Save/i })).toBeVisible();
   });
 
