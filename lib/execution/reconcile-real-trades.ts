@@ -35,15 +35,31 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
     for (const trade of pendingTrades) {
       try {
         if (trade.platform === 'kalshi') {
-          // Kalshi-specific reconciliation
+          // Kalshi-specific reconciliation — exercises authenticated trading client
           try {
-            // Future: const client = getKalshiTradingClient(); then client.getOrderStatus(...) etc.
-            // For now lightweight time-based + audit (no client call yet to avoid unused)
+            const { getKalshiTradingClient } = await import('@/lib/clients/kalshi-trading');
+            const client = getKalshiTradingClient();
 
-            // Future improvement: actually call client to check order status using trade.txHash
-            // For now we do a lightweight time-based + audit approach with better structure
             const ageMs = Date.now() - new Date(trade.createdAt).getTime();
             const ageMinutes = Math.round(ageMs / 60000);
+
+            // Periodically ping balance during recon (proves auth + connectivity in the 24/7 runner loop)
+            if (ageMinutes > 5 || (ageMinutes > 0 && ageMinutes % 30 === 0)) {
+              try {
+                const bal = await client.getBalance();
+                await logAudit('kalshi_recon_balance_check', {
+                  tradeId: trade.id,
+                  balance: bal,
+                  ageMinutes,
+                });
+              } catch (balErr) {
+                // Non-fatal: balance ping is best-effort observability
+                await logAudit('kalshi_recon_balance_failed', {
+                  tradeId: trade.id,
+                  error: balErr instanceof Error ? balErr.message : String(balErr),
+                });
+              }
+            }
 
             if (ageMinutes > 10) {
               await logAudit('kalshi_real_trade_pending_review', {
@@ -54,8 +70,7 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
               });
             }
 
-            // Placeholder for future real status checking
-            // if (await client.isOrderFilled(trade.txHash)) { ... }
+            // Future: use client to poll specific order status and call recordRealFill(...) on confirmed fills
           } catch (kalshiReconErr) {
             result.errors++;
             await logAudit('kalshi_reconciliation_error', {
