@@ -1,6 +1,6 @@
 # Sniper — Project Status (Authoritative)
 
-**Last updated:** 2026-06 (post real-exec hardening, lint campaign, runbooks, recon client integration, 18 tests, multiple verified cycles)
+**Last updated:** 2026-06 (post major durability + reconciliation + exposure work — 21 tests)
 
 This document is the single source of truth for capability, known issues, and roadmap. All other docs (README, wiki, etc.) should defer to this file.
 
@@ -50,14 +50,12 @@ All references to this blocker in older docs/wiki are now historical.
 
 ### Recently Resolved (June 2026, multiple cycles)
 - **Repo hygiene (Major win)**: Removed 1.4 GB nested duplicate. Hardened .gitignore.
-- **signals.market_id FK** — Fixed (ensureMarketRecord + early sync in runner; pipeline reliable).
-- **Kalshi + Real Exec**: Auth client (login, balance, placeOrder) wired end-to-end. Recon now pings client for health. recordRealFill* + strict ensureMarket in success paths. Kill-switch + guarded tests (18 total tests).
-- **Real Execution Safety**: In-memory + env kill switch, early return in placeRealOrder, reconciliation result consumption in 24/7 runner, position tracking best-effort.
-- **Testing**: 18 passing (risk manager circuit breakers/Kelly, execution health, ensure-market, Kalshi client, real safety gates). Smoke + coverage in CI.
-- **CI**: Full strict pipeline (lint enforced, tsc, test:ci, build, coverage, e2e foundation, osv-scanner, Postgres service, concurrency cancel).
-- **Lint Campaign**: Systematic any reduction + unused cleanup in high-risk lib/ paths (runner, risk, execution, research, ws). Core now very clean; tests/UI remain practical debt.
-- **Docs & Ops**: Expanded real-execution + Kalshi runbooks (checklists, SQL audits, exact errors, kill switch procedures). STATUS authoritative. AGENTS rules reinforced.
-- **Process**: Repeated "test → build → commit → push" + todo-driven master list on every batch.
+- **signals.market_id FK** — Fixed.
+- **State Durability (Critical for 24/7 real $)**: New system_state table + service. Kill switch, risk mode, daily loss, and execution health now persist across restarts with recovery logging in the runner.
+- **Reconciliation Maturity**: KalshiTradingClient now has real getOrder/getOrders/getFills. Recon actively polls exchange order status and calls recordRealFill with confirmed data. Polymarket orders now start as 'pending' with order IDs stored.
+- **Risk Exposure**: getCurrentPortfolioState improved to use the positions table as primary source (populated by reconciliation).
+- **Testing**: 21 passing.
+- **Process**: Strict gated batches with commit + push on every meaningful change.
 
 ---
 
