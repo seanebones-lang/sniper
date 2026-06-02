@@ -151,15 +151,48 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
           continue;
         }
 
-        // === Polymarket reconciliation logic (existing) ===
+        // === Polymarket reconciliation logic (advancing symmetry with Kalshi) ===
         const ageMs = Date.now() - new Date(trade.createdAt).getTime();
+        const ageMinutes = Math.round(ageMs / 60000);
 
-        if (ageMs > 1000 * 60 * 15) {
+        if (trade.platform === 'polymarket' && trade.txHash) {
+          try {
+            const { getPolymarketOpenOrders } = await import('@/lib/clients/polymarket');
+            // Note: This requires POLYMARKET_PRIVATE_KEY to be set for real reconciliation
+            const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
+            if (privateKey) {
+              const openOrders = await getPolymarketOpenOrders(privateKey);
+              const stillOpen = Array.isArray(openOrders) && openOrders.some((o: any) => o.orderID === trade.txHash);
+
+              if (!stillOpen && ageMinutes > 5) {
+                // Order no longer open → likely filled or cancelled. Mark for review / heuristic close
+                await db.update(realTrades)
+                  .set({ status: ageMinutes > 30 ? 'needs_review' : 'pending' })
+                  .where(eq(realTrades.id, trade.id));
+
+                await logAudit('polymarket_order_no_longer_open', {
+                  tradeId: trade.id,
+                  orderId: trade.txHash,
+                  ageMinutes,
+                });
+
+                result.updated++;
+              }
+            }
+          } catch (polyErr) {
+            await logAudit('polymarket_recon_error', {
+              tradeId: trade.id,
+              error: polyErr instanceof Error ? polyErr.message : String(polyErr),
+            });
+          }
+        }
+
+        if (ageMinutes > 15) {
           await logAudit('real_trade_stuck', {
             tradeId: trade.id,
             platform: trade.platform,
             marketExternalId: trade.marketExternalId,
-            ageMinutes: Math.round(ageMs / 60000),
+            ageMinutes,
           });
         }
 

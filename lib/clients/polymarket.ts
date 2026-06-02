@@ -154,6 +154,36 @@ export async function fetchPolymarketPrice(tokenId: string): Promise<number | nu
  * Place a real limit order on Polymarket.
  * This should ONLY be called from the Real Executor after all risk checks pass.
  */
+/**
+ * Get open orders for the authenticated user.
+ * Useful for reconciliation of real Polymarket trades.
+ */
+export async function getPolymarketOpenOrders(privateKey: string): Promise<any> {
+  try {
+    const client = getTradingClient(privateKey);
+    // The CLOB SDK supports getOpenOrders
+    const orders = await client.getOpenOrders();
+    return orders;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Polymarket] getOpenOrders failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Cancel an order (best effort).
+ */
+export async function cancelPolymarketOrder(privateKey: string, orderId: string): Promise<boolean> {
+  try {
+    const client = getTradingClient(privateKey);
+    await client.cancelOrder({ orderID: orderId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function placePolymarketLimitOrder(params: {
   privateKey: string;
   tokenId: string;
