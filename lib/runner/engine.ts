@@ -456,6 +456,19 @@ export async function runOnce() {
   if (Math.random() < 0.1) {
     const state = await portfolioRiskManager.getCurrentPortfolioState();
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
+
+    // Persist execution health snapshot for durability across restarts
+    try {
+      const { persistExecutionHealth } = await import('@/lib/monitoring/system-state');
+      const unhealthy = executionManager.getUnhealthyMarkets(0.5);
+      const avgSlip = executionManager.getAverageSlippage(30);
+      await persistExecutionHealth({
+        systemHealthScore: executionManager.getSystemHealthScore(),
+        unhealthyMarketCount: unhealthy.length,
+        recentAdverseRate: avgSlip > 0 ? Math.min(1, avgSlip * 10) : 0,
+        lastUpdated: new Date().toISOString(),
+      }, 'periodic runner snapshot');
+    } catch {}
   }
 
   // === Real Trade Reconciliation (important for live execution) ===

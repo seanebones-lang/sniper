@@ -170,3 +170,14 @@ export async function loadCriticalSafetyState() {
     dailyLoss: dailyLoss || { trackedUsd: 0, lastResetAt: new Date(0).toISOString() },
   };
 }
+
+export interface ExecutionHealthSummary {
+  systemHealthScore: number;
+  unhealthyMarketCount: number;
+  recentAdverseRate: number;
+  lastUpdated: string;
+}
+
+export async function persistExecutionHealth(summary: ExecutionHealthSummary, reason?: string) {
+  await persistSystemState('execution_health_summary', summary as any, reason || 'periodic health snapshot');
+}
