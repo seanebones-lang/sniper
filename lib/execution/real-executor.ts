@@ -204,7 +204,9 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       });
     }
 
-    const newStatus = result.success ? 'filled' : 'rejected';
+    // For limit orders we optimistically set to 'pending' so reconciliation can later confirm the fill.
+    // Market orders or immediate fills can be marked filled, but we keep it simple and consistent here.
+    const newStatus = result.success ? 'pending' : 'rejected';
 
     await db.update(realTrades)
       .set({ 
