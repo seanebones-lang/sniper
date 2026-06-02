@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createVariantFromProposal, getAllVariants } from '@/lib/strategies/variants';
+import { createVariantFromProposal } from '@/lib/strategies/variants';
 import { replayStrategyOnHistory } from '@/lib/data/historical';
 import { getStrategy } from '@/lib/strategies';
 
