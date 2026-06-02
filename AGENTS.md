@@ -35,6 +35,21 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Skip audit logging on important decisions.
 - Bypass the risk/execution layers for "just this one thing".
 
+**Real Execution & Reconciliation (Highest Stakes)**
+- Only `placeRealOrder` (via real-executor) may touch live money. It enforces: env gate + strategy !paperOnly + `isRealExecutionAllowed()` (env override + in-memory kill switch) + portfolioRiskManager + ExecutionManager decision.
+- Always call `ensureMarket` (or `ensureMarketRecord`) **before** any insert into signals/positions/realTrades that references a market. Example:
+  ```ts
+  const marketDbId = await ensureMarket({
+    platform: m.platform,
+    externalId: m.externalId,
+    question: m.question,
+  });
+  await db.insert(signals).values({ marketId: marketDbId, ... });
+  ```
+- Reconciliation (`reconcilePendingRealTrades`) runs in the runner loop. It must produce auditable events and may call `recordRealFill` / `recordRealFillForPosition` on confirmed fills. Kalshi path exercises the trading client (balance pings etc.).
+- Kill switch: `SNIPER_DISABLE_REAL_EXECUTION=true` (deployment) or `disableRealExecution()` (runtime). After trigger, real paths must early-return with clear error; paper paths continue.
+- Test the gates: any change to real-exec or recon requires guarded tests that exercise the disable + early return without side effects.
+
 See also:
 - `docs/STATUS.md` (authoritative capability + known issues)
 - `docs/ARCHITECTURE.md`, `docs/RISK.md`, `docs/EXECUTION.md`
