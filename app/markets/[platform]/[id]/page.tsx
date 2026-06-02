@@ -44,7 +44,7 @@ export default function LiveMarketDetail({ params }: Props) {
   const [grokError, setGrokError] = useState<string | null>(null);
   const [grokConfigured, setGrokConfigured] = useState<boolean | null>(null);
 
-  const wsRef = useRef<PolymarketWSClient | null>(null);
+  const wsRef = useRef<{ disconnect?: () => void } | null>(null);
 
   async function loadSnapshot() {
     const p = await params;
@@ -119,8 +119,38 @@ export default function LiveMarketDetail({ params }: Props) {
       return;
     }
 
+    if (platform === 'kalshi') {
+      import('@/lib/ws/kalshi').then(({ KalshiWSClient }) => {
+        const client = new KalshiWSClient({
+          onMessage: (msg: Record<string, unknown>) => {
+            const ticker = String(msg.market_ticker ?? msg.ticker ?? '');
+            if (ticker && ticker !== marketId) return;
+
+            const yesBid = parseFloat(String(msg.yes_bid_dollars ?? msg.yes_bid ?? ''));
+            const yesAsk = parseFloat(String(msg.yes_ask_dollars ?? msg.yes_ask ?? ''));
+            if (!Number.isNaN(yesBid) && !Number.isNaN(yesAsk)) {
+              setBook((prev) => prev ? {
+                ...prev,
+                bids: [{ price: yesBid, size: prev.bids[0]?.size ?? 1 }],
+                asks: [{ price: yesAsk, size: prev.asks[0]?.size ?? 1 }],
+                mid: (yesBid + yesAsk) / 2,
+                spread: yesAsk - yesBid,
+                timestamp: new Date().toISOString(),
+              } : null);
+            }
+          },
+          onOpen: () => setIsLive(true),
+          onClose: () => setIsLive(false),
+        });
+
+        wsRef.current = client;
+        client.connect([marketId]);
+      });
+      return;
+    }
+
     if (platform !== 'polymarket') {
-      alert('Live WS currently demoed on Polymarket only in Phase 2. Kalshi support coming next.');
+      alert('Live WS is supported for Polymarket and Kalshi only.');
       return;
     }
 

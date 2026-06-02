@@ -10,13 +10,17 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const body = await req.json();
+  const config = (body.config ?? {}) as Record<string, unknown>;
 
   const [newStrat] = await db.insert(strategies).values({
     name: body.name,
     type: body.type,
-    config: body.config,
+    config,
     paperOnly: body.paperOnly ?? true,
     isActive: false,
+    maxSizeUsd: String(config.maxSizeUsd ?? 100),
+    targetProfitPct: String(config.targetProfitPct ?? 2.5),
+    cooldownSeconds: Number(config.cooldownSeconds ?? 300),
   }).returning();
 
   return NextResponse.json(newStrat);

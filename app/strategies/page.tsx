@@ -37,8 +37,8 @@ const STRATEGY_DESCRIPTIONS: Record<string, { summary: string; when: string }> =
     when: 'Best on short-duration crypto or event markets close to resolution.',
   },
   'live-quick-flip': {
-    summary: 'Buys ~$1 on live fast-moving markets (sports, short crypto) and sells instantly at 2.5× (~$2.50).',
-    when: 'Best on in-play tennis, baseball, basketball, and other high-velocity live positions.',
+    summary: 'Buys ~$1 on markets resolving within 3 hours and sells at 2.5× (~$2.50).',
+    when: 'Best on live tennis, in-play sports, and other markets with exchange end time under 3h.',
   },
 };
 
@@ -73,6 +73,17 @@ export default function StrategiesPage() {
     dbPaperFillsTotal?: number;
     dbPaperFillsToday?: number;
     activeStrategies?: number;
+    lastCycle?: {
+      marketPoolSize: number;
+      eligibleQuickFlipMarkets: number;
+      marketsEvaluated: number;
+      skipReason: string | null;
+      activeProfiles: Array<{
+        name: string;
+        tradingStyle: string;
+        tradingGoal: string;
+      }>;
+    } | null;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -195,6 +206,7 @@ export default function StrategiesPage() {
       dbPaperFillsTotal: json.dbPaperFillsTotal,
       dbPaperFillsToday: json.dbPaperFillsToday,
       activeStrategies: json.activeStrategies,
+      lastCycle: json.lastCycle ?? null,
     });
     load();
   }
@@ -276,6 +288,20 @@ export default function StrategiesPage() {
           {' '}· Last run: {runnerStatus.lastRun ? new Date(runnerStatus.lastRun).toLocaleTimeString() : 'never'}
           {' '}· Session signals/fills: {runnerStatus.signalsGenerated} / {runnerStatus.fillsExecuted}
           {' '}· DB fills (today): {runnerStatus.dbPaperFillsToday ?? '—'}
+          {runnerStatus.lastCycle && runnerStatus.running && (
+            <p className="mt-2 text-zinc-400">
+              Market pool: {runnerStatus.lastCycle.marketPoolSize}
+              {' '}· eligible ≤3h: {runnerStatus.lastCycle.eligibleQuickFlipMarkets}
+              {' '}· evaluating: {runnerStatus.lastCycle.marketsEvaluated}
+              {runnerStatus.lastCycle.activeProfiles.length > 0 && (
+                <> · style: {runnerStatus.lastCycle.activeProfiles.map((p) =>
+                  `${p.name} (${p.tradingStyle}/${p.tradingGoal})`).join(', ')}</>
+              )}
+              {runnerStatus.lastCycle.skipReason && (
+                <span className="block mt-1 text-amber-300">{runnerStatus.lastCycle.skipReason}</span>
+              )}
+            </p>
+          )}
           {!runnerStatus.running && strategies.some((s) => s.isActive) && (
             <p className="mt-2 text-amber-300">
               Active strategies won&apos;t trade until you start the runner.
@@ -543,6 +569,7 @@ export default function StrategiesPage() {
               <th className="py-3 px-4 font-normal">Name</th>
               <th className="py-3 px-4 font-normal">Type</th>
               <th className="py-3 px-4 font-normal">Goal</th>
+              <th className="py-3 px-4 font-normal">Style</th>
               <th className="py-3 px-4 font-normal">Max / trade</th>
               <th className="py-3 px-4 font-normal">Key setting</th>
               <th className="py-3 px-4 font-normal">Status</th>
@@ -551,10 +578,10 @@ export default function StrategiesPage() {
           </thead>
           <tbody>
             {loading && strategies.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-zinc-500">Loading…</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-zinc-500">Loading…</td></tr>
             )}
             {!loading && strategies.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-zinc-500">No strategies yet. Click “New Strategy” above.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-zinc-500">No strategies yet. Click “New Strategy” above.</td></tr>
             )}
             {strategies.map(s => {
               const cfg = (s.config ?? {}) as Record<string, string | number | undefined>;
@@ -562,12 +589,14 @@ export default function StrategiesPage() {
               if (s.type === 'spread-scalper') keySetting = `Min spread ${cfg.minSpreadPct ?? 1.8}%`;
               if (s.type === 'threshold') keySetting = `Buy ≤ ${((Number(cfg.entryThreshold) || 0.48) * 100).toFixed(0)}¢`;
               const goalLabel = String(cfg.tradingGoal ?? 'spread-capture').replace(/-/g, ' ');
+              const styleLabel = String(cfg.tradingStyle ?? 'balanced');
 
               return (
                 <tr key={s.id} className="border-b border-white/10 last:border-0">
                   <td className="py-3 px-4 font-medium">{s.name}</td>
                   <td className="py-3 px-4 text-zinc-400">{s.type}</td>
                   <td className="py-3 px-4 text-zinc-400 capitalize text-xs">{goalLabel}</td>
+                  <td className="py-3 px-4 text-zinc-400 capitalize text-xs">{styleLabel}</td>
                   <td className="py-3 px-4 font-mono">${cfg.maxSizeUsd ?? 100}</td>
                   <td className="py-3 px-4 text-zinc-400 text-xs">{keySetting}</td>
                   <td className="py-3 px-4">

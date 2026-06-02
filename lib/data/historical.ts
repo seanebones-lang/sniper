@@ -10,7 +10,7 @@ import type { Market, OrderBook } from '@/lib/types';
 import { normalizeOrderBookLevels } from '@/lib/orderbook';
 import { resolveStrategyConfig } from '@/lib/strategies/run-profile';
 import { evaluateExitSignal, type StrategyOpenPosition } from '@/lib/strategies/exit-engine';
-import { isFastMovingMarket } from '@/lib/markets/fast-moving';
+import { isQuickFlipCandidate } from '@/lib/markets/fast-moving';
 
 export interface BookSnapshotInput {
   platform: string;
@@ -202,7 +202,7 @@ export async function replayStrategyOnHistory(params: {
     }
 
     if (!signal || signal.action === 'HOLD') {
-      if (resolvedConfig.liveMarketsOnly && !isFastMovingMarket(market).fast) {
+      if (resolvedConfig.liveMarketsOnly && !isQuickFlipCandidate(market)) {
         continue;
       }
       if (openPosition && !resolvedConfig.allowScaleIn) {

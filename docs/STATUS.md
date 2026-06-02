@@ -1,6 +1,6 @@
 # Project Status
 
-**Last verified:** June 2026 (against codebase at `main`).
+**Last verified:** June 2, 2026 (nested `main` + Kalshi/quick-flip runner fixes).
 
 This document is the **authoritative capability matrix** for reviewers. If README or other docs disagree with this file, **this file wins** until updated.
 
@@ -12,8 +12,8 @@ What reviewers can evaluate today with confidence:
 
 - Market discovery and order book UI (Polymarket + Kalshi REST)
 - Manual paper fills (UI + API → `paper_trades`)
-- Strategy evaluation logic (four strategy types)
-- Runner loop (REST books, snapshot collection, risk-mode behavior)
+- Strategy evaluation logic (five strategy types including live-quick-flip)
+- Runner loop with Polymarket + Kalshi near-term market pools
 - Historical replay (when snapshots exist)
 - Grok analysis (with xAI key; text output + RECOMMENDED ACTIONS parsing)
 - CI: ESLint, build, unit tests, Playwright e2e
@@ -25,13 +25,13 @@ What reviewers can evaluate today with confidence:
 | Capability | Status | Notes |
 |------------|--------|-------|
 | Polymarket discovery + order books (REST) | **Works** | Gamma + CLOB; `externalId` must be CLOB token ID |
-| Kalshi discovery + order books (REST) | **Works** | Public REST |
-| Markets UI + last prices | **Works** | Depends on live external APIs |
-| Manual paper fill (`POST /api/paper/fill`, market UI) | **Works** | Persists to `paper_trades`; no `signals` FK |
-| Runner loop (evaluate, snapshots, risk modes) | **Works** | 12s interval via `/api/runner`; in-memory state |
-| Runner automated signal → DB → paper fill | **Broken** | See [Critical blockers](#critical-blockers) |
-| Four strategy types (`evaluate()`) | **Works** | spread-scalper, threshold, orderbook-imbalance, resolution-proximity |
-| Strategy CRUD + runner start/stop UI | **Works** | Default `paperOnly: true` |
+| Kalshi discovery + order books (REST) | **Works** | `orderbook_fp` parser; `close_time` for quick-flip window |
+| Markets UI + last prices | **Works** | Polymarket + Kalshi filters; Kalshi WS on detail page |
+| Manual paper fill (`POST /api/paper/fill`, market UI) | **Works** | Persists to `paper_trades` |
+| Runner loop (evaluate, snapshots, risk modes) | **Works** | 4–12s interval; `/api/runner` diagnostics |
+| Runner automated signal → DB → paper fill | **Works** | `ensureMarketRecord` before signal insert |
+| Strategy types (`evaluate()`) | **Works** | + live-quick-flip (3h resolution window) |
+| Strategy CRUD + runner start/stop UI | **Works** | Dashboard separates system risk vs trading style |
 | `market_snapshots` collection | **Works** | When runner active and book data present |
 | Historical replay | **Works** | Requires prior runner soak; 0 snapshots = empty result |
 | Replay “realistic passive fills” toggle | **Not implemented** | API/UI pass flag; replay engine ignores it |
@@ -46,12 +46,12 @@ What reviewers can evaluate today with confidence:
 | Strategy variants | **Partial** | In-memory only; lost on restart |
 | Performance attribution API | **Partial** | Placeholder logic; not true per-strategy joins |
 | Polymarket live WebSocket (market detail) | **Works** | Detail page only |
-| Kalshi WebSocket client | **Library only** | Not used in UI or runner |
+| Kalshi WebSocket client | **Works (detail page)** | `KalshiWSClient` on `/markets/kalshi/[id]` |
 | Real Polymarket limit orders | **Coded, gated** | `SNIPER_ENABLE_REAL_EXECUTION` + `POLYMARKET_PRIVATE_KEY`; not CI-tested |
-| Real Kalshi execution | **Not implemented** | Explicit error in `real-executor.ts` |
+| Real Kalshi execution | **Coded, gated** | `kalshi-trading.ts` + recon; requires `KALSHI_ACCESS_KEY` / `KALSHI_RSA_PRIVATE_KEY` |
 | Cross-venue arbitrage | **Not implemented** | — |
 | `positions` DB table | **Not wired** | Schema only |
-| `markets` DB table sync | **Not implemented** | Discovery is in-memory cache only |
+| `markets` DB table sync | **Works** | Runner `syncMarketsToDb` + `ensureMarketRecord` each cycle |
 | `/real` status page | **Placeholder** | Client env var; does not read server execution flag |
 | CI (lint, build, unit, e2e) | **Works** | Smoke tests not in CI; e2e may call live Polymarket API |
 
@@ -59,16 +59,12 @@ What reviewers can evaluate today with confidence:
 
 ## Critical blockers
 
-These are **confirmed in code**, not speculative. They block calling the runner “production-ready” for automated trading.
+These remain for calling the system **fully production-ready** as autonomous 24/7 real-money trading:
 
-### 1. `signals.market_id` foreign key mismatch
+### 1. ~~`signals.market_id` foreign key mismatch~~ **Fixed**
 
-- **Schema:** `signals.market_id` references `markets.id` (UUID) (`lib/db/schema.ts`).
-- **Runner:** inserts `marketId: market.id` where `market.id` is the **Gamma market id or Kalshi ticker**, not a DB UUID (`lib/runner/engine.ts`).
-- **Markets table:** no code path inserts discovered markets into `markets` (grep: zero `insert(markets)`).
-- **Effect:** when a strategy fires, signal insert likely **fails PostgreSQL FK check**; error is caught per-market and the fill path is skipped. Snapshots and evaluation still run.
-
-**Workaround today:** use manual paper fills via market detail UI or `POST /api/paper/fill`.
+- Runner and reconciliation call `ensureMarketRecord()` before signal/trade inserts.
+- `syncMarketsToDb()` runs at the start of each runner cycle.
 
 ### 2. In-memory state lost on restart
 
@@ -92,8 +88,8 @@ Module singletons (not persisted): runner status, strategy variants, AI recommen
 | **0** | Scaffold, DB schema, Railway config | **Complete** |
 | **1** | REST market clients + discovery UI | **Complete** |
 | **2** | Paper simulator, manual paper fill API, Polymarket WS on detail page | **Complete** (Kalshi WS: client only) |
-| **3** | Strategy engine, runner loop, strategies UI | **Mostly complete** — automated fill pipeline blocked by FK (#1) |
-| **4** | Guarded real execution + risk stack | **Partial** — Polymarket path coded + gated; Kalshi real N/A; DB positions/portfolio incomplete |
+| **3** | Strategy engine, runner loop, strategies UI | **Complete** — quick-flip + Kalshi in runner pool |
+| **4** | Guarded real execution + risk stack | **Partial** — Polymarket + Kalshi paths coded + gated; portfolio DB incomplete |
 | **5** | Backtest, Grok, docs, tests | **Partial** — core UI/API exist; variant persistence, proposal parsing, replay realism, audit export, broader tests remain |
 
 ---
@@ -102,7 +98,7 @@ Module singletons (not persisted): runner status, strategy variants, AI recommen
 
 | Layer | Count | Scope |
 |-------|-------|--------|
-| Unit (Vitest) | 8 tests / 2 files | `orderbook`, `paper-simulator` |
+| Unit (Vitest) | 47+ tests / 12+ files | orderbook, kalshi, quick-flip, ensure-market, paper-simulator, system-state, … |
 | Smoke | 14 checks | `scripts/smoke-test.mjs` (not in CI) |
 | E2E (Playwright) | 14 tests / 5 specs | Navigation, markets, strategies, backtest, paper fill |
 | CI | lint + build + unit + e2e | `.github/workflows/ci.yml` |

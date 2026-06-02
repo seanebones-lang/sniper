@@ -7,10 +7,10 @@
  */
 
 import { db, signals, paperTrades, auditEvents } from '@/lib/db';
-import { getAllMarkets, ensureMarketRecord } from '@/lib/markets';
+import { getAllMarkets, getMarketsForQuickFlip, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
-// TODO: Deeper Kalshi WS integration in runner (currently wired in UI only)
+// TODO: Deeper Kalshi WS integration in runner (REST books work; WS used on market detail page)
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
@@ -21,7 +21,7 @@ import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
 import { saveBookSnapshot } from '@/lib/data/historical';
-import { rankFastMovingMarkets, filterFastMovingMarkets } from '@/lib/markets/fast-moving';
+import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -35,11 +35,35 @@ import {
   getStrategySizeMultiplier,
 } from '@/lib/monitoring/temporary-adjustments';
 
+export interface ActiveStrategyProfile {
+  id: string;
+  name: string;
+  type: string;
+  tradingStyle: string;
+  tradingGoal: string;
+  maxSizeUsd: number;
+  cooldownSeconds: number;
+  aggressiveEntryFills: boolean;
+}
+
+export interface RunnerCycleDiagnostics {
+  at: string;
+  marketPoolSize: number;
+  eligibleQuickFlipMarkets: number;
+  marketsEvaluated: number;
+  signalsThisCycle: number;
+  fillsThisCycle: number;
+  skipReason: string | null;
+  riskMode: string;
+  activeProfiles: ActiveStrategyProfile[];
+}
+
 export interface RunnerStatus {
   running: boolean;
   lastRun: string | null;
   signalsGenerated: number;
   fillsExecuted: number;
+  lastCycle: RunnerCycleDiagnostics | null;
 }
 
 const status: RunnerStatus = {
@@ -47,6 +71,7 @@ const status: RunnerStatus = {
   lastRun: null,
   signalsGenerated: 0,
   fillsExecuted: 0,
+  lastCycle: null,
 };
 
 let interval: NodeJS.Timeout | null = null;
@@ -67,6 +92,7 @@ function syncStatusFromStore() {
   status.lastRun = runnerStore.status.lastRun;
   status.signalsGenerated = runnerStore.status.signalsGenerated;
   status.fillsExecuted = runnerStore.status.fillsExecuted;
+  status.lastCycle = runnerStore.status.lastCycle ?? null;
   interval = runnerStore.interval;
 }
 
@@ -107,6 +133,7 @@ export function resetRunnerSessionCounters() {
 }
 
 export async function startRunner(intervalMs = 15000) {
+  syncStatusFromStore();
   if (status.running) return;
 
   const { applyPaperBudgetToRiskManager } = await import('@/lib/paper/portfolio');
@@ -114,6 +141,7 @@ export async function startRunner(intervalMs = 15000) {
   await hydratePaperSimulatorFromDb();
 
   status.running = true;
+  persistStatus();
   console.log('[Runner] Starting 24/7 paper runner...');
 
   // === Durable Safety State Recovery (critical for real capital) ===
@@ -167,6 +195,8 @@ export async function startRunner(intervalMs = 15000) {
       console.error('[Runner] Error in loop:', e);
     }
   }, intervalMs);
+
+  persistStatus();
 }
 
 export function stopRunner() {
@@ -189,10 +219,30 @@ export async function runOnce() {
   });
 
   if (activeStrategies.length === 0) {
+    status.lastRun = new Date().toISOString();
+    status.lastCycle = {
+      at: status.lastRun,
+      marketPoolSize: 0,
+      eligibleQuickFlipMarkets: 0,
+      marketsEvaluated: 0,
+      signalsThisCycle: 0,
+      fillsThisCycle: 0,
+      skipReason: 'No active strategies',
+      riskMode: riskModeManager.getCurrentMode().current,
+      activeProfiles: [],
+    };
+    persistStatus();
     return;
   }
 
-  const markets = await getAllMarkets();
+  const hasQuickFlipStrategy = activeStrategies.some((s) => {
+    const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
+    return cfg.tradingGoal === 'quick-flip' || s.type === 'live-quick-flip' || cfg.liveMarketsOnly;
+  });
+
+  const markets = hasQuickFlipStrategy
+    ? await getMarketsForQuickFlip()
+    : await getAllMarkets();
 
   // === Ensure all markets we are about to evaluate are persisted (critical for signal FKs) ===
   // This is cheap due to onConflictDoUpdate and prevents the historic FK mismatch bug.
@@ -241,6 +291,28 @@ export async function runOnce() {
   }
 
   globalRiskMultiplier = riskModeManager.getRiskMultiplier();
+
+  const activeProfiles: ActiveStrategyProfile[] = activeStrategies.map((s) => {
+    const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
+    return {
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      tradingStyle: cfg.tradingStyle,
+      tradingGoal: cfg.tradingGoal,
+      maxSizeUsd: cfg.maxSizeUsd,
+      cooldownSeconds: cfg.cooldownSeconds,
+      aggressiveEntryFills: cfg.aggressiveEntryFills,
+    };
+  });
+
+  const eligibleQuickFlipMarkets = filterQuickFlipMarkets(markets).length;
+  let marketsEvaluatedThisCycle = 0;
+  let skipReason: string | null = null;
+
+  if (hasQuickFlipStrategy && eligibleQuickFlipMarkets === 0) {
+    skipReason = `No markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h (pool: ${markets.length} fetched)`;
+  }
 
   let signalsThisRun = 0;
   let fillsThisRun = 0;
@@ -322,12 +394,26 @@ export async function runOnce() {
     // Reduce market sample based on risk mode; quick-flip strategies prefer live fast markets
     let openPool = markets.filter((m) => m.status === 'open');
 
-    if (config.tradingGoal === 'quick-flip' || config.liveMarketsOnly) {
-      const fast = filterFastMovingMarkets(openPool);
-      openPool = fast.length > 0 ? rankFastMovingMarkets(fast) : rankFastMovingMarkets(openPool);
+    // Quick-flip: only near-term / in-play markets — never fall back to World Cup futures, etc.
+    if (config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip') {
+      marketEvaluationLimit = 40;
+      const candidates = filterQuickFlipMarkets(openPool);
+      openPool = candidates.length > 0 ? rankQuickFlipMarkets(candidates) : [];
+      if (openPool.length === 0) {
+        console.warn(`[Runner] Quick-flip "${stratRow.name}": no markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h this cycle`);
+      }
     }
 
     const relevantMarkets = openPool.slice(0, marketEvaluationLimit);
+    marketsEvaluatedThisCycle = Math.max(marketsEvaluatedThisCycle, relevantMarkets.length);
+
+    if (
+      (config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip') &&
+      relevantMarkets.length === 0 &&
+      !skipReason
+    ) {
+      skipReason = `Quick-flip "${stratRow.name}": 0 eligible markets within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h`;
+    }
 
     // Always evaluate markets where this strategy has open positions (for exits)
     const marketKeys = new Set(relevantMarkets.map((m) => `${m.platform}:${m.externalId}`));
@@ -430,6 +516,9 @@ export async function runOnce() {
             if (orderSize <= 0) continue;
           }
 
+          const isQuickFlip =
+            config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
+
           // === ADVANCED RISK SIZING (applied to both paper and real) ===
           const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
           const riskDecision = await portfolioRiskManager.calculateSafeSize({
@@ -442,8 +531,7 @@ export async function runOnce() {
             currentPrice: signal.price,
           });
 
-          const minAllowedUsd =
-            config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip' ? 0.5 : 5;
+          const minAllowedUsd = isQuickFlip ? 0.5 : 5;
           if (riskDecision.allowedSize < minAllowedUsd) {
             await logAudit('runner_signal_rejected_risk', {
               strategy: stratRow.name,
@@ -465,9 +553,24 @@ export async function runOnce() {
             multiplier: allocatorMultiplier,
           });
 
-          const finalSize = Math.min(orderSize, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
+          const riskCapUsd =
+            riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
 
-          if (finalSize < 1) continue;
+          let finalSize: number;
+          if (isQuickFlip && signal.action === 'BUY') {
+            const stakeUsd = Math.min(config.maxSizeUsd, riskCapUsd);
+            finalSize = Math.max(1, Math.floor(stakeUsd / signal.price));
+          } else {
+            finalSize = Math.min(orderSize, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
+          }
+
+          const minFinalSizeUsd = isQuickFlip ? 0.5 : 1;
+          const minFinalShares = isQuickFlip && signal.action === 'BUY' ? 1 : minFinalSizeUsd;
+          if (isQuickFlip && signal.action === 'BUY') {
+            if (finalSize < minFinalShares || finalSize * signal.price < minFinalSizeUsd) continue;
+          } else if (finalSize < minFinalSizeUsd) {
+            continue;
+          }
 
           // Persist signal (with risk-adjusted size)
           let sizeReason = '';
@@ -584,6 +687,17 @@ export async function runOnce() {
   status.lastRun = new Date().toISOString();
   status.signalsGenerated += signalsThisRun;
   status.fillsExecuted += fillsThisRun;
+  status.lastCycle = {
+    at: status.lastRun,
+    marketPoolSize: markets.length,
+    eligibleQuickFlipMarkets,
+    marketsEvaluated: marketsEvaluatedThisCycle,
+    signalsThisCycle: signalsThisRun,
+    fillsThisCycle: fillsThisRun,
+    skipReason: signalsThisRun === 0 ? skipReason : null,
+    riskMode: riskModeManager.getCurrentMode().current,
+    activeProfiles,
+  };
   persistStatus();
 
   if (signalsThisRun > 0) {

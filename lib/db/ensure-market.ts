@@ -8,6 +8,10 @@ import type { Market } from '@/lib/types';
 export async function ensureMarketRecord(
   market: Pick<Market, 'platform' | 'externalId'> & Partial<Market>,
 ): Promise<string> {
+  if (!market.platform || !market.externalId) {
+    throw new Error('ensureMarketRecord: missing platform or externalId');
+  }
+
   const question = market.question ?? `${market.platform}:${market.externalId}`;
   const status = market.status ?? 'open';
   const [row] = await db
@@ -34,6 +38,10 @@ export async function ensureMarketRecord(
       },
     })
     .returning({ id: markets.id });
+
+  if (!row?.id) {
+    throw new Error('ensureMarketRecord: upsert succeeded but no id returned');
+  }
 
   return row.id;
 }

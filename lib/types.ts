@@ -17,6 +17,9 @@ export interface Market {
   liquidity?: number;
   lastPrice?: number;            // 0-1 decimal (0.47 = 47%)
   updatedAt: string;             // ISO
+  /** Market resolution / event end (ISO) when available from the exchange */
+  endDate?: string;
+  volume24hr?: number;
 }
 
 export interface PricePoint {

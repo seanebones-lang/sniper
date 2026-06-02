@@ -63,6 +63,8 @@ export interface GammaMarket {
   active: boolean;
   closed: boolean;
   archived: boolean;
+  endDate?: string;
+  volume24hr?: number;
   tokens?: Array<{
     token_id: string;
     outcome: string;
@@ -86,8 +88,66 @@ function parseGammaArray<T>(value: unknown): T[] {
   return [];
 }
 
+function gammaMarketToMarket(m: GammaMarket): Market | null {
+  if (!m.active || m.closed || m.archived) return null;
+
+  const outcomePrices = parseGammaArray<string>(m.outcomePrices);
+  const clobTokenIds = parseGammaArray<string>(m.clobTokenIds);
+  const price =
+    m.tokens?.[0]?.price ??
+    (outcomePrices[0] != null ? parseFloat(outcomePrices[0]) : undefined);
+
+  const externalId = m.tokens?.[0]?.token_id ?? clobTokenIds[0] ?? m.id;
+  if (!externalId) return null;
+
+  return {
+    id: m.id,
+    platform: 'polymarket',
+    externalId,
+    question: m.question,
+    status: m.closed ? 'closed' : 'open',
+    volume: m.volumeNum ?? 0,
+    liquidity: m.liquidityNum ?? 0,
+    lastPrice: price != null && !Number.isNaN(price) ? price : undefined,
+    updatedAt: new Date().toISOString(),
+    endDate: m.endDate,
+    volume24hr: m.volume24hr,
+  };
+}
+
+/** Live sports / in-play markets (tennis, etc.) via Gamma search — not in the default volume leaderboard. */
+const LIVE_SPORTS_SEARCH_QUERIES = ['tennis', 'atp', 'wta', 'nba live', 'mlb live', 'nhl live'];
+
+export async function fetchPolymarketLiveSportsMarkets(): Promise<Market[]> {
+  const seen = new Set<string>();
+  const results: Market[] = [];
+
+  await Promise.all(
+    LIVE_SPORTS_SEARCH_QUERIES.map(async (query) => {
+      const url = `${GAMMA_API}/public-search?q=${encodeURIComponent(query)}&limit_per_type=20&events_status=active`;
+      try {
+        const res = await fetch(url, { next: { revalidate: 20 } });
+        if (!res.ok) return;
+        const data = (await res.json()) as { events?: Array<{ markets?: GammaMarket[] }> };
+        for (const event of data.events ?? []) {
+          for (const m of event.markets ?? []) {
+            const market = gammaMarketToMarket(m);
+            if (!market || seen.has(market.externalId)) continue;
+            seen.add(market.externalId);
+            results.push(market);
+          }
+        }
+      } catch (err) {
+        console.warn(`[Polymarket] live sports search failed for "${query}":`, getErrorMessage(err));
+      }
+    }),
+  );
+
+  return results;
+}
+
 export async function fetchPolymarketMarkets(limit = 50): Promise<Market[]> {
-  const url = `${GAMMA_API}/markets?limit=${limit}&active=true&closed=false&archived=false`;
+  const url = `${GAMMA_API}/markets?limit=${limit}&active=true&closed=false&archived=false&order=volume24hr&ascending=false`;
   const res = await fetch(url, { next: { revalidate: 30 } });
 
   if (!res.ok) {
@@ -97,28 +157,42 @@ export async function fetchPolymarketMarkets(limit = 50): Promise<Market[]> {
   const data: GammaMarket[] = await res.json();
 
   return data
-    .filter((m) => m.active && !m.closed && !m.archived)
-    .slice(0, limit)
-    .map((m): Market => {
-      const outcomePrices = parseGammaArray<string>(m.outcomePrices);
-      const clobTokenIds = parseGammaArray<string>(m.clobTokenIds);
-      const price =
-        m.tokens?.[0]?.price ??
-        (outcomePrices[0] != null ? parseFloat(outcomePrices[0]) : undefined);
+    .map(gammaMarketToMarket)
+    .filter((m): m is Market => m != null)
+    .slice(0, limit);
+}
 
-      return {
-        id: m.id,
-        platform: 'polymarket',
-        // CLOB order books require the token ID, not the market ID
-        externalId: m.tokens?.[0]?.token_id ?? clobTokenIds[0] ?? m.id,
-        question: m.question,
-        status: m.closed ? 'closed' : 'open',
-        volume: m.volumeNum ?? 0,
-        liquidity: m.liquidityNum ?? 0,
-        lastPrice: price != null && !Number.isNaN(price) ? price : undefined,
-        updatedAt: new Date().toISOString(),
-      };
-    });
+/** Markets with exchange endDate in (now, now + hours] — primary pool for quick-flip. */
+export async function fetchPolymarketMarketsResolvingWithinHours(
+  hours: number,
+  limit = 100,
+): Promise<Market[]> {
+  const now = new Date();
+  const maxEnd = new Date(now.getTime() + hours * 3600 * 1000);
+  const params = new URLSearchParams({
+    limit: String(limit),
+    active: 'true',
+    closed: 'false',
+    archived: 'false',
+    end_date_min: now.toISOString(),
+    end_date_max: maxEnd.toISOString(),
+    order: 'volume24hr',
+    ascending: 'false',
+  });
+
+  const url = `${GAMMA_API}/markets?${params.toString()}`;
+  const res = await fetch(url, { next: { revalidate: 20 } });
+
+  if (!res.ok) {
+    throw new Error(`Gamma near-term markets error: ${res.status}`);
+  }
+
+  const data: GammaMarket[] = await res.json();
+
+  return data
+    .map(gammaMarketToMarket)
+    .filter((m): m is Market => m != null)
+    .slice(0, limit);
 }
 
 export async function fetchPolymarketMarketByTokenId(tokenId: string): Promise<Market | null> {
@@ -130,23 +204,7 @@ export async function fetchPolymarketMarketByTokenId(tokenId: string): Promise<M
   const m = data[0];
   if (!m) return null;
 
-  const outcomePrices = parseGammaArray<string>(m.outcomePrices);
-  const clobTokenIds = parseGammaArray<string>(m.clobTokenIds);
-  const price =
-    m.tokens?.[0]?.price ??
-    (outcomePrices[0] != null ? parseFloat(outcomePrices[0]) : undefined);
-
-  return {
-    id: m.id,
-    platform: 'polymarket',
-    externalId: m.tokens?.[0]?.token_id ?? clobTokenIds[0] ?? tokenId,
-    question: m.question,
-    status: m.closed ? 'closed' : 'open',
-    volume: m.volumeNum ?? 0,
-    liquidity: m.liquidityNum ?? 0,
-    lastPrice: price != null && !Number.isNaN(price) ? price : undefined,
-    updatedAt: new Date().toISOString(),
-  };
+  return gammaMarketToMarket(m);
 }
 
 export async function fetchPolymarketOrderBook(tokenId: string): Promise<OrderBook> {

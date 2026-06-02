@@ -87,6 +87,7 @@ lerna-debug.log*
 .vercel
 *.local
 *.cache
+recovered-from-transcript/
 
 # Allow specific env files if needed (commented for safety)
 # !.env.example

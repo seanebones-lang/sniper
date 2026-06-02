@@ -27,6 +27,19 @@ interface RunnerData {
   running: boolean;
   lastRun: string | null;
   dbPaperFillsToday?: number;
+  lastCycle?: {
+    eligibleQuickFlipMarkets: number;
+    marketPoolSize: number;
+    marketsEvaluated: number;
+    skipReason: string | null;
+    riskMode: string;
+    activeProfiles: Array<{
+      name: string;
+      tradingStyle: string;
+      tradingGoal: string;
+      maxSizeUsd: number;
+    }>;
+  } | null;
 }
 
 export default function Dashboard() {
@@ -53,6 +66,9 @@ export default function Dashboard() {
   }, []);
 
   const riskMode = health?.risk?.mode ?? 'NORMAL';
+  const activeProfile = runner?.lastCycle?.activeProfiles?.[0];
+  const tradingStyle = activeProfile?.tradingStyle ?? null;
+  const tradingGoal = activeProfile?.tradingGoal ?? null;
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
@@ -88,6 +104,17 @@ export default function Dashboard() {
           {runner.lastRun && (
             <span className="text-zinc-500">Last cycle {new Date(runner.lastRun).toLocaleTimeString()}</span>
           )}
+          {runner.lastCycle && runner.running && (
+            <>
+              <span className="text-zinc-500">
+                Pool {runner.lastCycle.marketPoolSize} · eligible ≤3h {runner.lastCycle.eligibleQuickFlipMarkets}
+                · evaluating {runner.lastCycle.marketsEvaluated}
+              </span>
+              {runner.lastCycle.skipReason && (
+                <span className="text-amber-400">{runner.lastCycle.skipReason}</span>
+              )}
+            </>
+          )}
           {!runner.running && (
             <Link href="/paper" className="text-emerald-400 underline hover:text-white">
               Start runner on Paper Portfolio →
@@ -104,12 +131,24 @@ export default function Dashboard() {
       {/* Live status strip */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="card">
-          <div className="text-xs text-zinc-500 mb-1">Risk Mode</div>
+          <div className="text-xs text-zinc-500 mb-1">System Risk</div>
           <div className={`text-lg font-semibold ${
             riskMode === 'EMERGENCY' ? 'text-red-400' :
             riskMode === 'DEFENSIVE' ? 'text-amber-400' : 'text-emerald-400'
           }`}>
             {loading ? '…' : riskMode}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-1">Auto safety posture — not your strategy setting</div>
+        </div>
+        <div className="card">
+          <div className="text-xs text-zinc-500 mb-1">Trading Style</div>
+          <div className="text-lg font-semibold capitalize text-violet-400">
+            {loading ? '…' : (tradingStyle ?? '—')}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-1">
+            {activeProfile
+              ? `${activeProfile.name} · ${String(tradingGoal ?? '').replace(/-/g, ' ')} · $${activeProfile.maxSizeUsd}/trade`
+              : 'No active strategy'}
           </div>
         </div>
         <div className="card">
