@@ -1,4 +1,4 @@
-import type { Strategy, StrategyConfig, StrategyContext, StrategySignal } from './types';
+import type { Strategy, StrategySignal } from './types';
 
 export const SpreadScalper: Strategy = {
   id: 'spread-scalper',

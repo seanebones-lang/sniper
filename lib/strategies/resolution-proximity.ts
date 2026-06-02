@@ -8,7 +8,7 @@
  * Strong directional moves frequently happen in the final 20-40% of a market's life.
  */
 
-import type { Strategy, StrategyConfig, StrategyContext, StrategySignal } from './types';
+import type { Strategy, StrategySignal } from './types';
 
 export const ResolutionProximitySniper: Strategy = {
   id: 'resolution-proximity',

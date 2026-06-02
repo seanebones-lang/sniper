@@ -1,4 +1,4 @@
-import type { Strategy, StrategyConfig, StrategyContext, StrategySignal } from './types';
+import type { Strategy, StrategySignal } from './types';
 
 export const ThresholdStrategy: Strategy = {
   id: 'threshold',
@@ -6,14 +6,13 @@ export const ThresholdStrategy: Strategy = {
   type: 'threshold',
 
   evaluate(ctx, config): StrategySignal | null {
-    const { currentPrice, market } = ctx;
+    const { currentPrice } = ctx;
     if (!currentPrice) return null;
 
     const threshold = config.entryThreshold ?? 0.48; // buy if price < 48¢
     const targetProfit = config.targetProfitPct / 100;
 
     if (currentPrice <= threshold) {
-      const targetSell = Math.min(0.99, currentPrice + targetProfit);
       const size = config.maxSizeUsd / currentPrice;
 
       return {
