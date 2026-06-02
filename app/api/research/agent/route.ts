@@ -14,7 +14,7 @@ export async function POST(req: Request) {
 
     // Automatically persist any structured proposals for review
     if (result.proposals && result.proposals.length > 0) {
-      await saveProposals((result.proposals || []) as any, result.query as any);
+      await saveProposals((result.proposals || []) as unknown as Record<string, unknown>[], result.query as unknown as Record<string, unknown>);
     }
 
     return NextResponse.json(result);

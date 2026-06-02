@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
   const variant = createVariantFromProposal(proposal);
 
-  let comparisons: any = null;  // TODO: proper type for comparison results
+  let comparisons: Record<string, unknown>[] | null = null;
 
   if (autoCompare) {
     // Automatically run head-to-head comparison on a few representative short-term crypto markets
