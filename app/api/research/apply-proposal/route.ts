@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
   const variant = createVariantFromProposal(proposal);
 
-  let comparisons: Record<string, unknown> | null = null;
+  let comparisons: any = null;  // TODO: proper type for comparison results
 
   if (autoCompare) {
     // Automatically run head-to-head comparison on a few representative short-term crypto markets
@@ -57,12 +57,12 @@ export async function POST(req: Request) {
           variant: variantResult,
           deltaPnl: (variantResult.totalPnl || 0) - (baseResult.totalPnl || 0),
         });
-      } catch (e) {
+      } catch {
         // Ignore individual market failures during auto-compare
       }
     }
 
-    comparisons = comparisonsResults as any;
+    comparisons = comparisonsResults;
   }
 
   return NextResponse.json({ 

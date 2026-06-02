@@ -117,9 +117,8 @@ export default function BacktestPage() {
           ).join('\n')
         );
       }
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : 'unknown';
-      alert('Failed to apply: ' + message);
+    } catch {
+      alert('Failed to apply');
     } finally {
       setApplying(null);
     }

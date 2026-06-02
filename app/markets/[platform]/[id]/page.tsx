@@ -88,9 +88,11 @@ export default function LiveMarketDetail({ params }: Props) {
                 } : null);
               }
             }
+            interface RawBookLevel { price: string | number; size: string | number }
+
             if (m.type === 'book' && m.asset_id === marketId) {
-              const bids = (m.bids || []).map((b) => ({ price: parseFloat(String((b as any).price)), size: parseFloat(String((b as any).size)) }));
-              const asks = (m.asks || []).map((a) => ({ price: parseFloat(String((a as any).price)), size: parseFloat(String((a as any).size)) }));
+              const bids = (m.bids || []).map((b: RawBookLevel) => ({ price: parseFloat(String(b.price)), size: parseFloat(String(b.size)) }));
+              const asks = (m.asks || []).map((a: RawBookLevel) => ({ price: parseFloat(String(a.price)), size: parseFloat(String(a.size)) }));
               const mid = bids[0] && asks[0] ? (bids[0].price + asks[0].price) / 2 : undefined;
               setBook(prev => prev ? {
                 ...prev,

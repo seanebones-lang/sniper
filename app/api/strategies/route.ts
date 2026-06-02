@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { db, strategies } from '@/lib/db';
-import { eq } from 'drizzle-orm';
 
 export async function GET() {
   const rows = await db.query.strategies.findMany({
