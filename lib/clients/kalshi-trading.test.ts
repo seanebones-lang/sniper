@@ -33,4 +33,17 @@ describe('KalshiTradingClient', () => {
     expect(typeof client.placeOrder).toBe('function');
     expect(typeof client.getBalance).toBe('function');
   });
+
+  it('should expose new reconciliation methods (getOrder, getOrders, getFills, getOrderStatus)', () => {
+    const dummyCreds = {
+      accessKey: 'test-key',
+      privateKey: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+    };
+
+    const client = new KalshiTradingClient(dummyCreds);
+    expect(typeof client.getOrder).toBe('function');
+    expect(typeof client.getOrders).toBe('function');
+    expect(typeof client.getFills).toBe('function');
+    expect(typeof client.getOrderStatus).toBe('function');
+  });
 });
