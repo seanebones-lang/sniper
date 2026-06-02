@@ -100,6 +100,15 @@ export class KalshiTradingClient {
   // TODO: Implement createOrder, cancelOrder, getPositions, getFills, etc.
   // These would follow the same auth pattern as getBalance.
 
+  /**
+   * Placeholder for future reconciliation use.
+   * In a full implementation this would call /portfolio/orders/{id} or similar.
+   */
+  async getOrderStatus(orderIdOrTicker: string): Promise<{ status: string; filled?: boolean; [k: string]: unknown }> {
+    // For now return a safe default so recon can call it without crashing
+    return { status: 'unknown', filled: false };
+  }
+
   async placeOrder(params: {
     ticker: string;
     side: 'yes' | 'no';
