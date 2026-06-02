@@ -68,7 +68,7 @@ export async function ensureMarket(
     platform: input.platform,
     externalId: input.externalId,
     question: 'question' in input ? (input.question ?? 'Unknown market') : 'Unknown market',
-    status: ('status' in input ? input.status : 'open') as any,
+    status: (('status' in input ? input.status : 'open') as 'open' | 'closed' | 'resolved'),
     updatedAt: new Date().toISOString(),
   };
 

@@ -30,7 +30,7 @@ export const OrderBookImbalance: Strategy = {
     const imbalance = bidPressure - askPressure;
 
     // Regime-aware thresholds (more aggressive in trending regimes)
-    const regime = (ctx as any).regime || 'normal';
+    const regime = ((ctx as unknown) as Record<string, unknown>).regime as string || 'normal';
     let threshold = 0.35;
 
     if (regime === 'trending') threshold = 0.22;      // easier to trigger in strong moves

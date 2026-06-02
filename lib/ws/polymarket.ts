@@ -6,19 +6,19 @@
  */
 
 export type PolymarketWSMessage =
-  | { type: 'book'; asset_id: string; bids: any[]; asks: any[] }
+  | { type: 'book'; asset_id: string; bids: unknown[]; asks: unknown[] }
   | { type: 'price_change'; asset_id: string; price: string; size?: string; side?: string }
   | { type: 'last_trade_price'; asset_id: string; price: string }
   | { type: 'best_bid_ask'; asset_id: string; bid: string; ask: string }
   | { type: 'tick_size_change'; asset_id: string; old: string; new: string }
   | { event_type: 'PONG' | 'PING' }
-  | any; // allow unknown for forward compat
+  | unknown; // allow unknown for forward compat
 
 export interface PolymarketWSOptions {
   onMessage: (msg: PolymarketWSMessage) => void;
   onOpen?: () => void;
   onClose?: () => void;
-  onError?: (err: any) => void;
+  onError?: (err: unknown) => void;
 }
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';

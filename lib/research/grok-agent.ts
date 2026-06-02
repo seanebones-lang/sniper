@@ -33,7 +33,7 @@ export interface StrategyProposal {
   strategyId: string;
   type: 'parameter_change' | 'new_sub_strategy' | 'feature_addition' | 'regime_specific_rule';
   description: string;
-  suggestedChange: Record<string, any>;
+  suggestedChange: Record<string, unknown>;
   expectedImpact: string;
   confidence: number; // 0-1
   regime?: string;
@@ -76,7 +76,7 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   const performance = await getStrategyPerformance(Math.ceil(lookback / 24));
 
-  let snapshots: any[] = [];
+  let snapshots: Record<string, unknown>[] = [];
   if (query.platform && query.marketExternalId) {
     snapshots = await getSnapshotsForReplay(
       query.platform,
@@ -88,13 +88,13 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   return {
     performance,
-    recentSnapshots: snapshots.slice(-40),
-    snapshotCount: snapshots.length,
+    recentSnapshots: (context.recentSnapshots as Record<string, unknown>[])?.slice(-40) || snapshots.slice(-40),
+    snapshotCount: (context.recentSnapshots as Record<string, unknown>[])?.length || snapshots.length,
     lookbackHours: lookback,
   };
 }
 
-function buildResearchPrompt(query: ResearchQuery, context: any): string {
+function buildResearchPrompt(query: ResearchQuery, context: Record<string, unknown>): string {
   const base = `You are a world-class quantitative researcher for prediction market automated trading systems.
 
 You have access to real order book snapshots (with imbalance, depth, micro-price, regime labels, etc.), performance attribution, and replay results.
@@ -127,7 +127,7 @@ Example:
 From the recent snapshot data, propose 4-6 high-quality, computable features that would help strategies adapt to different regimes or capture small persistent edges.
 
 Data sample:
-${JSON.stringify(context.recentSnapshots.slice(0, 10), null, 2)}`;
+${JSON.stringify(((context.recentSnapshots as unknown) as Record<string, unknown>[] || []).slice(0, 10), null, 2)}`;
   }
 
   if (query.type === 'regime_detection') {
@@ -135,7 +135,7 @@ ${JSON.stringify(context.recentSnapshots.slice(0, 10), null, 2)}`;
 Using the recent snapshots (which already contain some regime labels), refine our regime classification and suggest simple, robust real-time regime detection rules we can implement in code.
 
 Recent data:
-${JSON.stringify(context.recentSnapshots.slice(-20), null, 2)}`;
+${JSON.stringify(((context.recentSnapshots as unknown) as Record<string, unknown>[] || []).slice(-20), null, 2)}`;
   }
 
   return base + `Research request: ${query.extraContext || 'Provide the most valuable insights possible from the data.'}`;

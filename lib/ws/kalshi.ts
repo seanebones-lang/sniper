@@ -6,10 +6,10 @@
  */
 
 export interface KalshiWSOptions {
-  onMessage: (msg: any) => void;
+  onMessage: (msg: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
-  onError?: (err: any) => void;
+  onError?: (err: unknown) => void;
 }
 
 const WS_URL = 'wss://external-api-ws.kalshi.com/trade-api/ws/v2';
@@ -44,7 +44,7 @@ export class KalshiWSClient {
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        this.options.onMessage(data);
+        this.options.onMessage(data as unknown);
       } catch {}
     };
 

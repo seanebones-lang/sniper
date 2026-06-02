@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
   const variant = createVariantFromProposal(proposal);
 
-  let comparisons: any = null;
+  let comparisons: Record<string, unknown> | null = null;
 
   if (autoCompare) {
     // Automatically run head-to-head comparison on a few representative short-term crypto markets
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     ];
 
     const baseStrategy = getStrategy(proposal.strategyId);
-    const comparisonsResults: any[] = [];
+    const comparisonsResults: Record<string, unknown>[] = [];
 
     for (const m of testMarkets) {
       try {

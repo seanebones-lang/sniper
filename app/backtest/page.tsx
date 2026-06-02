@@ -6,15 +6,40 @@ import { ArrowLeft } from 'lucide-react';
 import { runBacktest } from '@/lib/backtest/engine';
 import { availableStrategies } from '@/lib/strategies';
 
+interface BacktestResult {
+  totalTrades?: number;
+  winningTrades?: number;
+  totalPnl?: number;
+  maxDrawdown?: number;
+  trades?: Record<string, unknown>[];
+}
+
+interface ReplayResult {
+  totalPnl?: number;
+  trades?: Record<string, unknown>[];
+  message?: string;
+  comparisons?: Record<string, unknown>[];
+}
+
+interface Proposal {
+  description: string;
+  [key: string]: unknown;
+}
+
+interface Variant {
+  id: string;
+  name: string;
+}
+
 export default function BacktestPage() {
   const [strategyType, setStrategyType] = useState('spread-scalper');
   const [pricesInput, setPricesInput] = useState('0.45,0.46,0.44,0.43,0.47,0.51,0.49,0.52');
-  const [result, setResult] = useState<any>(null);
-  const [replayResult, setReplayResult] = useState<any>(null);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
   const [loadingReplay, setLoadingReplay] = useState(false);
-  const [proposals, setProposals] = useState<any[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [applying, setApplying] = useState<string | null>(null);
-  const [variants, setVariants] = useState<any[]>([]);
+  const [variants, setVariants] = useState<Variant[]>([]);
   const [selectedVariantId, setSelectedVariantId] = useState<string>('');
   const [useRealisticFills, setUseRealisticFills] = useState(true);
 
@@ -31,8 +56,9 @@ export default function BacktestPage() {
     try {
       const res = runBacktest({ strategyType, config, prices });
       setResult(res);
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Backtest failed';
+      alert(message);
     }
   }
 
@@ -54,8 +80,9 @@ export default function BacktestPage() {
       });
       const data = await res.json();
       setReplayResult(data);
-    } catch (e: any) {
-      alert('Replay failed: ' + e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'unknown';
+      alert('Replay failed: ' + message);
     } finally {
       setLoadingReplay(false);
     }
@@ -71,7 +98,7 @@ export default function BacktestPage() {
     }
   }
 
-  async function applyProposal(proposal: any) {
+  async function applyProposal(proposal: Proposal) {
     setApplying(proposal.description);
     try {
       const res = await fetch('/api/research/apply-proposal', {
@@ -85,13 +112,14 @@ export default function BacktestPage() {
 
       if (data.comparisons && data.comparisons.length > 0) {
         alert(`Variant created!\n\nAuto-comparison results:\n` + 
-          data.comparisons.map((c: any) => 
-            `${c.market.marketExternalId}: Base PnL ${c.base.totalPnl?.toFixed(2) || 0} | Variant PnL ${c.variant.totalPnl?.toFixed(2) || 0} | Delta ${c.deltaPnl?.toFixed(2) || 0}`
+          (data.comparisons as Record<string, unknown>[] || []).map((c: Record<string, unknown>) => 
+            `${(c.market as Record<string, unknown>)?.marketExternalId || 'unknown'}: Base PnL ${((c.base as Record<string, unknown>)?.totalPnl as unknown as number | undefined)?.toFixed(2) || 0} | Variant PnL ${((c.variant as Record<string, unknown>)?.totalPnl as unknown as number | undefined)?.toFixed(2) || 0} | Delta ${((c.deltaPnl as Record<string, unknown>) as unknown as number | undefined)?.toFixed(2) || 0}`
           ).join('\n')
         );
       }
-    } catch (e: any) {
-      alert('Failed to apply: ' + e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'unknown';
+      alert('Failed to apply: ' + message);
     } finally {
       setApplying(null);
     }
@@ -153,7 +181,7 @@ export default function BacktestPage() {
               className="w-full bg-zinc-950 border border-white/10 rounded px-3 py-2 text-sm"
             >
               <option value="">Base strategy only</option>
-              {variants.length > 0 ? variants.map((v: any) => (
+              {variants.length > 0 ? variants.map((v) => (
                 <option key={v.id} value={v.id}>{v.name}</option>
               )) : (
                 <option disabled>No variants applied yet (apply from proposals above)</option>
@@ -195,10 +223,10 @@ export default function BacktestPage() {
         <div className="card mt-6">
           <div className="font-medium mb-3">Synthetic Result</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-            <div><div className="text-xs text-zinc-500">Trades</div><div className="text-2xl font-mono">{result.totalTrades}</div></div>
-            <div><div className="text-xs text-zinc-500">Win Rate</div><div className="text-2xl font-mono">{result.totalTrades ? ((result.winningTrades / result.totalTrades) * 100).toFixed(0) : 0}%</div></div>
-            <div><div className="text-xs text-zinc-500">Total PnL</div><div className="text-2xl font-mono text-emerald-400">${result.totalPnl.toFixed(2)}</div></div>
-            <div><div className="text-xs text-zinc-500">Max DD</div><div className="text-2xl font-mono text-red-400">${result.maxDrawdown.toFixed(2)}</div></div>
+            <div><div className="text-xs text-zinc-500">Trades</div><div className="text-2xl font-mono">{result.totalTrades ?? 0}</div></div>
+            <div><div className="text-xs text-zinc-500">Win Rate</div><div className="text-2xl font-mono">{(result.totalTrades ?? 0) ? (((result.winningTrades ?? 0) / (result.totalTrades ?? 1)) * 100).toFixed(0) : 0}%</div></div>
+            <div><div className="text-xs text-zinc-500">Total PnL</div><div className="text-2xl font-mono text-emerald-400">${(result.totalPnl ?? 0).toFixed(2)}</div></div>
+            <div><div className="text-xs text-zinc-500">Max DD</div><div className="text-2xl font-mono text-red-400">${(result.maxDrawdown ?? 0).toFixed(2)}</div></div>
           </div>
         </div>
       )}
@@ -292,7 +320,7 @@ export default function BacktestPage() {
             <div key={idx} className="border border-white/10 rounded p-3 text-sm">
               <div className="font-medium">{p.description}</div>
               <div className="text-xs text-zinc-400 mt-1">
-                Strategy: {p.strategyId} • Confidence: {(p.confidence * 100).toFixed(0)}% • Type: {p.type}
+                Strategy: {p.strategyId as string} • Confidence: {((p.confidence as number) * 100).toFixed(0)}% • Type: {p.type as string}
               </div>
               <button
                 onClick={() => applyProposal(p)}

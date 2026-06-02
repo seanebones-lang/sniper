@@ -11,12 +11,12 @@ interface StrategyRow {
   type: string;
   isActive: boolean;
   paperOnly: boolean;
-  config: any;
+  config: Record<string, unknown>;
 }
 
 export default function StrategiesPage() {
   const [strategies, setStrategies] = useState<StrategyRow[]>([]);
-  const [runnerStatus, setRunnerStatus] = useState<any>(null);
+  const [runnerStatus, setRunnerStatus] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [newStrat, setNewStrat] = useState({

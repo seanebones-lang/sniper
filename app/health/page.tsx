@@ -4,8 +4,19 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
+interface HealthData {
+  timestamp: string;
+  recentPerformance: Record<string, unknown>;
+  activeVariants: Record<string, unknown>[];
+  risk: Record<string, unknown>;
+  execution: Record<string, unknown>;
+  aiRecommendations: Record<string, unknown>[];
+  temporaryAdjustments: Record<string, unknown>;
+  summary: Record<string, unknown>;
+}
+
 export default function StrategyHealthPage() {
-  const [health, setHealth] = useState<any>(null);
+  const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function loadHealth() {
@@ -53,13 +64,13 @@ export default function StrategyHealthPage() {
               <div className={`px-4 py-1 rounded-full text-sm font-bold tracking-wider
                 ${health.risk?.mode === 'EMERGENCY' ? 'bg-red-600 text-white' : 
                   health.risk?.mode === 'DEFENSIVE' ? 'bg-amber-500 text-black' : 'bg-emerald-600 text-white'}`}>
-                {health.risk?.mode}
+                {health.risk?.mode as string}
               </div>
               <div className="text-sm text-zinc-400 ml-4">
-                Multiplier: <span className="font-mono text-white">{health.risk?.riskMultiplier?.toFixed(2)}x</span>
+                Multiplier: <span className="font-mono text-white">{(health.risk?.riskMultiplier as number | undefined)?.toFixed(2)}x</span>
               </div>
             </div>
-            <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason}</div>
+            <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason as string}</div>
 
             {/* Current Active Restrictions */}
             {health.risk?.mode !== 'NORMAL' && (
@@ -110,10 +121,10 @@ export default function StrategyHealthPage() {
               <div className="font-medium mb-3">Active Variants</div>
               {health.activeVariants?.length > 0 ? (
                 <div className="space-y-2 text-sm">
-                  {health.activeVariants.map((v: any, i: number) => (
+                  {health.activeVariants.map((v: Record<string, unknown>, i: number) => (
                     <div key={i} className="border border-white/10 p-3 rounded">
-                      <div className="font-medium">{v.name}</div>
-                      <div className="text-xs text-zinc-400">{v.description}</div>
+                      <div className="font-medium">{v.name as string}</div>
+                      <div className="text-xs text-zinc-400">{v.description as string}</div>
                     </div>
                   ))}
                 </div>
@@ -126,20 +137,20 @@ export default function StrategyHealthPage() {
           <div className="card">
             <div className="font-medium mb-2">Execution Health</div>
             <div className="text-sm text-zinc-300">
-              System Health Score: <span className="font-mono">{health.execution?.systemHealthScore}</span><br />
-              Avg Slippage (recent): <span className="font-mono">{health.execution?.averageSlippage}</span><br />
-              Unhealthy Markets: {health.execution?.unhealthyMarkets?.length || 0}
+              System Health Score: <span className="font-mono">{health.execution?.systemHealthScore as number}</span><br />
+              Avg Slippage (recent): <span className="font-mono">{health.execution?.averageSlippage as number}</span><br />
+              Unhealthy Markets: {((health.execution?.unhealthyMarkets as unknown) as Record<string, unknown>[])?.length || 0}
             </div>
           </div>
 
           {/* Active Temporary Adjustments from Grok */}
           <div className="card">
             <div className="font-medium mb-2">Active Temporary Adjustments (from Grok)</div>
-            {health.temporaryAdjustments?.active?.length > 0 ? (
+            {((health.temporaryAdjustments?.active as unknown) as Record<string, unknown>[])?.length > 0 ? (
               <div className="text-sm text-amber-300 space-y-1">
-                {health.temporaryAdjustments.active.map((adj: any, i: number) => (
+                {((health.temporaryAdjustments.active as unknown) as Record<string, unknown>[]).map((adj: Record<string, unknown>, i: number) => (
                   <div key={i}>
-                    {adj.type}{adj.target ? ` (${adj.target})` : ''}: {adj.value} — {adj.reason} (expires in ~{adj.expiresAfterRuns} runs)
+                    {adj.type as string}{adj.target ? ` (${adj.target})` : ''}: {adj.value as number | string} — {adj.reason as string} (expires in ~{adj.expiresAfterRuns as number} runs)
                   </div>
                 ))}
               </div>
@@ -156,24 +167,24 @@ export default function StrategyHealthPage() {
             <div className="font-medium mb-3">Recent Grok Recommendations (Automated Intelligence)</div>
             {health.aiRecommendations && health.aiRecommendations.length > 0 ? (
               <div className="space-y-4">
-                {health.aiRecommendations.map((rec: any, idx: number) => (
+                {((health.aiRecommendations as unknown) as Record<string, unknown>[]).map((rec: Record<string, unknown>, idx: number) => (
                   <div key={idx} className="border border-white/10 rounded p-3 text-sm">
                     <div className="flex justify-between items-start">
                       <div className="text-xs text-zinc-500">
-                        {new Date(rec.timestamp).toLocaleString()} • Mode: {rec.riskMode}
+                        {new Date(rec.timestamp as string).toLocaleString()} • Mode: {rec.riskMode as string}
                       </div>
-                      <div className={`text-[10px] px-2 py-0.5 rounded ${rec.status === 'applied' || rec.status === 'auto_applied' ? 'bg-emerald-900 text-emerald-300' : rec.status === 'ignored' ? 'bg-zinc-800' : 'bg-amber-900 text-amber-300'}`}>
-                        {rec.status || 'proposed'}
+                      <div className={`text-[10px] px-2 py-0.5 rounded ${(rec.status as string) === 'applied' || (rec.status as string) === 'auto_applied' ? 'bg-emerald-900 text-emerald-300' : (rec.status as string) === 'ignored' ? 'bg-zinc-800' : 'bg-amber-900 text-amber-300'}`}>
+                        {(rec.status as string) || 'proposed'}
                       </div>
                     </div>
 
                     <div className="whitespace-pre-wrap text-zinc-200 text-xs mt-2">
-                      {rec.rawText.length > 550 ? rec.rawText.slice(0, 550) + '...' : rec.rawText}
+                      {(rec.rawText as string).length > 550 ? (rec.rawText as string).slice(0, 550) + '...' : (rec.rawText as string)}
                     </div>
 
-                    {rec.parsedActions?.length > 0 && (
+                    {((rec.parsedActions as unknown) as Record<string, unknown>[])?.length > 0 && (
                       <div className="mt-2 text-[10px] text-emerald-400">
-                        Parsed actions: {rec.parsedActions.map((a: any) => `${a.action}(${a.target})`).join(', ')}
+                        Parsed actions: {((rec.parsedActions as unknown) as Record<string, unknown>[] || []).map((a: Record<string, unknown>) => `${a.action as string}(${a.target as string})`).join(', ')}
                       </div>
                     )}
 
@@ -206,8 +217,8 @@ export default function StrategyHealthPage() {
                       </div>
                     )}
 
-                    {rec.outcomeNote && (
-                      <div className="mt-2 text-[10px] text-zinc-400">Note: {rec.outcomeNote}</div>
+                    {(rec.outcomeNote as string) && (
+                      <div className="mt-2 text-[10px] text-zinc-400">Note: {rec.outcomeNote as string}</div>
                     )}
                   </div>
                 ))}
@@ -220,8 +231,8 @@ export default function StrategyHealthPage() {
           <div className="card">
             <div className="font-medium mb-2">System Summary</div>
             <div className="text-sm text-zinc-300">
-              Active Strategies: {health.summary?.totalActiveStrategies}<br />
-              Total Variants: {health.summary?.totalVariants}
+              Active Strategies: {health.summary?.totalActiveStrategies as number}<br />
+              Total Variants: {health.summary?.totalVariants as number}
             </div>
             <div className="text-[10px] text-zinc-500 mt-4">
               Risk mode now drives real behavioral changes:<br />

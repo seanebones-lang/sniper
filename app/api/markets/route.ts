@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const markets = await getAllMarkets();
     return NextResponse.json({ markets, count: markets.length });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[api/markets] error', err);
     return NextResponse.json(
       { error: 'Failed to fetch markets', details: err?.message },

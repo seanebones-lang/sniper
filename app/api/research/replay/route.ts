@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     const variants = getAllVariants();
     const variant = variants.find(v => v.id === variantId && v.baseStrategyId === strategyType);
     if (variant) {
-      config = applyVariantConfig(config, variant);
+      config = applyVariantConfig(config, variant) as typeof config;
       // Note: For full variant support we would need a wrapper strategy, but config override is the main effect for now
     }
   }
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       configUsed: config,
       realisticPassiveFills: useRealistic,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

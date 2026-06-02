@@ -12,7 +12,7 @@ export interface StoredProposal {
   strategyId: string;
   type: string;
   description: string;
-  suggestedChange: Record<string, any>;
+  suggestedChange: Record<string, unknown>;
   expectedImpact: string;
   confidence: number;
   regime?: string;
@@ -20,7 +20,7 @@ export interface StoredProposal {
   createdAt: Date;
 }
 
-export async function saveProposals(proposals: any[], sourceQuery: any) {
+export async function saveProposals(proposals: Record<string, unknown>[], sourceQuery: Record<string, unknown>) {
   for (const p of proposals) {
     await db.insert(auditEvents).values({
       actor: 'grok-research-agent',
