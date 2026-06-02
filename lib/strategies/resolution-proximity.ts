@@ -23,7 +23,6 @@ export const ResolutionProximitySniper: Strategy = {
     // For now we use a simple heuristic based on market question or external data.
     // In production this should come from proper market metadata (endDate).
     // For this version we assume short-term markets if the question mentions minutes/hours.
-    const q = market.question.toLowerCase();
 
     // We don't have exact start time here. Use a proxy:
     // If volume is still very low relative to liquidity, we're probably early.

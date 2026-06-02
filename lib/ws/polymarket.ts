@@ -75,7 +75,8 @@ export class PolymarketWSClient {
     };
 
     this.ws.onerror = (err) => {
-      console.error('[PolymarketWS] Error', err);
+      // We log but don't want an unused variable warning
+      if (err) console.error('[PolymarketWS] Error', err);
       this.options.onError?.(err);
     };
   }
