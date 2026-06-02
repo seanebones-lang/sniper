@@ -8,11 +8,11 @@ Designed for small, consistent edges over long periods — not gambling or home 
 
 ## Live demo (June 2026)
 
-Paper trading runner, live P&L ledger, and dashboard in action:
+Paper trading runner, live P&L ledger, and dashboard in action (15s preview — click for full video):
 
-<video src="docs/demo/sniper-paper-trading-demo.mov" controls width="100%">
-  <a href="docs/demo/sniper-paper-trading-demo.mov">Download demo video</a>
-</video>
+[![Paper trading demo — click to watch full video](docs/demo/sniper-paper-trading-demo.gif)](https://github.com/seanebones-lang/sniper/blob/main/docs/demo/sniper-paper-trading-demo.mov)
+
+**[▶ Watch full demo video](https://github.com/seanebones-lang/sniper/blob/main/docs/demo/sniper-paper-trading-demo.mov)** (35 MB, ~1 min)
 
 ## What this is (and is not)
 

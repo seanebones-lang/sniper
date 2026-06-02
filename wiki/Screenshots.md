@@ -8,9 +8,10 @@ Images are stored in the repo at `docs/screenshots/` and referenced here via raw
 
 ## Demo video
 
-A walkthrough of paper trading (runner, automated fills, P&L dashboard) is available in the repo:
+A walkthrough of paper trading (runner, automated fills, P&L dashboard) is in the repo:
 
-**`docs/demo/sniper-paper-trading-demo.mov`**
+- **Preview (GIF):** [`docs/demo/sniper-paper-trading-demo.gif`](docs/demo/sniper-paper-trading-demo.gif) — also on [README](../README.md#live-demo-june-2026)
+- **Full video:** [`docs/demo/sniper-paper-trading-demo.mov`](docs/demo/sniper-paper-trading-demo.mov)
 
 Clone the repo or browse on GitHub to view the demo locally.
 
