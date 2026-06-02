@@ -7,6 +7,8 @@
  */
 
 import { db } from '@/lib/db';
+import { aggregatePaperPositions, totalExposureUsd } from '@/lib/paper/positions';
+import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { categorizeMarket, getCategoryLimits } from './categorizer';
 
 export interface PortfolioState {
@@ -197,6 +199,19 @@ export class PortfolioRiskManager {
   getPeakBankroll(): number {
     return this.peakBankroll;
   }
+
+  applyBudgetSettings(budget: PaperBudgetSettings) {
+    this.params.maxTotalExposureUsd = budget.maxExposureUsd;
+    this.params.maxDailyLossUsd = budget.maxDailyLossUsd;
+    this.currentBankroll = budget.paperBudgetUsd;
+    if (this.peakBankroll < this.currentBankroll) {
+      this.peakBankroll = this.currentBankroll;
+    }
+  }
 }
 
 export const portfolioRiskManager = new PortfolioRiskManager();
+
+export function applyPaperBudgetToPortfolioManager(budget: PaperBudgetSettings) {
+  portfolioRiskManager.applyBudgetSettings(budget);
+}

@@ -61,12 +61,12 @@ export class ExecutionManager {
 
   decideExecution(
     signal: { action: 'BUY' | 'SELL'; price: number; size: number; reason?: string },
-    book: { marketExternalId?: string } | null | undefined,
+    book: OrderBook | null | undefined,
     context: ExecutionContext
   ): ExecutionAction {
     const decision = getSmartExecutionDecision({
       signal,
-      book,
+      book: book ?? null,
       recentImbalance: context.recentImbalance,
       timeSinceSignal: context.timeSinceSignal,
       isRealMoney: context.isRealMoney,
@@ -128,7 +128,6 @@ export class ExecutionManager {
     side: 'BUY' | 'SELL',
     price: number,
     size: number,
-    isReal: boolean
   ): string {
     const id = `order_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -325,7 +324,7 @@ export class ExecutionManager {
       return { type: 'WAIT', reason: 'No resting orders to manage' };
     }
 
-    const cancelCheck = this.shouldCancelRestingOrders(marketExternalId, latestBook);
+    const cancelCheck = this.shouldCancelRestingOrders(marketExternalId);
 
     if (cancelCheck.shouldCancel) {
       return {

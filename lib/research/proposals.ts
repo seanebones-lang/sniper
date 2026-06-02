@@ -1,11 +1,12 @@
 /**
  * Strategy Proposals Store
- * 
+ *
  * Allows the Grok Research Agent to propose changes that can be reviewed
  * and (in the future) automatically tested or applied.
  */
 
 import { db, auditEvents } from '@/lib/db';
+import type { StrategyProposal, ResearchQuery } from '@/lib/research/grok-agent';
 
 export interface StoredProposal {
   id?: string;
@@ -20,7 +21,7 @@ export interface StoredProposal {
   createdAt: Date;
 }
 
-export async function saveProposals(proposals: Record<string, unknown>[], sourceQuery: Record<string, unknown>) {
+export async function saveProposals(proposals: StrategyProposal[], sourceQuery: ResearchQuery) {
   for (const p of proposals) {
     await db.insert(auditEvents).values({
       actor: 'grok-research-agent',

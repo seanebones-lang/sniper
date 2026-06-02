@@ -26,7 +26,7 @@ export default function RealExecutionPage() {
         <div className="rounded-xl border border-red-900 bg-red-950/60 p-6">
           <div className="font-semibold text-red-400 text-lg mb-3">THIS IS REAL CAPITAL AT RISK</div>
           <ul className="list-disc pl-5 space-y-2 text-red-300/90">
-            <li>Enabling real execution means the runner can place actual orders on Polymarket and/or Kalshi using your keys.</li>
+            <li>Enabling real execution means the runner can place actual orders on <strong>Polymarket</strong> using your keys. Kalshi real execution is not implemented.</li>
             <li>You can lose 100% of the capital allocated to this system.</li>
             <li>Bugs, API changes, bad strategies, or market moves can all cause permanent loss.</li>
             <li>This tool does <span className="font-bold">not</span> guarantee profits. Most automated traders lose money.</li>
@@ -39,7 +39,8 @@ export default function RealExecutionPage() {
             Real execution is currently <strong>{realEnabled ? 'ENABLED' : 'DISABLED'}</strong> in this deployment.
           </div>
           <div className="text-xs text-zinc-500 mt-1">
-            To enable: set <code>SNIPER_ENABLE_REAL_EXECUTION=true</code> in your environment variables (Railway secrets, .env, etc).
+            Server flag: <code>SNIPER_ENABLE_REAL_EXECUTION=true</code> in environment (Railway secrets, <code>.env.local</code>).
+            This page does not read that flag yet — check your deployment config directly.
           </div>
         </div>
 

@@ -19,14 +19,13 @@ Designed for small, consistent edges over long periods — not gambling or home 
 
 **Sniper is not (today):**
 
-- A fully unsupervised real-money trading bot
-- A complete cross-venue arbitrage engine
+- A production-ready unattended trading bot — see [Critical blockers](docs/STATUS.md#critical-blockers)
+- A Kalshi real-money execution system
+- A cross-venue arbitrage engine
 
-**Authoritative sources:**
-- [docs/STATUS.md](docs/STATUS.md) — detailed capability matrix
-- [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md) — honest assessment for real capital use
+**Authoritative status:** [docs/STATUS.md](docs/STATUS.md) — capability matrix verified against code.
 
-**Wiki:** [GitHub Wiki](https://github.com/seanebones-lang/sniper/wiki) · source maintained in [`wiki/`](wiki/) (run `./wiki/sync-to-github.sh` to publish)
+**Wiki:** [GitHub Wiki](https://github.com/seanebones-lang/sniper/wiki) · source in [`wiki/`](wiki/) (run `./wiki/sync-to-github.sh` to publish)
 
 ## Screenshots
 
@@ -56,27 +55,27 @@ Local dev UI (June 2026). Paper mode is the default throughout.
 - **Execution quality matters** — adverse selection and poor fills destroy edges.
 - **Auditable everything** — decisions should have traceable reasons (`audit_events`, signal reasons).
 
-## What works today (June 2026)
+## What works today
 
-| Area | Status | Notes |
-|------|--------|-------|
-| Polymarket + Kalshi market discovery + order books | Works | |
-| Markets UI + last prices | Works | |
-| Manual paper fills | Works | |
-| Strategy creation + runner (paper) | Works | 4 strategy types |
-| Runner automated signal → DB → fill pipeline | **Fixed** | Uses `ensureMarketRecord` before every signal |
-| Historical snapshot collection + replay | Works | |
-| Grok Research Agent + proposals | Works | Requires `XAI_API_KEY` |
-| Real execution durability | Strong | Persistent kill switch + rich risk snapshots across restarts |
-| Risk system | Strong + Hardening | MaxDrawdown tracking + circuit breaker, real position-driven exposure |
-| Kalshi real execution | Hardening | Authenticated client + active order/fill polling in reconciliation |
-| Polymarket real execution | Gated + Hardening | Durable gates + basic open-order reconciliation |
-| CI | Good | Lint, tsc, tests (22), build, smoke, vulnerability scan |
-| Observability | Improving | `/api/health` surfaces durable risk snapshots |
+Verified against the codebase (June 2026):
 
-**Honest assessment for real capital:** See [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md).
+| Area | Status |
+|------|--------|
+| Polymarket + Kalshi market discovery and order books (REST) | Works |
+| Markets UI with last prices | Works |
+| Manual paper fills (market UI + `POST /api/paper/fill` → DB) | Works |
+| Four strategy types + create/toggle via UI | Works |
+| Runner loop (evaluate, snapshots, risk modes) | Works |
+| Runner automated signal → DB → fill pipeline | **Broken** ([FK mismatch](docs/STATUS.md#1-signalsmarket_id-foreign-key-mismatch)) |
+| Historical snapshot replay | Works (needs runner soak first) |
+| Grok intel + research agent | Works (requires xAI key) |
+| Settings UI for Grok key | Works |
+| Polymarket live WebSocket | Market detail page only |
+| Real Polymarket execution | Coded, gated, not CI-tested |
+| Real Kalshi execution | Not implemented |
+| CI (lint, build, unit, e2e) | GitHub Actions |
 
-Full detailed matrix: [docs/STATUS.md](docs/STATUS.md).
+Full matrix: [docs/STATUS.md](docs/STATUS.md).
 
 ## Quickstart (Paper Recommended)
 
@@ -121,26 +120,22 @@ Set `DATABASE_URL=postgresql://postgres:postgres@localhost:5433/sniper` in `.env
 ## Testing
 
 ```bash
-npm run lint
-npm run test          # 22 unit tests (risk, durability, execution, reconciliation)
+npm run lint          # ESLint (enforced in CI)
+npm run test          # Vitest — 8 unit tests (orderbook, paper-simulator)
 npm run test:ci       # lint + build + unit
-npm run test:smoke
-npm run test:e2e
-npm run test:all
+npm run test:smoke    # 14 API checks (requires dev server)
+npm run test:e2e      # 14 Playwright specs (local: dev server on :3001)
+npm run test:all      # lint + unit + smoke + e2e
 ```
 
-CI runs the full pipeline including Postgres service container.
+CI (`.github/workflows/ci.yml`): lint → build + unit → e2e with Postgres. **Smoke tests are not in CI.**
 
-## UI & API (Key Routes)
+## UI & API
 
 | Route | Purpose |
 |-------|---------|
 | `/` | Landing |
-| `/dashboard` | Overview |
-| `/strategies` | Strategy management + runner control |
-| `/markets` | Discovery + order books |
-| `/health` | Risk mode, execution health, durable snapshots |
-| `/backtest` | Replay & research lab |
+| `/dashboard` | Stats + navigation |
 | `/markets` | Market discovery |
 | `/markets/[platform]/[id]` | Order book, manual paper fill, Grok intel, Polymarket WS |
 | `/strategies` | Strategies + runner control |
@@ -155,7 +150,7 @@ API reference: [docs/STATUS.md#api-routes](docs/STATUS.md#api-routes).
 
 | Doc | Description |
 |-----|-------------|
-| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation with navigation — source in [`wiki/`](wiki/) (run sync script to publish) |
+| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation with navigation — source in [`wiki/`](wiki/) |
 | [docs/STATUS.md](docs/STATUS.md) | **Authoritative capability matrix and blockers** |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute; fix list; dev setup |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design |

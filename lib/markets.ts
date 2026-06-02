@@ -11,6 +11,16 @@ import { ensureMarketRecord, ensureMarket } from './db/ensure-market';
 let cachedMarkets: Market[] | null = null;
 let lastFetch = 0;
 const CACHE_TTL = 25_000; // ~25s
+const FETCH_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out`)), FETCH_TIMEOUT_MS),
+    ),
+  ]);
+}
 
 export async function getAllMarkets(force = false): Promise<Market[]> {
   const now = Date.now();
@@ -20,8 +30,8 @@ export async function getAllMarkets(force = false): Promise<Market[]> {
   }
 
   const [poly, kalshi] = await Promise.allSettled([
-    fetchPolymarketMarkets(60),
-    fetchKalshiMarkets(60),
+    withTimeout(fetchPolymarketMarkets(60), 'Polymarket'),
+    withTimeout(fetchKalshiMarkets(60), 'Kalshi'),
   ]);
 
   const polyMarkets = poly.status === 'fulfilled' ? poly.value : [];

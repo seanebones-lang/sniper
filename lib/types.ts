@@ -8,7 +8,7 @@ export type Platform = 'polymarket' | 'kalshi';
 export type MarketStatus = 'open' | 'closed' | 'resolved';
 
 export interface Market {
-  id: string;                    // our internal uuid (once persisted)
+  id: string;                    // platform-native id (Gamma market id or Kalshi ticker); not DB UUID unless synced
   platform: Platform;
   externalId: string;            // Polymarket tokenId or Kalshi market_ticker
   question: string;

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
+import { getErrorMessage } from '@/lib/error-message';
+import { fetchPolymarketOrderBook, fetchPolymarketMarketByTokenId } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
+import { getMarket } from '@/lib/markets';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,13 +16,28 @@ export async function GET(req: Request) {
   }
 
   try {
+    let book;
+    let market = await getMarket(platform, id);
+
     if (platform === 'polymarket') {
-      const book = await fetchPolymarketOrderBook(id);
-      return NextResponse.json(book);
+      book = await fetchPolymarketOrderBook(id);
+      if (!market) {
+        const lookedUp = await fetchPolymarketMarketByTokenId(id);
+        if (lookedUp) market = lookedUp;
+      }
     } else {
-      const book = await fetchKalshiOrderBook(id);
-      return NextResponse.json(book);
+      book = await fetchKalshiOrderBook(id);
     }
+
+    return NextResponse.json({
+      ...book,
+      market: market ? {
+        question: market.question,
+        lastPrice: market.lastPrice,
+        volume: market.volume,
+        liquidity: market.liquidity,
+      } : null,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(

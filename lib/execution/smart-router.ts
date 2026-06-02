@@ -1,35 +1,27 @@
 /**
  * Smart Execution Router
- * 
+ *
  * This is where theoretical edge becomes (or fails to become) real P&L.
- * 
- * Goals:
- * - Decide passive vs aggressive posting
- * - Detect potential adverse selection
- * - Route orders intelligently across venues when possible
- * 
- * This layer is one of the biggest differentiators between amateur and professional systems.
  */
 
-import type { OrderBookLevel } from '../types';
+import type { OrderBook } from '@/lib/types';
+import type { StrategySignal } from '@/lib/strategies/types';
 
 export interface ExecutionDecision {
   recommendedAction: 'AGGRESSIVE' | 'PASSIVE' | 'WAIT' | 'CANCEL';
-  targetPriceImprovement: number; // how much better than mid we should try for
+  targetPriceImprovement: number;
   reason: string;
   maxSlippageTolerance: number;
 }
 
-export interface SmartExecutionInput {
-  signal: { action: 'BUY' | 'SELL'; price: number; size: number; reason?: string };
-  book: { marketExternalId?: string; bids?: OrderBookLevel[]; asks?: OrderBookLevel[]; spread?: number } | null | undefined;
+export function getSmartExecutionDecision(params: {
+  signal: Pick<StrategySignal, 'action'>;
+  book: OrderBook | null;
   recentImbalance: number;
   timeSinceSignal: number;
   isRealMoney: boolean;
   regime?: string;
-}
-
-export function getSmartExecutionDecision(params: SmartExecutionInput): ExecutionDecision {
+}): ExecutionDecision {
   const { signal, book, recentImbalance, timeSinceSignal, isRealMoney, regime = 'normal' } = params;
 
   if (!book || !book.bids?.length || !book.asks?.length) {
@@ -44,7 +36,6 @@ export function getSmartExecutionDecision(params: SmartExecutionInput): Executio
   const spread = book.spread || (book.asks[0].price - book.bids[0].price);
   const ourSideImbalance = signal.action === 'BUY' ? recentImbalance : -recentImbalance;
 
-  // In low liquidity regimes, almost always post passively
   if (regime === 'low_liquidity') {
     return {
       recommendedAction: 'PASSIVE',
@@ -55,7 +46,6 @@ export function getSmartExecutionDecision(params: SmartExecutionInput): Executio
   }
 
   if (isRealMoney) {
-    // Real capital: very conservative
     if (ourSideImbalance > 0.30 && spread < 0.015 && timeSinceSignal < 20) {
       return {
         recommendedAction: 'AGGRESSIVE',
@@ -73,7 +63,6 @@ export function getSmartExecutionDecision(params: SmartExecutionInput): Executio
     };
   }
 
-  // Paper / research mode
   if (ourSideImbalance > 0.22 && timeSinceSignal < 30) {
     return {
       recommendedAction: 'AGGRESSIVE',
@@ -100,15 +89,11 @@ export function getSmartExecutionDecision(params: SmartExecutionInput): Executio
   };
 }
 
-/**
- * Basic adverse selection detector.
- * If we get filled very quickly on a limit order, it can be a warning sign.
- */
 export function detectPotentialAdverseSelection(params: {
   timeToFillSeconds: number;
   sizeFilled: number;
   ourSide: 'BUY' | 'SELL';
-  postFillPriceMove: number; // positive = price moved against us
+  postFillPriceMove: number;
 }): { likelyAdverse: boolean; confidence: number; note: string } {
   const { timeToFillSeconds, sizeFilled, postFillPriceMove } = params;
 
@@ -130,4 +115,3 @@ export function detectPotentialAdverseSelection(params: {
 
   return { likelyAdverse: false, confidence: 0.2, note: 'No clear adverse selection signal' };
 }
-

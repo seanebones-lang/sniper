@@ -6,7 +6,8 @@
  */
 
 import { generateText } from 'ai';
-import { xai } from '@ai-sdk/xai';
+import { getXaiModel } from '../ai/xai';
+import { getXaiApiKey } from '../settings/keys';
 import { getStrategyPerformance } from './performance';
 import { getSnapshotsForReplay } from '../data/historical';
 
@@ -43,15 +44,16 @@ export interface StrategyProposal {
  * Main entry point for the Research Agent.
  */
 export async function askGrokResearchAgent(query: ResearchQuery): Promise<ResearchResult> {
-  if (!process.env.XAI_API_KEY) {
-    throw new Error('XAI_API_KEY is required for the Grok Research Agent');
+  if (!(await getXaiApiKey())) {
+    throw new Error('XAI API key is required for the Grok Research Agent. Add it in Settings.');
   }
 
   const context = await gatherResearchContext(query);
   const prompt = buildResearchPrompt(query, context);
 
+  const model = await getXaiModel(MODEL);
   const { text } = await generateText({
-    model: xai(MODEL),
+    model,
     prompt,
     temperature: 0.35,
   });

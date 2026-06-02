@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/error-message';
 import { generateText } from 'ai';
 import { xai } from '@ai-sdk/xai';
 

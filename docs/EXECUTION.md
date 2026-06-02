@@ -1,55 +1,61 @@
 # Execution Layer
 
-This is where theoretical edge becomes (or fails to become) real money.
-
-> **June 2026 Reliability Fix**: The automated runner → signal → paper fill pipeline (previously blocked by `signals.market_id` FK issues) is now functional. See `lib/db/ensure-market.ts`, updates to `lib/markets.ts` + `lib/runner/engine.ts`, and the authoritative `docs/STATUS.md`.
+**Status:** [STATUS.md](./STATUS.md)
 
 ## Philosophy
 
-In prediction markets, **execution quality is often the difference between a positive and negative edge**.
+Execution quality often determines whether a theoretical edge survives fees, adverse selection, and latency.
 
-Most systems focus too much on signal generation and not enough on how they actually interact with the order book.
+## ExecutionManager
 
-## ExecutionManager (The Brain)
+**Location:** `lib/execution/execution-manager.ts`
 
-`lib/execution/execution-manager.ts` is the single place that decides:
+In-memory brain for passive vs aggressive decisions, adverse selection heuristics, and per-market health.
 
-- Passive vs Aggressive
-- When to cancel resting orders
-- Adverse selection detection and response
-- Execution quality scoring
+**Used by:** paper simulator (when book available), real executor, runner health throttle.
 
-### Key Behaviors
+**Not fully wired:** continuous resting-order management from live WS feeds in the runner loop.
 
-- **Passive preference on real capital**: We try to post limits when reasonable to reduce taker fees and improve average price.
-- **Adverse selection awareness**: Fast fills followed by immediate price movement against us are treated as warning signs.
-- **Per-market health tracking**: Markets with sustained poor fills get automatically downweighted by the runner.
-- **Lifecycle management**: The manager knows about open orders and can recommend cancellations.
+## Paper Execution
 
-## Current Capabilities (as of latest build)
+| Path | Status |
+|------|--------|
+| Manual fill via `POST /api/paper/fill` | **Works** → `paper_trades` |
+| Manual fill via market detail UI | **Works** |
+| Runner automated fill | **Broken** (signal FK — see STATUS.md) |
+| Immediate fill mode | Works (bypasses ExecutionManager when no book) |
 
-Real execution paths benefit from durable risk snapshots (including exposure and maxDrawdown), active exchange polling in reconciliation (Kalshi + basic Polymarket), and `recordRealFill` now defensively ensuring market records before writing positions.
+Fee model: ~5 bps in simulator.
 
-- Central `ExecutionManager` that decides passive vs aggressive for every signal
-- Real passive order lifecycle management (`handleBookUpdate`, `manageRestingOrders`)
-- Adverse selection detection with automatic response recommendations
-- Per-market execution health tracking (used for automatic downweighting)
-- Integration with Risk Modes and Temporary Adjustments from Grok
-- Realistic passive fill simulation in paper mode and replay engine
-- Execution quality scoring exposed in `/health`
+## Real Execution
 
-## Future / High Priority
+**Gate:** `SNIPER_ENABLE_REAL_EXECUTION=true` + strategy `paperOnly: false` + risk checks + ExecutionManager decision.
 
-- True queue simulation for paper mode (realistic passive fill probabilities)
-- Resting order management (adjust/cancel logic based on new book information)
-- Venue-specific execution profiles (Polymarket CLOB vs Kalshi)
-- Fill quality attribution back into strategy evaluation
-- **Real execution reconciliation** (basic version added June 2026 — see `lib/execution/reconcile-real-trades.ts`)
+| Platform | Status |
+|----------|--------|
+| Polymarket | Coded (`placePolymarketLimitOrder`); requires `POLYMARKET_PRIVATE_KEY`; not CI-tested |
+| Kalshi | Returns "not yet implemented" |
 
-## Why This Matters
+## Smart Router
 
-A strategy that looks good on P&L but has terrible average execution (constant adverse selection) will eventually lose money.
+`lib/execution/smart-router.ts` — passive/aggressive/wait from book, imbalance, signal age, real vs paper flag.
 
-The ExecutionManager + health feedback loop is designed to catch this early and protect capital.
+## Health Dashboard
 
-**Note (June 2026):** Real execution for Kalshi now has a trading client skeleton and basic reconciliation support. Full position tracking and kill-switches remain high-priority future work.
+`/health` reads in-process execution manager state and API health endpoint. Resets on process restart.
+
+## Verified vs Planned
+
+| Capability | Verified |
+|------------|----------|
+| ExecutionManager decision logic | Yes |
+| Adverse selection heuristics | Yes |
+| Per-market health in runner throttle | Yes (in-process) |
+| Manual paper fills to DB | Yes |
+| Runner automated paper fills | No (FK blocker) |
+| Real Polymarket orders | Coded, gated, untested in CI |
+| Real Kalshi orders | No |
+| Queue-position simulation | No |
+| Replay realistic passive fills | No (UI only) |
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for execution-related tasks.

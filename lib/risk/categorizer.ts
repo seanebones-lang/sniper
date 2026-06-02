@@ -44,9 +44,13 @@ export function categorizeMarket(question: string, platform: string, externalId:
     };
   }
 
-  // Sports
-  if (q.includes('nfl') || q.includes('nba') || q.includes('mlb') || q.includes('premier league') || 
-      q.includes('world cup') || q.includes('super bowl') || q.includes('wins') && (q.includes('game') || q.includes('match'))) {
+  // Sports (in-play + leagues)
+  if (q.includes('nfl') || q.includes('nba') || q.includes('mlb') || q.includes('nhl') || q.includes('mls') ||
+      q.includes('wnba') || q.includes('ncaa') || q.includes('premier league') || q.includes('champions league') ||
+      q.includes('world cup') || q.includes('super bowl') || q.includes('tennis') || q.includes('wimbledon') ||
+      q.includes('atp') || q.includes('wta') || q.includes('baseball') || q.includes('basketball') ||
+      q.includes('football') || q.includes('hockey') || q.includes('soccer') || q.includes('cricket') ||
+      q.includes('wins') && (q.includes('game') || q.includes('match'))) {
     return {
       externalId,
       platform,

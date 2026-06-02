@@ -8,6 +8,8 @@ import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { polygon } from 'viem/chains';
 import type { Market, OrderBook, OrderBookLevel } from '../types';
+import { getErrorMessage } from '../error-message';
+import { normalizeOrderBookLevels } from '../orderbook';
 
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_HOST = 'https://clob.polymarket.com';
@@ -43,7 +45,7 @@ export function getTradingClient(privateKey: string): ClobClient {
   tradingClient = new ClobClient({
     host: CLOB_HOST,
     chain: 137,
-    signer: walletClient as any, // viem wallet client works with the SDK (known integration point)
+    signer: walletClient as any, // viem wallet client works with the SDK
   });
 
   return tradingClient;
@@ -53,8 +55,9 @@ export interface GammaMarket {
   id: string;
   question: string;
   slug: string;
-  outcomes?: string[];
-  outcomePrices?: string[];
+  outcomes?: string[] | string;
+  outcomePrices?: string[] | string;
+  clobTokenIds?: string[] | string;
   volumeNum?: number;
   liquidityNum?: number;
   active: boolean;
@@ -67,6 +70,20 @@ export interface GammaMarket {
     winner: boolean;
   }>;
   // many more fields exist from Gamma — we only use what we need
+}
+
+/** Gamma often returns JSON-encoded arrays as strings (e.g. outcomePrices, clobTokenIds). */
+function parseGammaArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed as T[] : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 export async function fetchPolymarketMarkets(limit = 50): Promise<Market[]> {
@@ -83,63 +100,82 @@ export async function fetchPolymarketMarkets(limit = 50): Promise<Market[]> {
     .filter((m) => m.active && !m.closed && !m.archived)
     .slice(0, limit)
     .map((m): Market => {
-      // Best effort price extraction (first token or average)
-      const price = m.tokens?.[0]?.price ?? (m.outcomePrices?.[0] ? parseFloat(m.outcomePrices[0]) : undefined);
+      const outcomePrices = parseGammaArray<string>(m.outcomePrices);
+      const clobTokenIds = parseGammaArray<string>(m.clobTokenIds);
+      const price =
+        m.tokens?.[0]?.price ??
+        (outcomePrices[0] != null ? parseFloat(outcomePrices[0]) : undefined);
 
       return {
         id: m.id,
         platform: 'polymarket',
-        externalId: m.tokens?.[0]?.token_id ?? m.id, // prefer token_id for order books
+        // CLOB order books require the token ID, not the market ID
+        externalId: m.tokens?.[0]?.token_id ?? clobTokenIds[0] ?? m.id,
         question: m.question,
         status: m.closed ? 'closed' : 'open',
         volume: m.volumeNum ?? 0,
         liquidity: m.liquidityNum ?? 0,
-        lastPrice: price,
+        lastPrice: price != null && !Number.isNaN(price) ? price : undefined,
         updatedAt: new Date().toISOString(),
       };
     });
 }
 
+export async function fetchPolymarketMarketByTokenId(tokenId: string): Promise<Market | null> {
+  const url = `${GAMMA_API}/markets?clob_token_ids=${encodeURIComponent(tokenId)}&limit=1`;
+  const res = await fetch(url, { next: { revalidate: 30 } });
+  if (!res.ok) return null;
+
+  const data: GammaMarket[] = await res.json();
+  const m = data[0];
+  if (!m) return null;
+
+  const outcomePrices = parseGammaArray<string>(m.outcomePrices);
+  const clobTokenIds = parseGammaArray<string>(m.clobTokenIds);
+  const price =
+    m.tokens?.[0]?.price ??
+    (outcomePrices[0] != null ? parseFloat(outcomePrices[0]) : undefined);
+
+  return {
+    id: m.id,
+    platform: 'polymarket',
+    externalId: m.tokens?.[0]?.token_id ?? clobTokenIds[0] ?? tokenId,
+    question: m.question,
+    status: m.closed ? 'closed' : 'open',
+    volume: m.volumeNum ?? 0,
+    liquidity: m.liquidityNum ?? 0,
+    lastPrice: price != null && !Number.isNaN(price) ? price : undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export async function fetchPolymarketOrderBook(tokenId: string): Promise<OrderBook> {
   const client = getPublicClient();
 
-  // The SDK method is getOrderBook or similar — adjust if the exact API differs
   const book = await client.getOrderBook(tokenId);
 
-  interface RawOrderBookLevel {
-    price: string | number;
-    size: string | number;
-  }
-
-  const bids: OrderBookLevel[] = (book?.bids ?? []).map((b: RawOrderBookLevel) => ({
-    price: parseFloat(String(b.price)),
-    size: parseFloat(String(b.size)),
+  const bids: OrderBookLevel[] = (book?.bids ?? []).map((b: any) => ({
+    price: parseFloat(b.price),
+    size: parseFloat(b.size),
   }));
 
-  const asks: OrderBookLevel[] = (book?.asks ?? []).map((a: RawOrderBookLevel) => ({
-    price: parseFloat(String(a.price)),
-    size: parseFloat(String(a.size)),
+  const asks: OrderBookLevel[] = (book?.asks ?? []).map((a: any) => ({
+    price: parseFloat(a.price),
+    size: parseFloat(a.size),
   }));
 
-  const mid = bids.length && asks.length
-    ? (bids[0].price + asks[0].price) / 2
-    : undefined;
-
-  const spread = bids.length && asks.length
-    ? asks[0].price - bids[0].price
-    : undefined;
+  const { bids: sortedBids, asks: sortedAsks, mid, spread } = normalizeOrderBookLevels(bids, asks);
 
   return {
     platform: 'polymarket',
     marketExternalId: tokenId,
-    bids,
-    asks,
+    bids: sortedBids,
+    asks: sortedAsks,
     mid,
     spread,
     timestamp: new Date().toISOString(),
   };
 }
-
 // Lightweight price fetch (mid or last trade) for quick UI updates
 export async function fetchPolymarketPrice(tokenId: string): Promise<number | null> {
   try {
@@ -195,7 +231,7 @@ export async function placePolymarketLimitOrder(params: {
     const client = getTradingClient(params.privateKey);
 
     // Ensure we have L2 credentials (this will create/derive if needed)
-    const creds = await client.createOrDeriveApiKey();
+    await client.createOrDeriveApiKey();
 
     const order = await client.createAndPostOrder(
       {

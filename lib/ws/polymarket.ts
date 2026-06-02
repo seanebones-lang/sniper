@@ -1,28 +1,30 @@
 /**
  * Polymarket WebSocket Client (Market Channel)
  * Phase 2: Real-time updates with robust heartbeats + reconnect.
- *
- * Docs reference: wss://ws-subscriptions-clob.polymarket.com/ws/market
  */
 
+export interface ClobBookLevel {
+  price: string;
+  size: string;
+}
+
 export type PolymarketWSMessage =
-  | { type: 'book'; asset_id: string; bids: unknown[]; asks: unknown[] }
+  | { type: 'book'; asset_id: string; bids: ClobBookLevel[]; asks: ClobBookLevel[] }
   | { type: 'price_change'; asset_id: string; price: string; size?: string; side?: string }
   | { type: 'last_trade_price'; asset_id: string; price: string }
   | { type: 'best_bid_ask'; asset_id: string; bid: string; ask: string }
   | { type: 'tick_size_change'; asset_id: string; old: string; new: string }
-  | { event_type: 'PONG' | 'PING' }
-  | unknown; // allow unknown for forward compat
+  | { event_type: 'PONG' | 'PING' };
 
 export interface PolymarketWSOptions {
   onMessage: (msg: PolymarketWSMessage) => void;
   onOpen?: () => void;
   onClose?: () => void;
-  onError?: (err: unknown) => void;
+  onError?: (err: Event | Error) => void;
 }
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
-const HEARTBEAT_INTERVAL = 8000; // send PING every 8s (docs say ~10s tolerance)
+const HEARTBEAT_INTERVAL = 8000;
 
 export class PolymarketWSClient {
   private ws: WebSocket | null = null;
@@ -57,7 +59,7 @@ export class PolymarketWSClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data as string) as PolymarketWSMessage;
         this.options.onMessage(data);
       } catch {
         console.warn('[PolymarketWS] Failed to parse message', event.data);
@@ -75,8 +77,7 @@ export class PolymarketWSClient {
     };
 
     this.ws.onerror = (err) => {
-      // We log but don't want an unused variable warning
-      if (err) console.error('[PolymarketWS] Error', err);
+      console.error('[PolymarketWS] Error', err);
       this.options.onError?.(err);
     };
   }
@@ -125,7 +126,6 @@ export class PolymarketWSClient {
   updateSubscriptions(newAssetIds: string[]) {
     this.assetIds = newAssetIds;
     if (this.ws?.readyState === WebSocket.OPEN) {
-      // Simple approach: resubscribe (Polymarket supports dynamic subscribe)
       this._subscribe();
     }
   }

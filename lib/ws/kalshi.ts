@@ -1,15 +1,15 @@
 /**
  * Kalshi WebSocket Client (public channels)
  * Phase 2: Basic ticker + trade updates.
- *
- * URL: wss://external-api-ws.kalshi.com/trade-api/ws/v2
  */
 
+export type KalshiWSMessage = Record<string, unknown>;
+
 export interface KalshiWSOptions {
-  onMessage: (msg: unknown) => void;
+  onMessage: (msg: KalshiWSMessage) => void;
   onOpen?: () => void;
   onClose?: () => void;
-  onError?: (err: unknown) => void;
+  onError?: (err: Event | Error) => void;
 }
 
 const WS_URL = 'wss://external-api-ws.kalshi.com/trade-api/ws/v2';
@@ -43,9 +43,11 @@ export class KalshiWSClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        this.options.onMessage(data as unknown);
-      } catch {}
+        const data = JSON.parse(event.data as string) as KalshiWSMessage;
+        this.options.onMessage(data);
+      } catch {
+        // ignore malformed messages
+      }
     };
 
     this.ws.onclose = () => {
@@ -62,7 +64,6 @@ export class KalshiWSClient {
   private _subscribe() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    // Public channels: ticker and trade
     const msg = {
       id: Date.now(),
       cmd: 'subscribe',

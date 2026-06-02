@@ -23,7 +23,7 @@ export default function SniperLanding() {
             href="/dashboard"
             className="inline-flex h-12 items-center justify-center rounded-full bg-white px-8 font-medium text-black transition hover:bg-zinc-200"
           >
-            Open Dashboard (Coming Soon)
+            Open Dashboard
           </Link>
           <a
             href="https://github.com/seanebones-lang/sniper"

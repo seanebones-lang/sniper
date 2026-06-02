@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, RefreshCw, TrendingUp } from 'lucide-react';
-import type { Market } from '@/lib/types';
+import type { Market, Platform } from '@/lib/types';
+import { getErrorMessage } from '@/lib/error-message';
 
 export default function MarketsPage() {
   const [markets, setMarkets] = useState<Market[]>([]);
@@ -13,22 +14,36 @@ export default function MarketsPage() {
   const [platformFilter, setPlatformFilter] = useState<'all' | 'polymarket' | 'kalshi'>('all');
 
   async function loadMarkets(force = false) {
-    setLoading(true);
+    if (force) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/markets${force ? '?force=true' : ''}`);
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setMarkets(data.markets ?? []);
-    } catch (e: any) {
-      setError(e.message || 'Failed to fetch markets');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e) || 'Failed to fetch markets');
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadMarkets();
+    let cancelled = false;
+    void (async () => {
+      setError(null);
+      try {
+        const res = await fetch('/api/markets');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        if (!cancelled) setMarkets(data.markets ?? []);
+      } catch (e: unknown) {
+        if (!cancelled) setError(getErrorMessage(e) || 'Failed to fetch markets');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const filtered = markets
@@ -69,7 +84,7 @@ export default function MarketsPage() {
         />
         <select
           value={platformFilter}
-          onChange={(e) => setPlatformFilter(e.target.value as any)}
+          onChange={(e) => setPlatformFilter(e.target.value as 'all' | Platform)}
           className="rounded-lg border border-white/10 bg-zinc-900 px-4 py-2 text-sm focus:outline-none"
         >
           <option value="all">All Platforms</option>

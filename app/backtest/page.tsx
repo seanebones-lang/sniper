@@ -3,16 +3,11 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
-import { runBacktest } from '@/lib/backtest/engine';
+import { runBacktest, type BacktestResult } from '@/lib/backtest/engine';
 import { availableStrategies } from '@/lib/strategies';
-
-interface BacktestResult {
-  totalTrades?: number;
-  winningTrades?: number;
-  totalPnl?: number;
-  maxDrawdown?: number;
-  trades?: Record<string, unknown>[];
-}
+import type { StrategyProposal } from '@/lib/research/grok-agent';
+import type { StrategyVariant } from '@/lib/strategies/variants';
+import { getErrorMessage } from '@/lib/error-message';
 
 interface ReplayResult {
   totalPnl?: number;
@@ -93,7 +88,7 @@ export default function BacktestPage() {
       const res = await fetch('/api/research/proposals');
       const data = await res.json();
       setProposals(data.proposals || []);
-    } catch (e) {
+    } catch {
       console.warn('Could not load proposals');
     }
   }
@@ -233,10 +228,27 @@ export default function BacktestPage() {
 
       {replayResult && (
         <div className="card mt-6">
-          <div className="font-medium mb-3">Historical Replay Result</div>
-          <pre className="text-xs bg-black p-4 rounded overflow-auto">
-            {JSON.stringify(replayResult, null, 2)}
-          </pre>
+          <div className="font-medium mb-4">Historical Replay Result</div>
+          {replayResult.message && (
+            <p className="text-sm text-zinc-400 mb-4">{replayResult.message}</p>
+          )}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-center">
+            <div>
+              <div className="text-xs text-zinc-500">Total PnL</div>
+              <div className="text-2xl font-mono text-emerald-400">${(replayResult.totalPnl ?? 0).toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-zinc-500">Trades</div>
+              <div className="text-2xl font-mono">{replayResult.trades?.length ?? 0}</div>
+            </div>
+          </div>
+          {replayResult.comparisons && replayResult.comparisons.length > 0 && (
+            <div className="mt-4 text-xs text-zinc-400 space-y-1">
+              {replayResult.comparisons.map((c, i) => (
+                <div key={i}>{JSON.stringify(c)}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

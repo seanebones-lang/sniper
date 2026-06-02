@@ -59,3 +59,10 @@
 - Existing open-source bots (study for edge ideas + anti-patterns, never copy keys or execution blindly).
 
 Add concrete API response examples, rate limit numbers, and gotcha list as you integrate clients.
+
+## Implementation Notes (June 2026)
+
+- Gamma returns `outcomePrices` and `clobTokenIds` as **JSON strings** — parse before use (`lib/clients/polymarket.ts`).
+- Order book levels must be **sorted** (bids high→low, asks low→high) for correct mid price.
+- Settings UI stores xAI key locally; env `XAI_API_KEY` overrides.
+- Full contributor task list: [CONTRIBUTING.md](../../CONTRIBUTING.md).

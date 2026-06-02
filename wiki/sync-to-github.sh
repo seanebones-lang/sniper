@@ -1,50 +1,52 @@
 #!/usr/bin/env bash
-#
-# Sync wiki/ content to the GitHub Wiki repository.
-#
-# Usage:
-#   ./wiki/sync-to-github.sh
-#
-# This script assumes you have push access to the wiki repo:
-#   git@github.com:seanebones-lang/sniper.wiki.git
-#
-# It is recommended to run this from the root of the main repo.
+# Sync wiki/*.md to GitHub Wiki repository.
+# Usage: ./wiki/sync-to-github.sh
+set -euo pipefail
 
-set -e
+REPO="${GITHUB_REPO:-seanebones-lang/sniper}"
+WIKI_URL="https://github.com/${REPO}.wiki.git"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK_DIR="$(mktemp -d)"
 
-WIKI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$WIKI_DIR/.." && pwd)"
-WIKI_REPO_URL="git@github.com:seanebones-lang/sniper.wiki.git"
-TEMP_WIKI_DIR="/tmp/sniper-wiki-$$"
+cleanup() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
 
-echo "=== Sniper Wiki Sync ==="
-
-if [ ! -d "$WIKI_DIR" ]; then
-  echo "Error: wiki/ directory not found."
-  exit 1
+echo "→ Cloning wiki from ${WIKI_URL}..."
+if git clone "$WIKI_URL" "$WORK_DIR" 2>/dev/null; then
+  echo "  Wiki repo exists."
+else
+  echo "  Wiki repo not found — initializing..."
+  mkdir -p "$WORK_DIR"
+  cd "$WORK_DIR"
+  git init
+  git remote add origin "$WIKI_URL"
+  cd - >/dev/null
 fi
 
-echo "Cloning wiki repository..."
-rm -rf "$TEMP_WIKI_DIR"
-git clone "$WIKI_REPO_URL" "$TEMP_WIKI_DIR"
+echo "→ Copying markdown files..."
+cp "$SCRIPT_DIR"/*.md "$WORK_DIR/"
+# Exclude wiki/README.md (internal instructions, not a wiki page)
+rm -f "$WORK_DIR/README.md"
 
-echo "Copying wiki content..."
-cp -r "$WIKI_DIR"/*.md "$TEMP_WIKI_DIR"/ 2>/dev/null || true
+cd "$WORK_DIR"
+git add -A
 
-cd "$TEMP_WIKI_DIR"
-
-if [ -z "$(git status --porcelain)" ]; then
-  echo "No changes to sync."
-  rm -rf "$TEMP_WIKI_DIR"
+if git diff --staged --quiet; then
+  echo "✓ Wiki is already up to date."
   exit 0
 fi
 
-echo "Committing changes..."
-git add -A
-git commit -m "Sync wiki from main repo ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+git commit -m "Sync wiki from main repo ($(date -u +%Y-%m-%d))"
+echo "→ Pushing to ${WIKI_URL}..."
+if ! git push -u origin HEAD:master 2>/dev/null && ! git push -u origin HEAD:main 2>/dev/null; then
+  echo ""
+  echo "✗ Push failed. The GitHub Wiki git repo may not exist yet."
+  echo "  1. Go to https://github.com/${REPO}/wiki"
+  echo "  2. Click 'Create the first page' and save any content"
+  echo "  3. Re-run: ./wiki/sync-to-github.sh"
+  exit 1
+fi
 
-echo "Pushing to GitHub Wiki..."
-git push origin master || git push origin main
-
-echo "Sync complete."
-rm -rf "$TEMP_WIKI_DIR"
+echo "✓ Wiki synced. View at: https://github.com/${REPO}/wiki"

@@ -68,7 +68,7 @@ export async function GET() {
     },
 
     summary: {
-      totalActiveStrategies: Object.keys(performance.byStrategy || {}).length,
+      totalActiveStrategies: performance.activeStrategies ?? 0,
       totalVariants: variants.length,
       marketsWithPoorExecution: unhealthyMarkets.length,
     },

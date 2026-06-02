@@ -24,13 +24,15 @@ export const ThresholdStrategy: Strategy = {
       };
     }
 
-    // Simple exit logic (for now just signal)
-    if (currentPrice >= threshold + targetProfit) {
+    // Simple exit logic — runner exit-engine handles most exits; this backs threshold type
+    const targetPrice = threshold * (1 + targetProfit);
+
+    if (currentPrice >= targetPrice) {
       return {
         action: 'SELL',
         price: currentPrice,
-        size: 100, // placeholder size
-        reason: `Price reached target profit ${(targetProfit*100).toFixed(1)}%`,
+        size: Math.max(10, Math.floor(config.maxSizeUsd / currentPrice)),
+        reason: `Price ${(currentPrice * 100).toFixed(1)}¢ ≥ target ${(targetPrice * 100).toFixed(1)}¢ (+${config.targetProfitPct}%)`,
         confidence: 0.65,
       };
     }

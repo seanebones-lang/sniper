@@ -191,7 +191,6 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         req.side,
         execPrice,
         finalSize,
-        true
       );
 
       // Basic position tracking for real trades (advances audit-real-2)
@@ -262,7 +261,6 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
           req.side,
           req.price,
           finalSize,
-          true
         );
       }
 

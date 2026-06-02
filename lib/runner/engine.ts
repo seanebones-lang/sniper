@@ -6,18 +6,22 @@
  * If adding significantly more (e.g. full WS strategies), consider splitting into RiskOrchestrator + EvaluationLoop.
  */
 
-import { db, strategies, signals, paperTrades, auditEvents } from '@/lib/db'; // eslint-disable-line @typescript-eslint/no-unused-vars -- strategies used via db.query.strategies (Drizzle table ref)
+import { db, signals, paperTrades, auditEvents } from '@/lib/db';
 import { getAllMarkets, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
 // TODO: Deeper Kalshi WS integration in runner (currently wired in UI only)
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
-import type { StrategyConfig } from '@/lib/strategies/types';
+import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
+import { resolveStrategyConfig, shouldUseImmediateFill } from '@/lib/strategies/run-profile';
+import { evaluateExitSignal } from '@/lib/strategies/exit-engine';
+import { getStrategyOpenPositions, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
 import { saveBookSnapshot } from '@/lib/data/historical';
+import { rankFastMovingMarkets, filterFastMovingMarkets } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -47,12 +51,67 @@ const status: RunnerStatus = {
 
 let interval: NodeJS.Timeout | null = null;
 
+/** Persist runner singleton across Next.js dev HMR / route reloads */
+type RunnerGlobal = typeof globalThis & {
+  __sniperRunner?: { status: RunnerStatus; interval: NodeJS.Timeout | null };
+};
+
+const g = globalThis as RunnerGlobal;
+if (!g.__sniperRunner) {
+  g.__sniperRunner = { status: { ...status }, interval: null };
+}
+const runnerStore = g.__sniperRunner;
+
+function syncStatusFromStore() {
+  status.running = runnerStore.status.running;
+  status.lastRun = runnerStore.status.lastRun;
+  status.signalsGenerated = runnerStore.status.signalsGenerated;
+  status.fillsExecuted = runnerStore.status.fillsExecuted;
+  interval = runnerStore.interval;
+}
+
+function persistStatus() {
+  runnerStore.status = { ...status };
+  runnerStore.interval = interval;
+}
+
+syncStatusFromStore();
+
+/** Faster loop when quick-flip strategies are active (live sports / fast markets). */
+export async function getRunnerIntervalMs(): Promise<number> {
+  const activeStrategies = await db.query.strategies.findMany({
+    where: (s, { eq }) => eq(s.isActive, true),
+  });
+
+  for (const strat of activeStrategies) {
+    const config = resolveStrategyConfig(strat.config as unknown as StrategyConfig);
+    if (config.tradingGoal === 'quick-flip' || strat.type === 'live-quick-flip') {
+      return 4000;
+    }
+  }
+  return 12000;
+}
+
 export function getRunnerStatus(): RunnerStatus {
+  syncStatusFromStore();
   return { ...status };
+}
+
+/** Reset in-process counters for a new paper run (DB unchanged). */
+export function resetRunnerSessionCounters() {
+  syncStatusFromStore();
+  status.signalsGenerated = 0;
+  status.fillsExecuted = 0;
+  status.lastRun = null;
+  persistStatus();
 }
 
 export async function startRunner(intervalMs = 15000) {
   if (status.running) return;
+
+  const { applyPaperBudgetToRiskManager } = await import('@/lib/paper/portfolio');
+  await applyPaperBudgetToRiskManager();
+  await hydratePaperSimulatorFromDb();
 
   status.running = true;
   console.log('[Runner] Starting 24/7 paper runner...');
@@ -111,11 +170,13 @@ export async function startRunner(intervalMs = 15000) {
 }
 
 export function stopRunner() {
+  syncStatusFromStore();
   if (interval) {
     clearInterval(interval);
     interval = null;
   }
   status.running = false;
+  persistStatus();
   console.log('[Runner] Stopped');
   alerts.runnerStopped();
 }
@@ -188,7 +249,11 @@ export async function runOnce() {
     const strategyImpl = getStrategy(stratRow.type);
     if (!strategyImpl) continue;
 
-    const config = stratRow.config as unknown as StrategyConfig;
+    const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
+    const openPositions = await getStrategyOpenPositions(stratRow.id);
+    const openByMarket = new Map(
+      openPositions.map((p) => [`${p.platform}:${p.marketExternalId}`, p]),
+    );
 
     // === Risk Mode Behavioral Adaptation ===
     const currentRiskMode = riskModeManager.getCurrentMode();
@@ -254,10 +319,30 @@ export async function runOnce() {
       };
     }
 
-    // Reduce market sample based on risk mode
-    const relevantMarkets = markets
-      .filter(m => m.status === 'open')
-      .slice(0, marketEvaluationLimit);
+    // Reduce market sample based on risk mode; quick-flip strategies prefer live fast markets
+    let openPool = markets.filter((m) => m.status === 'open');
+
+    if (config.tradingGoal === 'quick-flip' || config.liveMarketsOnly) {
+      const fast = filterFastMovingMarkets(openPool);
+      openPool = fast.length > 0 ? rankFastMovingMarkets(fast) : rankFastMovingMarkets(openPool);
+    }
+
+    const relevantMarkets = openPool.slice(0, marketEvaluationLimit);
+
+    // Always evaluate markets where this strategy has open positions (for exits)
+    const marketKeys = new Set(relevantMarkets.map((m) => `${m.platform}:${m.externalId}`));
+    for (const pos of openPositions) {
+      const key = `${pos.platform}:${pos.marketExternalId}`;
+      if (!marketKeys.has(key)) {
+        const found = markets.find(
+          (m) => m.platform === pos.platform && m.externalId === pos.marketExternalId,
+        );
+        if (found) {
+          relevantMarkets.push(found);
+          marketKeys.add(key);
+        }
+      }
+    }
 
     for (const market of relevantMarkets) {
       try {
@@ -304,13 +389,46 @@ export async function runOnce() {
           } as unknown as Parameters<typeof saveBookSnapshot>[0]);
         }
 
-        const signal = strategyImpl.evaluate(
-          { market, book, currentPrice },
-          config
-        );
+        const posKey = `${market.platform}:${market.externalId}`;
+        const openPos = openByMarket.get(posKey);
 
-        if (signal && signal.action !== 'HOLD') {
+        // === 1. Exit open positions first (take profit / stop loss / max hold) ===
+        let signal: StrategySignal | null = null;
+        let isExitSignal = false;
+
+        if (openPos && currentPrice) {
+          signal = evaluateExitSignal(
+            openPos,
+            currentPrice,
+            book?.spread,
+            book?.mid ?? currentPrice,
+            config,
+          );
+          isExitSignal = signal?.action === 'SELL';
+        }
+
+        // === 2. Entry signals only when flat or scale-in allowed ===
+        if (!signal) {
+          if (openPos && !config.allowScaleIn) {
+            continue;
+          }
+          signal = strategyImpl.evaluate(
+            { market, book, currentPrice },
+            config,
+          );
+          if (signal?.action === 'SELL') {
+            isExitSignal = true;
+          }
+        }
+
+        if (signal && signal.action !== 'HOLD' && signal.action !== 'CANCEL') {
           signalsThisRun++;
+
+          let orderSize = signal.size;
+          if (signal.action === 'SELL' && openPos) {
+            orderSize = Math.min(orderSize, Math.floor(openPos.netSize));
+            if (orderSize <= 0) continue;
+          }
 
           // === ADVANCED RISK SIZING (applied to both paper and real) ===
           const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
@@ -324,7 +442,9 @@ export async function runOnce() {
             currentPrice: signal.price,
           });
 
-          if (riskDecision.allowedSize < 5) {
+          const minAllowedUsd =
+            config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip' ? 0.5 : 5;
+          if (riskDecision.allowedSize < minAllowedUsd) {
             await logAudit('runner_signal_rejected_risk', {
               strategy: stratRow.name,
               market: market.externalId,
@@ -345,7 +465,9 @@ export async function runOnce() {
             multiplier: allocatorMultiplier,
           });
 
-          const finalSize = Math.min(signal.size, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
+          const finalSize = Math.min(orderSize, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
+
+          if (finalSize < 1) continue;
 
           // Persist signal (with risk-adjusted size)
           let sizeReason = '';
@@ -411,13 +533,21 @@ export async function runOnce() {
               });
             }
           } else {
-            // Paper execution (default safe path)
+            const useImmediate = shouldUseImmediateFill(
+              config,
+              signal.action as 'BUY' | 'SELL',
+              isExitSignal,
+            );
             const fill = paperSimulator.snipe({
               market,
               side: signal.action as 'BUY' | 'SELL',
               price: signal.price,
               size: finalSize,
               reason: `[${stratRow.name}] ${signal.reason} (risk-adjusted)`,
+              book,
+              immediate: useImmediate,
+              isExit: isExitSignal,
+              minFillProbability: config.minFillProbability,
             });
 
             if (fill) {
@@ -454,6 +584,7 @@ export async function runOnce() {
   status.lastRun = new Date().toISOString();
   status.signalsGenerated += signalsThisRun;
   status.fillsExecuted += fillsThisRun;
+  persistStatus();
 
   if (signalsThisRun > 0) {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
@@ -519,8 +650,9 @@ export async function runOnce() {
   }
 
   // === Automated Intelligence Layer: Periodic Grok Analysis with Concrete Actions ===
-  // Trigger roughly every 6-8 hours when enabled (more deterministic than pure random)
-  const shouldRunGrokAnalysis = process.env.ENABLE_GROK_RESEARCH_AGENT === 'true' &&
+  const { getGrokResearchEnabled } = await import('@/lib/settings/keys');
+  const grokResearchEnabled = await getGrokResearchEnabled();
+  const shouldRunGrokAnalysis = grokResearchEnabled &&
     (Math.random() < 0.008 || (Date.now() % (6 * 60 * 60 * 1000) < 120000)); // ~every 6h or on lucky runs
 
   if (shouldRunGrokAnalysis) {

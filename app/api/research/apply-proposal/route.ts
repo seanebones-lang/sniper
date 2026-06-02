@@ -1,11 +1,31 @@
 import { NextResponse } from 'next/server';
 import { createVariantFromProposal } from '@/lib/strategies/variants';
-import { replayStrategyOnHistory } from '@/lib/data/historical';
+import { replayStrategyOnHistory, type ReplayResult } from '@/lib/data/historical';
 import { getStrategy } from '@/lib/strategies';
+import type { StrategyProposal } from '@/lib/research/grok-agent';
+import type { Platform } from '@/lib/types';
+
+interface MarketComparison {
+  market: { platform: Platform; marketExternalId: string };
+  base: ReplayResult;
+  variant: ReplayResult;
+  deltaPnl: number;
+}
+
+const DEFAULT_CONFIG = {
+  maxSizeUsd: 100,
+  targetProfitPct: 2.5,
+  cooldownSeconds: 300,
+  minSpreadPct: 1.8,
+  entryThreshold: 0.46,
+};
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { proposal, autoCompare = true } = body;
+  const { proposal, autoCompare = true } = body as {
+    proposal?: StrategyProposal;
+    autoCompare?: boolean;
+  };
 
   if (!proposal) {
     return NextResponse.json({ error: 'Proposal required' }, { status: 400 });
@@ -13,41 +33,39 @@ export async function POST(req: Request) {
 
   const variant = createVariantFromProposal(proposal);
 
-  let comparisons: Record<string, unknown>[] | null = null;
+  let comparisons: MarketComparison[] | null = null;
 
   if (autoCompare) {
-    // Automatically run head-to-head comparison on a few representative short-term crypto markets
-    // In production this list would be dynamic / from watchlist
-    const testMarkets = [
-      { platform: 'polymarket', marketExternalId: '0x1234...example-btc-15m' }, // placeholder - real system would use actual active markets
+    const testMarkets: Array<{ platform: Platform; marketExternalId: string }> = [
+      { platform: 'polymarket', marketExternalId: '0x1234...example-btc-15m' },
     ];
 
     const baseStrategy = getStrategy(proposal.strategyId);
-    const comparisonsResults: Record<string, unknown>[] = [];
+    const comparisonsResults: MarketComparison[] = [];
 
     for (const m of testMarkets) {
+      if (!baseStrategy) continue;
+
       try {
         const to = new Date();
         const from = new Date(Date.now() - 24 * 3600 * 1000);
 
-        // Base strategy
         const baseResult = await replayStrategyOnHistory({
           platform: m.platform,
           marketExternalId: m.marketExternalId,
           from,
           to,
-          strategy: baseStrategy!,
-          config: { maxSizeUsd: 100, targetProfitPct: 2.5, cooldownSeconds: 300, minSpreadPct: 1.8, entryThreshold: 0.46 },
+          strategy: baseStrategy,
+          config: DEFAULT_CONFIG,
         });
 
-        // Variant (apply overrides)
-        const variantConfig = { ...{ maxSizeUsd: 100, targetProfitPct: 2.5, cooldownSeconds: 300, minSpreadPct: 1.8, entryThreshold: 0.46 }, ...proposal.suggestedChange };
+        const variantConfig = { ...DEFAULT_CONFIG, ...proposal.suggestedChange };
         const variantResult = await replayStrategyOnHistory({
           platform: m.platform,
           marketExternalId: m.marketExternalId,
           from,
           to,
-          strategy: baseStrategy!,
+          strategy: baseStrategy,
           config: variantConfig,
         });
 
@@ -65,12 +83,12 @@ export async function POST(req: Request) {
     comparisons = comparisonsResults;
   }
 
-  return NextResponse.json({ 
-    success: true, 
+  return NextResponse.json({
+    success: true,
     variant,
     comparisons,
-    message: comparisons 
-      ? 'Variant created and auto-compared against base strategy on historical data.' 
-      : 'Variant created from proposal.'
+    message: comparisons
+      ? 'Variant created and auto-compared against base strategy on historical data.'
+      : 'Variant created from proposal.',
   });
 }

@@ -1,22 +1,57 @@
 # Data Model — Sniper MVP
 
-See `lib/db/schema.ts` for the authoritative Drizzle source of truth.
+**Authoritative source:** `lib/db/schema.ts` (Drizzle ORM).
+
+**Updated:** June 2026.
 
 ## Core Entities
 
-- **markets**: Canonical cache of discovered markets from both platforms. Unique on (platform, external_id).
-- **strategies**: User-configured automated rules. `config` is flexible JSON for now (MVP). `paper_only` flag is respected by executor.
-- **signals**: Immutable record of every "buy/sell here" decision from the strategy engine.
-- **paper_trades** / **real_trades**: Execution records. Separate tables for safety and easy analysis.
-- **positions**: Current aggregated exposure (updated on fills + mark-to-market).
-- **audit_events**: Everything important that happened (signal gen, risk rejection, kill switch, config change, etc.).
+| Table | Purpose |
+|-------|---------|
+| `markets` | Canonical market cache. Unique on `(platform, external_id)`. |
+| `strategies` | User-configured rules. `config` JSON + `paper_only` flag. |
+| `signals` | Immutable strategy decisions (BUY/SELL/CANCEL). |
+| `paper_trades` | Simulated fills — separate from real for safety. |
+| `real_trades` | Live execution records (pending/filled/rejected/cancelled). |
+| `positions` | Aggregated exposure *(schema exists; not fully wired)*. |
+| `audit_events` | Signals, risk rejections, Grok actions, runner events. |
+| `market_snapshots` | High-res order book snapshots for research/replay. |
 
-## Future (post-MVP)
+## Important IDs
 
-- performance_snapshots (periodic rollups for charts)
-- strategy_runs (session tracking)
-- external_market_links (for cross-arb manual/ heuristic pairs)
+- **Polymarket `external_id`:** Must be the **CLOB token ID**, not the Gamma numeric market id. Order books fail with wrong id.
+- **`signals.market_id`:** References `markets.id` (UUID). **Known gap:** runner may pass API catalog id instead of DB UUID — see [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-## Zod Contracts (to be added in lib/types or contracts/)
+## Snapshot Features (`market_snapshots`)
 
-All API boundaries and strategy outputs should be validated with Zod. Export key schemas to `specs/001-sniper-mvp/contracts/` as JSON for docs if useful.
+Collected by runner each cycle when book data exists:
+
+- mid, spread, best bid/ask, depth aggregates
+- imbalance, micro-price, pressure
+- `top_levels` JSON (bids/asks for replay)
+- optional regime/volatility in `top_levels.extra`
+
+Used by:
+
+- `replayStrategyOnHistory()` in `lib/data/historical.ts`
+- Grok research agent context
+- Future ML / feature engineering
+
+## API Validation
+
+Key routes use **Zod** schemas:
+
+- `POST /api/paper/fill`
+- `POST /api/settings`
+
+Other routes accept JSON with runtime checks — add Zod as you extend APIs.
+
+## Future (Post-MVP)
+
+- `performance_snapshots` — periodic rollups for charts
+- `strategy_runs` — session tracking
+- `strategy_variants` — persist variants (currently in-memory)
+- `external_market_links` — cross-venue arb pairs
+- Formal migration files (today: `drizzle-kit push` primary)
+
+See [docs/STATUS.md](../../docs/STATUS.md) for the full backlog.

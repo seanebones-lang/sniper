@@ -6,6 +6,20 @@ export interface StrategyConfig {
   targetProfitPct: number;     // e.g. 2.5
   cooldownSeconds: number;
 
+  // Run profile (paper runner)
+  tradingStyle?: 'aggressive' | 'balanced' | 'conservative';
+  tradingGoal?: 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing';
+  stopLossPct?: number;
+  maxHoldSeconds?: number;
+  allowScaleIn?: boolean;
+
+  /** Quick-flip: sell when price reaches entry × this multiple (default 2.5 = $1 → ~$2.50) */
+  targetProfitMultiple?: number;
+  /** Quick-flip: sell when position USD value reaches this (overrides multiple if set) */
+  targetExitValueUsd?: number;
+  /** When true, only trade markets flagged as fast-moving / live */
+  liveMarketsOnly?: boolean;
+
   // Strategy-specific
   minSpreadPct?: number;       // for spread-scalper
   entryThreshold?: number;     // for threshold strategy
@@ -16,6 +30,7 @@ export interface StrategyContext {
   market: Market;
   book?: OrderBook;
   currentPrice?: number;
+  regime?: string;
 }
 
 export interface StrategySignal {

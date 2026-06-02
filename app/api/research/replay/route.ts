@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/error-message';
 import { replayStrategyOnHistory } from '@/lib/data/historical';
 import { getStrategy } from '@/lib/strategies';
 import { getAllVariants, applyVariantConfig } from '@/lib/strategies/variants';
+import { resolveStrategyConfig } from '@/lib/strategies/run-profile';
+import type { StrategyConfig } from '@/lib/strategies/types';
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -18,13 +21,21 @@ export async function POST(req: Request) {
   }
 
   const strategy = baseStrategy;
-  let config = {
-    maxSizeUsd: 100,
-    targetProfitPct: 2.5,
-    cooldownSeconds: 300,
-    minSpreadPct: 1.8,
-    entryThreshold: 0.46,
-  };
+  let config: StrategyConfig = resolveStrategyConfig({
+    maxSizeUsd: body.config?.maxSizeUsd ?? 1,
+    targetProfitPct: body.config?.targetProfitPct ?? 150,
+    cooldownSeconds: body.config?.cooldownSeconds ?? 15,
+    tradingGoal: body.config?.tradingGoal ?? (strategyType === 'live-quick-flip' ? 'quick-flip' : 'spread-capture'),
+    tradingStyle: body.config?.tradingStyle ?? 'aggressive',
+    targetProfitMultiple: body.config?.targetProfitMultiple ?? 2.5,
+    targetExitValueUsd: body.config?.targetExitValueUsd ?? 2.5,
+    liveMarketsOnly: body.config?.liveMarketsOnly ?? strategyType === 'live-quick-flip',
+    minSpreadPct: body.config?.minSpreadPct ?? 1.8,
+    entryThreshold: body.config?.entryThreshold ?? 0.46,
+    stopLossPct: body.config?.stopLossPct,
+    maxHoldSeconds: body.config?.maxHoldSeconds,
+    ...(body.config ?? {}),
+  });
 
   // Apply variant if provided
   if (variantId) {

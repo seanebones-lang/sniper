@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+/blob-report/
 
 # next.js
 /.next/
@@ -42,7 +45,7 @@
 # Local DB / logs / data
 *.db
 *.log
-data/
+/data/
 db/data/
 *.sqlite
 *.sqlite3

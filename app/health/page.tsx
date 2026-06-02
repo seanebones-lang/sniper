@@ -3,40 +3,33 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
-
-interface HealthData {
-  timestamp: string;
-  recentPerformance: Record<string, unknown>;
-  activeVariants: Record<string, unknown>[];
-  risk: Record<string, unknown>;
-  execution: Record<string, unknown>;
-  aiRecommendations: Record<string, unknown>[];
-  temporaryAdjustments: Record<string, unknown>;
-  summary: Record<string, unknown>;
-}
+import type { HealthResponse } from '@/lib/health-types';
 
 export default function StrategyHealthPage() {
-  const [health, setHealth] = useState<HealthData | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function loadHealth() {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/health');
-      const data = await res.json();
-      setHealth(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-   
   useEffect(() => {
-    loadHealth();
-    const interval = setInterval(loadHealth, 30000); // refresh every 30s
-    return () => clearInterval(interval);
+    let cancelled = false;
+
+    async function fetchHealth() {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json() as HealthResponse;
+        if (!cancelled) setHealth(data);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void fetchHealth();
+    const interval = setInterval(() => { void fetchHealth(); }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   return (
@@ -57,23 +50,21 @@ export default function StrategyHealthPage() {
             <div className="font-mono text-sm">{new Date(health.timestamp).toLocaleString()}</div>
           </div>
 
-          {/* Risk Mode Banner */}
-          <div className={`card border-2 ${health.risk?.mode === 'EMERGENCY' ? 'border-red-600 bg-red-950/40' : 
+          <div className={`card border-2 ${health.risk?.mode === 'EMERGENCY' ? 'border-red-600 bg-red-950/40' :
             health.risk?.mode === 'DEFENSIVE' ? 'border-amber-500 bg-amber-950/30' : 'border-emerald-600'}`}>
             <div className="flex items-center gap-3">
               <div className="text-lg font-semibold">Current Risk Mode:</div>
               <div className={`px-4 py-1 rounded-full text-sm font-bold tracking-wider
-                ${health.risk?.mode === 'EMERGENCY' ? 'bg-red-600 text-white' : 
+                ${health.risk?.mode === 'EMERGENCY' ? 'bg-red-600 text-white' :
                   health.risk?.mode === 'DEFENSIVE' ? 'bg-amber-500 text-black' : 'bg-emerald-600 text-white'}`}>
-                {health.risk?.mode as string}
+                {health.risk?.mode}
               </div>
               <div className="text-sm text-zinc-400 ml-4">
-                Multiplier: <span className="font-mono text-white">{(health.risk?.riskMultiplier as number | undefined)?.toFixed(2)}x</span>
+                Multiplier: <span className="font-mono text-white">{health.risk?.riskMultiplier?.toFixed(2)}x</span>
               </div>
             </div>
-            <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason as string}</div>
+            <div className="mt-2 text-sm text-zinc-300">{health.risk?.reason}</div>
 
-            {/* Current Active Restrictions */}
             {health.risk?.mode !== 'NORMAL' && (
               <div className="mt-4 pt-4 border-t border-white/10">
                 <div className="font-medium text-sm mb-2">Current Active Restrictions (Risk Mode Effects):</div>
@@ -99,12 +90,10 @@ export default function StrategyHealthPage() {
                   These restrictions are applied automatically by the runner based on current system health and edge decay signals.
                 </div>
 
-                {/* Currently Allowed Strategies Explanation */}
                 <div className="mt-3 text-sm text-zinc-300">
                   <strong>Currently Allowed Strategies:</strong><br />
-                  {health.risk?.mode === 'NORMAL' && "All active strategies are eligible for evaluation."}
-                  {health.risk?.mode === 'DEFENSIVE' && "Weaker / simpler strategies are being deprioritized or skipped. Only stronger, more consistent edges are preferred."}
-                  {health.risk?.mode === 'EMERGENCY' && "Only the most proven, highest edge-quality strategies are active (mainly OrderBook Imbalance + Resolution Proximity). Everything else is effectively paused."}
+                  {health.risk?.mode === 'DEFENSIVE' && 'Weaker / simpler strategies are being deprioritized or skipped. Only stronger, more consistent edges are preferred.'}
+                  {health.risk?.mode === 'EMERGENCY' && 'Only the most proven, highest edge-quality strategies are active (mainly OrderBook Imbalance + Resolution Proximity). Everything else is effectively paused.'}
                 </div>
               </div>
             )}
@@ -122,10 +111,10 @@ export default function StrategyHealthPage() {
               <div className="font-medium mb-3">Active Variants</div>
               {health.activeVariants?.length > 0 ? (
                 <div className="space-y-2 text-sm">
-                  {health.activeVariants.map((v: Record<string, unknown>, i: number) => (
-                    <div key={i} className="border border-white/10 p-3 rounded">
-                      <div className="font-medium">{v.name as string}</div>
-                      <div className="text-xs text-zinc-400">{v.description as string}</div>
+                  {health.activeVariants.map((v) => (
+                    <div key={v.id} className="border border-white/10 p-3 rounded">
+                      <div className="font-medium">{v.name}</div>
+                      <div className="text-xs text-zinc-400">{v.description}</div>
                     </div>
                   ))}
                 </div>
@@ -138,20 +127,19 @@ export default function StrategyHealthPage() {
           <div className="card">
             <div className="font-medium mb-2">Execution Health</div>
             <div className="text-sm text-zinc-300">
-              System Health Score: <span className="font-mono">{health.execution?.systemHealthScore as number}</span><br />
-              Avg Slippage (recent): <span className="font-mono">{health.execution?.averageSlippage as number}</span><br />
-              Unhealthy Markets: {((health.execution?.unhealthyMarkets as unknown) as Record<string, unknown>[])?.length || 0}
+              System Health Score: <span className="font-mono">{health.execution?.systemHealthScore}</span><br />
+              Avg Slippage (recent): <span className="font-mono">{health.execution?.averageSlippage}</span><br />
+              Unhealthy Markets: {health.execution?.unhealthyMarkets?.length || 0}
             </div>
           </div>
 
-          {/* Active Temporary Adjustments from Grok */}
           <div className="card">
             <div className="font-medium mb-2">Active Temporary Adjustments (from Grok)</div>
-            {((health.temporaryAdjustments?.active as unknown) as Record<string, unknown>[])?.length > 0 ? (
+            {health.temporaryAdjustments?.active?.length > 0 ? (
               <div className="text-sm text-amber-300 space-y-1">
-                {((health.temporaryAdjustments.active as unknown) as Record<string, unknown>[]).map((adj: Record<string, unknown>, i: number) => (
+                {health.temporaryAdjustments.active.map((adj, i) => (
                   <div key={i}>
-                    {adj.type as string}{adj.target ? ` (${adj.target})` : ''}: {adj.value as number | string} — {adj.reason as string} (expires in ~{adj.expiresAfterRuns as number} runs)
+                    {adj.type}{adj.target ? ` (${adj.target})` : ''}: {adj.value} — {adj.reason} (expires in ~{adj.expiresAfterRuns} runs)
                   </div>
                 ))}
               </div>
@@ -163,29 +151,28 @@ export default function StrategyHealthPage() {
             </div>
           </div>
 
-          {/* Recent AI Recommendations */}
           <div className="card">
             <div className="font-medium mb-3">Recent Grok Recommendations (Automated Intelligence)</div>
             {health.aiRecommendations && health.aiRecommendations.length > 0 ? (
               <div className="space-y-4">
-                {((health.aiRecommendations as unknown) as Record<string, unknown>[]).map((rec: Record<string, unknown>, idx: number) => (
-                  <div key={idx} className="border border-white/10 rounded p-3 text-sm">
+                {health.aiRecommendations.map((rec) => (
+                  <div key={rec.index} className="border border-white/10 rounded p-3 text-sm">
                     <div className="flex justify-between items-start">
                       <div className="text-xs text-zinc-500">
-                        {new Date(rec.timestamp as string).toLocaleString()} • Mode: {rec.riskMode as string}
+                        {new Date(rec.timestamp).toLocaleString()} • Mode: {rec.riskMode}
                       </div>
-                      <div className={`text-[10px] px-2 py-0.5 rounded ${(rec.status as string) === 'applied' || (rec.status as string) === 'auto_applied' ? 'bg-emerald-900 text-emerald-300' : (rec.status as string) === 'ignored' ? 'bg-zinc-800' : 'bg-amber-900 text-amber-300'}`}>
-                        {(rec.status as string) || 'proposed'}
+                      <div className={`text-[10px] px-2 py-0.5 rounded ${rec.status === 'applied' || rec.status === 'auto_applied' ? 'bg-emerald-900 text-emerald-300' : rec.status === 'ignored' ? 'bg-zinc-800' : 'bg-amber-900 text-amber-300'}`}>
+                        {rec.status || 'proposed'}
                       </div>
                     </div>
 
                     <div className="whitespace-pre-wrap text-zinc-200 text-xs mt-2">
-                      {(rec.rawText as string).length > 550 ? (rec.rawText as string).slice(0, 550) + '...' : (rec.rawText as string)}
+                      {rec.rawText.length > 550 ? rec.rawText.slice(0, 550) + '...' : rec.rawText}
                     </div>
 
-                    {((rec.parsedActions as unknown) as Record<string, unknown>[])?.length > 0 && (
+                    {rec.parsedActions?.length > 0 && (
                       <div className="mt-2 text-[10px] text-emerald-400">
-                        Parsed actions: {((rec.parsedActions as unknown) as Record<string, unknown>[] || []).map((a: Record<string, unknown>) => `${a.action as string}(${a.target as string})`).join(', ')}
+                        Parsed actions: {rec.parsedActions.map((a) => `${a.action}(${a.target})`).join(', ')}
                       </div>
                     )}
 
@@ -218,8 +205,8 @@ export default function StrategyHealthPage() {
                       </div>
                     )}
 
-                    {(rec.outcomeNote as string) && (
-                      <div className="mt-2 text-[10px] text-zinc-400">Note: {rec.outcomeNote as string}</div>
+                    {rec.outcomeNote && (
+                      <div className="mt-2 text-[10px] text-zinc-400">Note: {rec.outcomeNote}</div>
                     )}
                   </div>
                 ))}
@@ -232,8 +219,8 @@ export default function StrategyHealthPage() {
           <div className="card">
             <div className="font-medium mb-2">System Summary</div>
             <div className="text-sm text-zinc-300">
-              Active Strategies: {health.summary?.totalActiveStrategies as number}<br />
-              Total Variants: {health.summary?.totalVariants as number}
+              Active Strategies: {health.summary?.totalActiveStrategies}<br />
+              Total Variants: {health.summary?.totalVariants}
             </div>
             <div className="text-[10px] text-zinc-500 mt-4">
               Risk mode now drives real behavioral changes:<br />

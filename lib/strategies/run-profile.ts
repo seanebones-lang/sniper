@@ -1,0 +1,131 @@
+import type { StrategyConfig } from './types';
+
+export type TradingStyle = 'aggressive' | 'balanced' | 'conservative';
+export type TradingGoal = 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing';
+
+export interface ResolvedStrategyConfig extends StrategyConfig {
+  tradingStyle: TradingStyle;
+  tradingGoal: TradingGoal;
+  stopLossPct: number;
+  maxHoldSeconds: number;
+  allowScaleIn: boolean;
+  targetProfitMultiple: number;
+  targetExitValueUsd: number;
+  liveMarketsOnly: boolean;
+  /** Passive fill probability floor for paper execution (0–1) */
+  minFillProbability: number;
+  /** Use immediate (aggressive) paper fills for entries */
+  aggressiveEntryFills: boolean;
+  /** Use immediate fills for exit (take-profit / stop-loss) orders */
+  aggressiveExitFills: boolean;
+}
+
+const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
+  aggressive: {
+    minFillProbability: 0.55,
+    aggressiveEntryFills: true,
+    aggressiveExitFills: true,
+    cooldownSeconds: 60,
+  },
+  balanced: {
+    minFillProbability: 0.35,
+    aggressiveEntryFills: false,
+    aggressiveExitFills: true,
+    cooldownSeconds: 180,
+  },
+  conservative: {
+    minFillProbability: 0.25,
+    aggressiveEntryFills: false,
+    aggressiveExitFills: false,
+    cooldownSeconds: 300,
+  },
+};
+
+const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
+  'quick-flip': {
+    maxSizeUsd: 1,
+    targetProfitPct: 150,
+    targetProfitMultiple: 2.5,
+    targetExitValueUsd: 2.5,
+    stopLossPct: 12,
+    maxHoldSeconds: 90,
+    allowScaleIn: false,
+    cooldownSeconds: 15,
+    liveMarketsOnly: true,
+    minFillProbability: 0.6,
+    aggressiveEntryFills: true,
+    aggressiveExitFills: true,
+  },
+  'spread-capture': {
+    targetProfitPct: 2.5,
+    stopLossPct: 3,
+    maxHoldSeconds: 600,
+    allowScaleIn: false,
+  },
+  'dip-buy': {
+    targetProfitPct: 4,
+    stopLossPct: 5,
+    maxHoldSeconds: 3600,
+    allowScaleIn: true,
+  },
+  swing: {
+    targetProfitPct: 8,
+    stopLossPct: 6,
+    maxHoldSeconds: 86400,
+    allowScaleIn: true,
+  },
+};
+
+export const TRADING_STYLE_OPTIONS: Array<{ id: TradingStyle; label: string; description: string }> = [
+  { id: 'aggressive', label: 'Aggressive', description: 'Faster fills, shorter cooldowns, tighter exits.' },
+  { id: 'balanced', label: 'Balanced', description: 'Default — mix of passive entries and firm exits.' },
+  { id: 'conservative', label: 'Conservative', description: 'Passive fills, longer holds, wider stops.' },
+];
+
+export const TRADING_GOAL_OPTIONS: Array<{ id: TradingGoal; label: string; description: string }> = [
+  { id: 'quick-flip', label: 'Quick flips', description: '$1 in, sell at 2.5× (~$2.50) on live fast-moving markets.' },
+  { id: 'spread-capture', label: 'Spread capture', description: 'Enter on wide spreads, exit when spread narrows or target hit.' },
+  { id: 'dip-buy', label: 'Buy the dip', description: 'Enter on cheap prices, hold for larger bounce.' },
+  { id: 'swing', label: 'Swing', description: 'Fewer trades, wider profit targets, longer holds.' },
+];
+
+export function resolveStrategyConfig(raw: StrategyConfig): ResolvedStrategyConfig {
+  const style = (raw.tradingStyle as TradingStyle) ?? 'balanced';
+  const goal = (raw.tradingGoal as TradingGoal) ?? 'spread-capture';
+
+  const goalDefaults = GOAL_DEFAULTS[goal];
+  const styleDefaults = STYLE_DEFAULTS[style];
+  const baseMaxSize = raw.maxSizeUsd ?? goalDefaults.maxSizeUsd ?? 100;
+
+  return {
+    minFillProbability: 0.35,
+    aggressiveEntryFills: false,
+    aggressiveExitFills: true,
+    ...styleDefaults,
+    ...goalDefaults,
+    ...raw,
+    tradingStyle: style,
+    tradingGoal: goal,
+    maxSizeUsd: baseMaxSize,
+    targetProfitPct: raw.targetProfitPct ?? goalDefaults.targetProfitPct ?? 2.5,
+    cooldownSeconds: raw.cooldownSeconds ?? styleDefaults.cooldownSeconds ?? goalDefaults.cooldownSeconds ?? 180,
+    stopLossPct: raw.stopLossPct ?? goalDefaults.stopLossPct ?? 3,
+    maxHoldSeconds: raw.maxHoldSeconds ?? goalDefaults.maxHoldSeconds ?? 600,
+    allowScaleIn: raw.allowScaleIn ?? goalDefaults.allowScaleIn ?? false,
+    targetProfitMultiple: raw.targetProfitMultiple ?? goalDefaults.targetProfitMultiple ?? 0,
+    targetExitValueUsd:
+      raw.targetExitValueUsd ??
+      goalDefaults.targetExitValueUsd ??
+      baseMaxSize * (goalDefaults.targetProfitMultiple ?? 0),
+    liveMarketsOnly: raw.liveMarketsOnly ?? goalDefaults.liveMarketsOnly ?? false,
+  };
+}
+
+export function shouldUseImmediateFill(
+  config: ResolvedStrategyConfig,
+  action: 'BUY' | 'SELL',
+  isExit: boolean,
+): boolean {
+  if (isExit) return config.aggressiveExitFills;
+  return config.aggressiveEntryFills;
+}

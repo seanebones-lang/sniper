@@ -4,7 +4,7 @@
  * Later phases will improve slippage, partial fills, and latency modeling.
  */
 
-import type { Market } from '../types';
+import type { Market, OrderBook } from '../types';
 import { executionManager } from './execution-manager';
 
 export interface PaperFill {
@@ -33,6 +33,14 @@ export interface SnipeRequest {
   price: number;
   size: number;
   reason: string;
+  /** Order book context for ExecutionManager (runner provides this). */
+  book?: OrderBook | null;
+  /** Manual UI fills bypass ExecutionManager gating and always execute immediately. */
+  immediate?: boolean;
+  /** Exit orders (take profit / stop loss) — prefer immediate fill. */
+  isExit?: boolean;
+  /** Override minimum passive fill probability (0–1). */
+  minFillProbability?: number;
 }
 
 const FEE_RATE = 0.0005;
@@ -45,17 +53,38 @@ export class PaperSimulator {
    * Core snipe method. Now has much more realistic passive fill behavior.
    */
   snipe(req: SnipeRequest): PaperFill | null {
-    const { market, side, price, size, reason } = req;
+    const {
+      market, side, price, size, reason, book = null,
+      immediate = false, isExit = false, minFillProbability,
+    } = req;
 
     if (size <= 0 || price <= 0 || price >= 1) {
       console.warn('[PaperSimulator] Invalid snipe params');
       return null;
     }
 
+    // Exits and explicit immediate fills always execute (cap sell to open long)
+    if (immediate || isExit) {
+      const pos = this.positions.get(`${market.platform}:${market.externalId}`);
+      if (side === 'SELL' && pos && pos.size > 0) {
+        const capped = Math.min(size, pos.size);
+        if (capped <= 0) {
+          console.warn(`[PaperSimulator] No long position to sell on ${market.externalId}`);
+          return null;
+        }
+        return this._recordAggressiveFill(market, side, price, capped, reason);
+      }
+      if (side === 'SELL' && (!pos || pos.size <= 0)) {
+        console.warn(`[PaperSimulator] SELL rejected — no open long on ${market.externalId}`);
+        return null;
+      }
+      return this._recordAggressiveFill(market, side, price, size, reason);
+    }
+
     // Get current execution decision
     const decision = executionManager.decideExecution(
       { action: side, price, size, reason },
-      null,
+      book,
       {
         regime: 'normal',
         recentImbalance: 0.05,
@@ -82,11 +111,15 @@ export class PaperSimulator {
       const imbalanceBonus = side === 'BUY' ? Math.max(0, imbalance) * 0.6 : Math.max(0, -imbalance) * 0.6;
 
       fillProbability = Math.min(0.92, 0.35 + imbalanceBonus + (regimeFactor - 1) * 0.2);
+      if (minFillProbability != null) {
+        fillProbability = Math.max(fillProbability, minFillProbability);
+      }
 
       // Simulate partial fills on passive orders
       const fillSize = size * fillProbability;
 
-      if (fillSize < size * 0.15) {
+      const minFillRatio = minFillProbability != null ? Math.min(0.15, minFillProbability * 0.4) : 0.15;
+      if (fillSize < size * minFillRatio) {
         // Too low probability — treat as no fill for now (realistic for passive in bad conditions)
         console.log(`[PaperSimulator] Passive order on ${market.externalId} had low fill probability (${(fillProbability * 100).toFixed(1)}%) — no fill this cycle`);
         return null;
@@ -111,7 +144,7 @@ export class PaperSimulator {
       this.fills.push(fill);
       this._updatePosition(fill);
 
-      const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size, false);
+      const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size);
       const { adverseSelectionLikely } = executionManager.recordFill(orderId, execPrice, fillSize);
 
       if (adverseSelectionLikely) {
@@ -132,27 +165,37 @@ export class PaperSimulator {
       return null;
     }
 
-    // Fallback aggressive path
-    const fee = size * execPrice * FEE_RATE;
+    return this._recordAggressiveFill(market, side, execPrice, size, `${reason} | ${executionType}`, executionType);
+  }
+
+  private _recordAggressiveFill(
+    market: Market,
+    side: 'BUY' | 'SELL',
+    price: number,
+    size: number,
+    reason: string,
+    executionType: 'PASSIVE' | 'AGGRESSIVE' = 'AGGRESSIVE',
+  ): PaperFill {
+    const fee = size * price * FEE_RATE;
 
     const fill: PaperFill = {
       id: `paper_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       marketExternalId: market.externalId,
       platform: market.platform,
       side,
-      price: execPrice,
+      price,
       size,
       fee,
       timestamp: new Date().toISOString(),
-      reason: `${reason} | ${executionType}`,
+      reason,
       executionType,
     };
 
     this.fills.push(fill);
     this._updatePosition(fill);
 
-    const orderId = executionManager.recordOrderPosted(market.externalId, side, execPrice, size, false);
-    executionManager.recordFill(orderId, execPrice, size);
+    const orderId = executionManager.recordOrderPosted(market.externalId, side, price, size);
+    executionManager.recordFill(orderId, price, size);
 
     return fill;
   }

@@ -4,6 +4,7 @@
  */
 
 import type { Market, OrderBook, OrderBookLevel } from '../types';
+import { normalizeOrderBookLevels } from '../orderbook';
 
 const KALSHI_BASE = 'https://external-api.kalshi.com/trade-api/v2';
 
@@ -68,17 +69,7 @@ export async function fetchKalshiOrderBook(ticker: string): Promise<OrderBook> {
     size,
   }));
 
-  // For simplicity in Phase 1 we surface the Yes side as primary (most common for binary)
-  const bids = yesBids;
-  const asks = yesAsks;
-
-  const mid = bids.length && asks.length
-    ? (bids[0].price + asks[0].price) / 2
-    : undefined;
-
-  const spread = bids.length && asks.length
-    ? asks[0].price - bids[0].price
-    : undefined;
+  const { bids, asks, mid, spread } = normalizeOrderBookLevels(yesBids, yesAsks);
 
   return {
     platform: 'kalshi',

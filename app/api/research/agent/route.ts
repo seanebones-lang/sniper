@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/error-message';
 import { askGrokResearchAgent } from '@/lib/research/grok-agent';
 import { saveProposals } from '@/lib/research/proposals';
+import { getSettingsStatus } from '@/lib/settings/keys';
 
 export async function POST(req: Request) {
-  if (!process.env.XAI_API_KEY) {
-    return NextResponse.json({ error: 'XAI_API_KEY not configured' }, { status: 400 });
+  const status = await getSettingsStatus();
+  if (!status.xaiConfigured) {
+    return NextResponse.json(
+      { error: 'XAI API key not configured. Add it in Settings (/settings).' },
+      { status: 400 },
+    );
   }
 
   const body = await req.json();
@@ -14,7 +20,7 @@ export async function POST(req: Request) {
 
     // Automatically persist any structured proposals for review
     if (result.proposals && result.proposals.length > 0) {
-      await saveProposals((result.proposals || []) as unknown as Record<string, unknown>[], result.query as unknown as Record<string, unknown>);
+      await saveProposals(result.proposals, result.query);
     }
 
     return NextResponse.json(result);

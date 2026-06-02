@@ -1,61 +1,67 @@
 # Risk Philosophy & System
 
-Risk management is the single most important part of this system.
+**Status:** [STATUS.md](./STATUS.md)
+
+Risk management is the most important part of this system — but several documented behaviors are **partially implemented**. This doc separates design intent from verified behavior.
 
 ## Core Beliefs
 
-- Most "edges" in prediction markets are small or illusory after fees and slippage.
+- Most edges are small or illusory after fees and slippage.
 - Survival and consistency beat home runs.
 - The system must protect itself when it is wrong.
 
-## Risk Layers (Defense in Depth)
+## Risk Layers
 
 ### 1. Portfolio Level (`PortfolioRiskManager`)
-- Fractional Kelly sizing with confidence scaling
-- Category exposure limits (crypto, politics, sports, economics, etc.) using real `categorizeMarket`
-- Concentration penalties
-- Max daily loss circuit breaker
-- Max total exposure
-- Max drawdown circuit breaker (tracked from peak bankroll via `recordOutcome` and enforced in `calculateSafeSize`)
 
-### 2. Explicit Risk Modes (`RiskModeManager`)
-The runner automatically shifts between three modes based on system health, adverse execution rate, and edge decay:
+**Runs:** `calculateSafeSize()` is called from runner and real executor.
 
-- **NORMAL**: Full operation
-- **DEFENSIVE**: Fewer markets, extra sizing conservatism, weaker strategies deprioritized
-- **EMERGENCY**: Extremely restricted (1–2 markets, only the strongest strategies). Most strategies are paused.
+**Limitation:** `getCurrentPortfolioState()` uses rough heuristics — `dailyPnl` placeholder is 0, category exposures fabricated, `positions` table not queried. Sizing logic executes but input state is approximate.
 
-Risk mode changes are logged and visible in the health dashboard.
+### 2. Risk Modes (`RiskModeManager`)
 
-### 3. Temporary Adjustments System
-The Grok Research Agent can propose temporary risk changes (global risk reduction, strategy downweighting, etc.). These are automatically applied with expiration when safe, and revert automatically.
+**Runs:** NORMAL / DEFENSIVE / EMERGENCY while runner process is active.
+
+**Behavior verified:** Runner reduces markets evaluated and filters strategies in DEFENSIVE/EMERGENCY modes.
+
+**Limitations:**
+- State is **in-memory** — resets on restart.
+- Edge decay input **not wired** (`recordWindow()` never called) — transitions use health/adverse/unhealthy counts only.
+
+### 3. Temporary Adjustments
+
+**Design:** Grok can propose global risk reduction or strategy downweighting with expiration.
+
+**Limitation:** `incrementRunCount()` is **never called** — adjustments do not expire as designed.
 
 ### 4. Per-Market Execution Health (`ExecutionManager`)
-- Tracks adverse fill rate and slippage per market in real time
-- Automatically downweights unhealthy markets
-- Provides recommendations for canceling resting orders
 
-### 5. Strategy Allocator + Edge Decay Monitoring
-- Dynamically sizes strategies based on recent performance
-- Detects edge decay and feeds it into risk mode decisions
+**Runs:** Tracks fill quality in memory; runner applies health multiplier.
+
+**Limitation:** In-memory only; lost on restart.
+
+### 5. Strategy Allocator + Edge Decay
+
+**Allocator runs** but uses signal/fill **counts**, not PnL or execution quality.
+
+**Edge decay monitor** exists but is **never fed data**.
 
 ### 6. Runner Self-Protection
-The runner actively combines all signals above and applies health multipliers + behavioral restrictions in real time.
 
-## Why This Matters for 24/7
+Combines risk mode, health multiplier, and portfolio sizing on each evaluation cycle — **when** the signal/fill path succeeds. Today automated fills are blocked by FK issue (see STATUS.md).
 
-A system that runs unattended must be able to:
-- Detect when it is getting adversely selected
-- Reduce exposure on specific markets or strategies
-- Avoid blowing up during regime shifts
+## Recommended Settings (Conservative)
 
-This is why we treat execution quality as a first-class risk input, not just P&L.
+For real capital (when implemented path is fixed):
 
-## Recommended Settings (Conservative Starting Point)
-
-For real capital:
-- Start with `kellyFraction: 0.15–0.25`
+- `kellyFraction: 0.15–0.25`
 - Strict category limits
-- Health throttle threshold around 0.5
+- Health throttle threshold ~0.5
 
 Paper mode can be more aggressive for research.
+
+## Related Docs
+
+- [STATUS.md](./STATUS.md) — verified matrix
+- [EXECUTION.md](./EXECUTION.md) — execution health
+- [OPERATIONS.md](./OPERATIONS.md) — real-money checklist

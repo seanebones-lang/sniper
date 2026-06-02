@@ -2,46 +2,81 @@
 
 **A research-first automated trading platform for Polymarket and Kalshi.**
 
-> **High-risk personal tool.** Most automated prediction market strategies lose money after fees, slippage, and adverse selection. You can lose all capital. Paper mode is strongly recommended.
+Designed for small, consistent edges over long periods — not gambling or home runs.
 
-## Current Status (June 2026)
+> **High risk personal tool.** Most automated prediction market strategies lose money after fees, slippage, and adverse selection. You can lose all capital. **Paper mode is strongly recommended** for extended periods before any real money.
 
-See the authoritative sources in the main repository:
+---
 
-- **[docs/STATUS.md](https://github.com/seanebones-lang/sniper/blob/main/docs/STATUS.md)** — Detailed capability matrix
-- **[docs/PRODUCTION-READINESS.md](https://github.com/seanebones-lang/sniper/blob/main/docs/PRODUCTION-READINESS.md)** — Honest assessment for using real capital
+## What Sniper is
 
-**Quick Summary:**
-- Paper trading is reliable and well supported.
-- Real execution has been significantly hardened (durable kill switch + rich risk snapshots, maxDrawdown circuit breaker, active Kalshi reconciliation).
-- The system is still considered **experimental** for unsupervised real capital deployment.
-- 22 passing unit tests with good coverage of risk and durability mechanisms.
+- Market discovery and order book research UI (Polymarket + Kalshi)
+- Paper-trading simulator with manual and (intended) automated fill paths
+- 24/7 runner that collects order book snapshots and evaluates strategies
+- Backtesting lab with synthetic and historical replay
+- Optional Grok (xAI) research layer for analysis and recommendations
+- Optional, heavily gated real execution path for **Polymarket only**
 
-## Key Improvements (Recent)
+## What Sniper is not (today)
 
-- **Durable State**: Kill switch, risk mode, daily loss, execution health, and full risk posture now persist across restarts.
-- **Risk Safety**: MaxDrawdown tracking and enforcement added.
-- **Reconciliation**: Kalshi now has real order/fill polling. Basic support added for Polymarket.
-- **Observability**: `/api/health` surfaces persisted risk snapshots.
+- A production-ready unattended trading bot — see [Known Issues](Known-Issues-and-Roadmap)
+- A Kalshi real-money execution system
+- A cross-venue arbitrage engine
 
-## Getting Started
+**Authoritative status:** [Project Status](Project-Status) — capability matrix verified against code.
 
-See the main [README](https://github.com/seanebones-lang/sniper) for setup instructions.
+---
 
-**Strong recommendation**: Run extensively in paper mode before enabling real execution.
+## Core philosophy
 
-## Important Documents
+| Principle | Meaning |
+|-----------|---------|
+| **Paper mode is sacred** | Default and primary way to operate |
+| **Self-protection first** | System throttles when hurt (while runner is up) |
+| **Research flywheel** | Snapshots → analysis → replay → validate |
+| **Execution quality** | Adverse selection and poor fills destroy edges |
+| **Auditable everything** | Signals and audit events capture reasons |
 
-- [Production Readiness Review](https://github.com/seanebones-lang/sniper/blob/main/docs/PRODUCTION-READINESS.md)
-- [Risk Philosophy](https://github.com/seanebones-lang/sniper/blob/main/docs/RISK.md)
-- [Execution Layer](https://github.com/seanebones-lang/sniper/blob/main/docs/EXECUTION.md)
-- [Real Execution Runbook](https://github.com/seanebones-lang/sniper/blob/main/docs/runbooks/real-execution.md)
-- [Kalshi Support Runbook](https://github.com/seanebones-lang/sniper/blob/main/docs/runbooks/kalshi-support.md)
+---
 
-## Contributing
+## Quick links
 
-See [AGENTS.md](https://github.com/seanebones-lang/sniper/blob/main/AGENTS.md) for project rules, especially around paper mode being sacred and ID discipline.
+| I want to… | Start here |
+|------------|------------|
+| Run locally | [Getting Started](Getting-Started) |
+| Understand what works | [Project Status](Project-Status) |
+| Configure strategies | [Strategies](Strategies) |
+| Use the UI | [UI Guide](UI-Guide) |
+| Backtest / Grok research | [Research & Backtesting](Research-and-Backtesting) |
+| Deploy 24/7 | [Operations](Operations) |
+| Call APIs | [API Reference](API-Reference) |
+| Fix bugs / contribute | [Contributing](Contributing) |
+| See screenshots | [Screenshots](Screenshots) |
 
-## License
+---
 
-See the main repository for license information.
+## MVP phases (accurate)
+
+| Phase | Scope | Status |
+|-------|--------|--------|
+| **0** | Scaffold, DB schema, Railway | Complete |
+| **1** | REST clients + discovery UI | Complete |
+| **2** | Paper simulator, manual fill API, Polymarket WS | Complete |
+| **3** | Strategy engine, runner, strategies UI | Mostly complete — [FK blocker](Known-Issues-and-Roadmap) |
+| **4** | Real execution + risk stack | Partial — Polymarket gated; Kalshi N/A |
+| **5** | Backtest, Grok, docs, tests | Partial — see [Project Status](Project-Status) |
+
+---
+
+## Tech stack
+
+- Next.js 16 (App Router), TypeScript strict, ESLint
+- Drizzle ORM + PostgreSQL
+- Polymarket: `@polymarket/clob-client-v2`, Gamma API, viem
+- Kalshi: REST (+ WS client library, not wired in UI)
+- Vitest (unit), Playwright (e2e), smoke script
+- xAI Grok via Vercel AI SDK (optional)
+
+**Repo:** [github.com/seanebones-lang/sniper](https://github.com/seanebones-lang/sniper)
+
+**License:** MIT (personal use encouraged; commercial redistribution of trading logic requires care).
