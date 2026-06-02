@@ -59,7 +59,7 @@ export async function startRunner(intervalMs = 15000) {
 
   // === Durable Safety State Recovery (critical for real capital) ===
   try {
-    const { loadCriticalSafetyState, loadSystemState } = await import('@/lib/monitoring/system-state');
+    const { loadCriticalSafetyState, loadSystemState, loadRiskSnapshot } = await import('@/lib/monitoring/system-state');
     const safety = await loadCriticalSafetyState();
 
     if (safety.killSwitch.disabled) {
@@ -76,6 +76,12 @@ export async function startRunner(intervalMs = 15000) {
     const execHealth = await loadSystemState<any>('execution_health_summary');
     if (execHealth?.unhealthyMarketCount > 0) {
       console.warn(`[Runner] Last known execution health had ${execHealth.unhealthyMarketCount} unhealthy markets (score ${(execHealth.systemHealthScore || 0).toFixed(2)})`);
+    }
+
+    // Load and log the last rich risk snapshot (very valuable after restarts)
+    const lastRisk = await loadRiskSnapshot();
+    if (lastRisk) {
+      console.log(`[Runner] Recovered risk snapshot from ${lastRisk.snapshotAt}: Exposure $${lastRisk.totalExposureUsd.toFixed(0)} | Mode: ${lastRisk.currentRiskMode} | Health: ${(lastRisk.systemHealthScore * 100).toFixed(1)}%`);
     }
   } catch (e) {
     console.warn('[Runner] Could not load durable safety state (non-fatal):', e);
@@ -462,17 +468,29 @@ export async function runOnce() {
     const state = await portfolioRiskManager.getCurrentPortfolioState();
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
 
-    // Persist execution health snapshot for durability across restarts
+    // Persist rich risk snapshot (durability + risk exposure) for 24/7 resilience
     try {
-      const { persistExecutionHealth } = await import('@/lib/monitoring/system-state');
+      const { persistExecutionHealth, persistRiskSnapshot } = await import('@/lib/monitoring/system-state');
       const unhealthy = executionManager.getUnhealthyMarkets(0.5);
       const avgSlip = executionManager.getAverageSlippage(30);
+      const healthScore = executionManager.getSystemHealthScore();
+      const currentRisk = riskModeManager.getCurrentMode();
+
       await persistExecutionHealth({
-        systemHealthScore: executionManager.getSystemHealthScore(),
+        systemHealthScore: healthScore,
         unhealthyMarketCount: unhealthy.length,
         recentAdverseRate: avgSlip > 0 ? Math.min(1, avgSlip * 10) : 0,
         lastUpdated: new Date().toISOString(),
       }, 'periodic runner snapshot');
+
+      await persistRiskSnapshot({
+        totalExposureUsd: state.totalExposureUsd,
+        openPositions: state.openPositions,
+        currentRiskMode: currentRisk.current,
+        systemHealthScore: healthScore,
+        adverseRate: avgSlip,
+        snapshotAt: new Date().toISOString(),
+      }, 'periodic rich risk snapshot');
     } catch {}
   }
 

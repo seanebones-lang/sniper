@@ -21,7 +21,8 @@ export type SystemStateKey =
   | 'kill_switch'
   | 'risk_mode'
   | 'daily_loss'
-  | 'execution_health_summary';
+  | 'execution_health_summary'
+  | 'risk_snapshot';
 
 export interface KillSwitchState {
   disabled: boolean;
@@ -180,4 +181,21 @@ export interface ExecutionHealthSummary {
 
 export async function persistExecutionHealth(summary: ExecutionHealthSummary, reason?: string) {
   await persistSystemState('execution_health_summary', summary as any, reason || 'periodic health snapshot');
+}
+
+export interface RiskSnapshot {
+  totalExposureUsd: number;
+  openPositions: number;
+  currentRiskMode: string;
+  systemHealthScore: number;
+  adverseRate: number;
+  snapshotAt: string;
+}
+
+export async function persistRiskSnapshot(snapshot: RiskSnapshot, reason?: string) {
+  await persistSystemState('risk_snapshot', snapshot as any, reason || 'runner cycle risk snapshot');
+}
+
+export async function loadRiskSnapshot(): Promise<RiskSnapshot | null> {
+  return loadSystemState<RiskSnapshot>('risk_snapshot');
 }
