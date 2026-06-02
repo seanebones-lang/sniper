@@ -139,6 +139,19 @@ describe('PortfolioRiskManager', () => {
     expect(newBankroll).toBe(initialBankroll + 250);
   });
 
+  it('should track maxDrawdown after losing trades', async () => {
+    // Reset to clean state
+    (riskManager as any).currentBankroll = 10000;
+    (riskManager as any).peakBankroll = 10000;
+    (riskManager as any).currentDrawdownPct = 0;
+
+    await riskManager.recordOutcome(-1500); // 15% drawdown
+    const dd = riskManager.getCurrentDrawdownPct();
+
+    expect(dd).toBeGreaterThan(0.14);
+    expect(dd).toBeLessThan(0.16);
+  });
+
   it('should return zero size when total exposure limit is reached', async () => {
     (riskManager as any).getCurrentPortfolioState = async () => ({
       totalExposureUsd: 2100, // over the 2000 limit
