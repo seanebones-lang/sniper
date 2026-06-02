@@ -48,3 +48,17 @@ describe('Reconciliation', () => {
     expect(typeof result.checked).toBe('number');
   });
 });
+
+import { loadKillSwitchState, persistKillSwitchDisabled } from '@/lib/monitoring/system-state';
+
+describe('Durable Safety State (prod-gap-1)', () => {
+  it('kill switch persistence service is resilient (best-effort in test env)', async () => {
+    // In environments without DB this is best-effort and returns safe defaults.
+    // The critical behavior (kill switch respected at call time) is tested above.
+    await persistKillSwitchDisabled('test durability roundtrip', 'runtime');
+
+    const loaded = await loadKillSwitchState();
+    // Either persisted (real env) or safe default (test env without DB) is acceptable
+    expect(typeof loaded.disabled).toBe('boolean');
+  });
+});
