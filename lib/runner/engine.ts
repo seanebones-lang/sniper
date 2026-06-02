@@ -82,6 +82,15 @@ export async function startRunner(intervalMs = 15000) {
     const lastRisk = await loadRiskSnapshot();
     if (lastRisk) {
       console.log(`[Runner] Recovered risk snapshot from ${lastRisk.snapshotAt}: Exposure $${lastRisk.totalExposureUsd.toFixed(0)} | Mode: ${lastRisk.currentRiskMode} | Health: ${(lastRisk.systemHealthScore * 100).toFixed(1)}%`);
+
+      // Act on recovered bad state (important self-protection behavior)
+      if (lastRisk.systemHealthScore < 0.55 || lastRisk.totalExposureUsd > 1200) {
+        console.warn('⚠️ [Runner] STARTUP WARNING: Last known risk state was elevated. Starting with extra caution.');
+        await logAudit('startup_elevated_risk_state', {
+          snapshot: lastRisk,
+          note: 'Runner is starting from a previously stressed risk posture',
+        });
+      }
     }
   } catch (e) {
     console.warn('[Runner] Could not load durable safety state (non-fatal):', e);
