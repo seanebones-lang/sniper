@@ -26,7 +26,7 @@ Designed for small, consistent edges over long periods — not gambling or home 
 - [docs/STATUS.md](docs/STATUS.md) — detailed capability matrix
 - [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md) — honest assessment for real capital use
 
-**Wiki:** [GitHub Wiki](https://github.com/seanebones-lang/sniper/wiki) · source in [`wiki/`](wiki/) (run `./wiki/sync-to-github.sh` to publish)
+**Wiki:** [GitHub Wiki](https://github.com/seanebones-lang/sniper/wiki) · source maintained in [`wiki/`](wiki/) (run `./wiki/sync-to-github.sh` to publish)
 
 ## Screenshots
 
@@ -155,7 +155,7 @@ API reference: [docs/STATUS.md#api-routes](docs/STATUS.md#api-routes).
 
 | Doc | Description |
 |-----|-------------|
-| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation with navigation — source in [`wiki/`](wiki/) |
+| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation with navigation — source in [`wiki/`](wiki/) (run sync script to publish) |
 | [docs/STATUS.md](docs/STATUS.md) | **Authoritative capability matrix and blockers** |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute; fix list; dev setup |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design |
