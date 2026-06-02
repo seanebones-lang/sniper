@@ -24,12 +24,6 @@ export const ResolutionProximitySniper: Strategy = {
     // In production this should come from proper market metadata (endDate).
     // For this version we assume short-term markets if the question mentions minutes/hours.
     const q = market.question.toLowerCase();
-    let totalDurationMinutes = 60; // default assumption
-
-    if (q.includes('5m') || q.includes('5 min')) totalDurationMinutes = 5;
-    else if (q.includes('15m') || q.includes('15 min')) totalDurationMinutes = 15;
-    else if (q.includes('30m') || q.includes('30 min')) totalDurationMinutes = 30;
-    else if (q.includes('1h') || q.includes('60m')) totalDurationMinutes = 60;
 
     // We don't have exact start time here. Use a proxy:
     // If volume is still very low relative to liquidity, we're probably early.
