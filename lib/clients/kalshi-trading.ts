@@ -139,6 +139,27 @@ export class KalshiTradingClient {
   }
 
   /**
+   * Get recent fills for the account (or for a specific ticker).
+   * This is the most accurate source for reconciliation.
+   */
+  async getFills(params: { ticker?: string; limit?: number } = {}): Promise<any> {
+    const token = await this.getAuthToken();
+    const query = new URLSearchParams();
+    if (params.ticker) query.set('ticker', params.ticker);
+    if (params.limit) query.set('limit', String(params.limit));
+
+    const url = `${KALSHI_BASE}/portfolio/fills${query.toString() ? '?' + query.toString() : ''}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Kalshi getFills failed: ${res.status} ${text}`);
+    }
+    return res.json();
+  }
+
+  /**
    * Legacy compatibility wrapper used by early reconciliation code.
    */
   async getOrderStatus(orderIdOrTicker: string): Promise<{ status: string; filled?: boolean; [k: string]: unknown }> {

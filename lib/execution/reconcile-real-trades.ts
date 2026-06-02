@@ -62,8 +62,9 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
 
             // === Real order status polling for Kalshi (major step toward prod-gap-2) ===
             try {
-              // trade.txHash is used to store the Kalshi order_id in our system
               const orderId = trade.txHash;
+
+              // Try direct order lookup first (most precise)
               if (orderId) {
                 const orderStatus = await client.getOrderStatus(orderId);
                 const raw = (orderStatus as any).raw || orderStatus;
@@ -84,7 +85,7 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
                     orderId,
                     filledSize: filledCount,
                   });
-                  continue; // already reconciled
+                  continue;
                 }
 
                 if (raw?.status === 'cancelled' || raw?.status === 'expired') {
@@ -96,6 +97,27 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
                   continue;
                 }
               }
+
+              // Secondary: check recent fills list for this market (catches fills without direct order id)
+              try {
+                const fills = await client.getFills({ ticker: trade.marketExternalId, limit: 20 });
+                const matchingFill = fills?.fills?.find((f: any) => f.order_id === orderId || f.ticker === trade.marketExternalId);
+                if (matchingFill && matchingFill.filled_count > 0) {
+                  await recordRealFill({
+                    tradeId: trade.id,
+                    filledSize: matchingFill.filled_count,
+                    filledPrice: matchingFill.avg_price || parseFloat(trade.price),
+                    txHash: matchingFill.order_id,
+                  });
+                  result.updated++;
+                  await logAudit('kalshi_real_fill_confirmed_via_fills_api', {
+                    tradeId: trade.id,
+                    orderId,
+                    fill: matchingFill,
+                  });
+                  continue;
+                }
+              } catch {}
             } catch (orderErr) {
               await logAudit('kalshi_order_status_poll_failed', {
                 tradeId: trade.id,
