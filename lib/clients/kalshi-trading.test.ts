@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // We can't easily test the real authenticated flow without keys, so we test the client class structure and error cases.
 

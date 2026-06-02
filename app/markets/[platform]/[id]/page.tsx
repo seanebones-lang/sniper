@@ -183,7 +183,7 @@ export default function LiveMarketDetail({ params }: Props) {
     }
   }
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   useEffect(() => {
     loadSnapshot();
     return () => {
