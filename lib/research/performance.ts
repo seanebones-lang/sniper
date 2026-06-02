@@ -4,6 +4,8 @@
 
 import { db, paperTrades, signals, realTrades } from '@/lib/db';
 import { gte, inArray } from 'drizzle-orm';
+import { computeStrategyPnlWindows } from '@/lib/paper/strategy-pnl';
+import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 
 interface StrategyStats {
   name: string;
@@ -11,15 +13,18 @@ interface StrategyStats {
   paperFills: number;
   realFills: number;
   notionalUsd: number;
+  estimatedPnlUsd: number;
   isActive: boolean;
 }
 
 export async function getStrategyPerformance(days = 7) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+  const runStart = await getPaperRunStartedAt();
+  const paperSince = runStart && runStart > since ? runStart : since;
 
   const [recentSignals, recentPaper, recentReal, stratRows] = await Promise.all([
     db.query.signals.findMany({ where: gte(signals.createdAt, since) }),
-    db.query.paperTrades.findMany({ where: gte(paperTrades.createdAt, since) }),
+    db.query.paperTrades.findMany({ where: gte(paperTrades.filledAt, paperSince) }),
     db.query.realTrades.findMany({ where: gte(realTrades.createdAt, since) }),
     db.query.strategies.findMany(),
   ]);
@@ -34,6 +39,7 @@ export async function getStrategyPerformance(days = 7) {
       paperFills: 0,
       realFills: 0,
       notionalUsd: 0,
+      estimatedPnlUsd: 0,
       isActive: s.isActive,
     };
   }
@@ -46,6 +52,7 @@ export async function getStrategyPerformance(days = 7) {
         paperFills: 0,
         realFills: 0,
         notionalUsd: 0,
+        estimatedPnlUsd: 0,
         isActive: stratById[sig.strategyId]?.isActive ?? false,
       };
     }
@@ -63,6 +70,13 @@ export async function getStrategyPerformance(days = 7) {
     if (strategyId && byStrategy[strategyId]) {
       byStrategy[strategyId].paperFills++;
       byStrategy[strategyId].notionalUsd += parseFloat(fill.size) * parseFloat(fill.price);
+    }
+  }
+
+  const pnlWindows = await computeStrategyPnlWindows(stratRows.map((s) => s.id), days * 24);
+  for (const [id, stats] of pnlWindows) {
+    if (byStrategy[id]) {
+      byStrategy[id].estimatedPnlUsd = stats.estimatedPnl;
     }
   }
 

@@ -2,7 +2,7 @@
 
 **Status:** [STATUS.md](./STATUS.md)
 
-Risk management is the most important part of this system — but several documented behaviors are **partially implemented**. This doc separates design intent from verified behavior.
+Risk management is the most important part of this system. This doc describes design intent and **verified behavior** as of June 2026.
 
 ## Core Beliefs
 
@@ -14,49 +14,52 @@ Risk management is the most important part of this system — but several docume
 
 ### 1. Portfolio Level (`PortfolioRiskManager`)
 
-**Runs:** `calculateSafeSize()` is called from runner and real executor.
+**Runs:** `calculateSafeSize()` on every runner signal and real order.
 
-**Limitation:** `getCurrentPortfolioState()` uses rough heuristics — `dailyPnl` placeholder is 0, category exposures fabricated, `positions` table not queried. Sizing logic executes but input state is approximate.
+**Verified (June 2026):**
+- Paper mode loads state from `loadPaperRiskState()` — cash ledger + MTM exposure + daily PnL + category buckets.
+- State cached per runner cycle via `setCyclePortfolioState()`; refreshed after paper fills.
+- Kelly sizing returns **USD**; runner converts to shares via `computeFinalShareSize()`.
+- **Exit signals bypass** exposure/daily-loss/drawdown circuit breakers so positions can be closed.
+
+**Limitation:** Daily P&L baseline uses start-of-day cost basis for open positions (not MTM), which can slightly skew the daily loss breaker overnight.
 
 ### 2. Risk Modes (`RiskModeManager`)
 
-**Runs:** NORMAL / DEFENSIVE / EMERGENCY while runner process is active.
+**Runs:** NORMAL / DEFENSIVE / EMERGENCY while runner is active.
 
-**Behavior verified:** Runner reduces markets evaluated and filters strategies in DEFENSIVE/EMERGENCY modes.
+**Verified:** Runner reduces markets evaluated, filters strategies, and applies mode multipliers. Transitions persisted to `system_state`.
 
-**Limitations:**
-- State is **in-memory** — resets on restart.
-- Edge decay input **not wired** (`recordWindow()` never called) — transitions use health/adverse/unhealthy counts only.
+**Limitation:** In-process mode state resets on restart until recovered from durable snapshot.
 
 ### 3. Temporary Adjustments
 
-**Design:** Grok can propose global risk reduction or strategy downweighting with expiration.
-
-**Limitation:** `incrementRunCount()` is **never called** — adjustments do not expire as designed.
+**Verified:** Grok auto-apply creates global/strategy downweights. `incrementRunCount()` runs each cycle; `cleanupExpiredAdjustments()` expires them.
 
 ### 4. Per-Market Execution Health (`ExecutionManager`)
 
-**Runs:** Tracks fill quality in memory; runner applies health multiplier.
+**Runs:** Fill quality tracked in memory; runner applies health multiplier per market.
 
-**Limitation:** In-memory only; lost on restart.
+**Limitation:** In-memory history lost on restart.
 
 ### 5. Strategy Allocator + Edge Decay
 
-**Allocator runs** but uses signal/fill **counts**, not PnL or execution quality.
+**Allocator:** Weights strategies by recent PnL + activity (`getDynamicAllocations`).
 
-**Edge decay monitor** exists but is **never fed data**.
+**Edge decay:** `recordWindow()` fed each cycle from per-strategy paper PnL (`computeStrategyPnlWindows`).
 
 ### 6. Runner Self-Protection
 
-Combines risk mode, health multiplier, and portfolio sizing on each evaluation cycle — **when** the signal/fill path succeeds. Today automated fills are blocked by FK issue (see STATUS.md).
+Combines risk mode, Grok global downweight × mode multiplier, health throttle, allocator, and portfolio sizing on each signal.
 
 ## Recommended Settings (Conservative)
 
-For real capital (when implemented path is fixed):
+For real capital:
 
 - `kellyFraction: 0.15–0.25`
 - Strict category limits
 - Health throttle threshold ~0.5
+- Extended paper soak with `scripts/diagnose-paper-pnl.ts`
 
 Paper mode can be more aggressive for research.
 

@@ -9,9 +9,6 @@
 import { db, signals, paperTrades, auditEvents, strategies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { getAllMarkets, getMarketsForQuickFlip, ensureMarketRecord } from '@/lib/markets';
-import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
-import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
-// TODO: Deeper Kalshi WS integration in runner (REST books work; WS used on market detail page)
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
@@ -25,10 +22,15 @@ import { saveBookSnapshot } from '@/lib/data/historical';
 import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
+import { getRecentSnapshotsForMarket } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
+import { loadPaperRiskState } from '@/lib/paper/risk-state';
+import { computeStrategyPnlWindows, statsToPerformanceWindow } from '@/lib/paper/strategy-pnl';
+import { CycleBookCache } from '@/lib/runner/book-cache';
+import { computeFinalShareSize } from '@/lib/risk/sizing';
 import { 
   applyTemporaryAdjustment, 
   cleanupExpiredAdjustments, 
@@ -66,6 +68,7 @@ export interface RunnerStatus {
   signalsGenerated: number;
   fillsExecuted: number;
   lastCycle: RunnerCycleDiagnostics | null;
+  lastCycleDurationMs: number | null;
 }
 
 const status: RunnerStatus = {
@@ -74,9 +77,15 @@ const status: RunnerStatus = {
   signalsGenerated: 0,
   fillsExecuted: 0,
   lastCycle: null,
+  lastCycleDurationMs: null,
 };
 
 let interval: NodeJS.Timeout | null = null;
+let cycleTimeout: ReturnType<typeof setTimeout> | null = null;
+let cycleInFlight = false;
+/** Last signal timestamp per strategy:market for cooldown enforcement */
+const lastSignalAtByKey = new Map<string, number>();
+let snapshotSaveCounter = 0;
 
 /** Persist runner singleton across Next.js dev HMR / route reloads */
 type RunnerGlobal = typeof globalThis & {
@@ -95,6 +104,7 @@ function syncStatusFromStore() {
   status.signalsGenerated = runnerStore.status.signalsGenerated;
   status.fillsExecuted = runnerStore.status.fillsExecuted;
   status.lastCycle = runnerStore.status.lastCycle ?? null;
+  status.lastCycleDurationMs = runnerStore.status.lastCycleDurationMs ?? null;
   interval = runnerStore.interval;
 }
 
@@ -187,16 +197,32 @@ export async function startRunner(intervalMs = 15000) {
 
   alerts.runnerStarted();
 
-  // Run immediately
   await runOnce();
 
-  interval = setInterval(async () => {
-    try {
-      await runOnce();
-    } catch (e) {
-      console.error('[Runner] Error in loop:', e);
+  const scheduleNextCycle = async () => {
+    if (!status.running) return;
+    const cycleStart = Date.now();
+    if (cycleInFlight) {
+      console.warn('[Runner] Skipping cycle — prior run still in flight');
+    } else {
+      cycleInFlight = true;
+      try {
+        await runOnce();
+      } catch (e) {
+        console.error('[Runner] Error in loop:', e);
+      } finally {
+        cycleInFlight = false;
+      }
     }
-  }, intervalMs);
+    status.lastCycleDurationMs = Date.now() - cycleStart;
+    persistStatus();
+    if (!status.running) return;
+    const baseInterval = await getRunnerIntervalMs();
+    const delay = Math.max(baseInterval, status.lastCycleDurationMs ?? baseInterval);
+    cycleTimeout = setTimeout(() => void scheduleNextCycle(), delay);
+  };
+
+  void scheduleNextCycle();
 
   persistStatus();
 }
@@ -206,6 +232,10 @@ export function stopRunner() {
   if (interval) {
     clearInterval(interval);
     interval = null;
+  }
+  if (cycleTimeout) {
+    clearTimeout(cycleTimeout);
+    cycleTimeout = null;
   }
   status.running = false;
   persistStatus();
@@ -245,7 +275,7 @@ export async function runOnce() {
   });
 
   const markets = hasQuickFlipStrategy
-    ? await getMarketsForQuickFlip()
+    ? await getMarketsForQuickFlip(true)
     : await getAllMarkets();
 
   // === Ensure all markets we are about to evaluate are persisted (critical for signal FKs) ===
@@ -294,7 +324,71 @@ export async function runOnce() {
     });
   }
 
-  globalRiskMultiplier = riskModeManager.getRiskMultiplier();
+  globalRiskMultiplier =
+    riskModeManager.getRiskMultiplier() * getEffectiveGlobalRiskMultiplier(1.0);
+
+  const currentRiskMode = riskModeManager.getCurrentMode();
+  let marketEvaluationLimit = 25;
+  let allowedStrategies = activeStrategies;
+
+  if (currentRiskMode.current === 'DEFENSIVE') {
+    marketEvaluationLimit = 12;
+    allowedStrategies = activeStrategies.filter((s) => !['threshold'].includes(s.type));
+    if (allowedStrategies.length === 0) allowedStrategies = activeStrategies;
+    console.warn(`⚠️ [Runner] DEFENSIVE MODE — evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} markets with extra conservatism`);
+  }
+
+  if (currentRiskMode.current === 'EMERGENCY') {
+    marketEvaluationLimit = 2;
+    const SURVIVAL_STRATEGY_TYPES = ['orderbook-imbalance', 'resolution-proximity'];
+    allowedStrategies = activeStrategies.filter((s) => SURVIVAL_STRATEGY_TYPES.includes(s.type));
+    if (allowedStrategies.length === 0) {
+      allowedStrategies = activeStrategies.slice(0, 1);
+    }
+    if (systemHealth < 0.38) {
+      marketEvaluationLimit = 1;
+      allowedStrategies = allowedStrategies.slice(0, 1);
+    }
+    const pausedStrategies = activeStrategies.filter((s) => !allowedStrategies.some((a) => a.id === s.id));
+    console.warn(`🚨 [Runner] EMERGENCY MODE — survival posture only.`);
+    if (pausedStrategies.length > 0) {
+      console.warn(`   PAUSED STRATEGIES due to Emergency: ${pausedStrategies.map((s) => s.name).join(', ')}`);
+    }
+    console.warn(`   Evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s).`);
+  }
+
+  const allAllocations = await getDynamicAllocations(activeStrategies.map((s) => s.id));
+
+  const bookCache = new CycleBookCache();
+  const marketsToFetch: Array<{ platform: string; externalId: string }> = [];
+  for (const stratRow of allowedStrategies) {
+    const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
+    const isQuickFlipStrat =
+      config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
+    const stratLimit = isQuickFlipStrat ? 40 : marketEvaluationLimit;
+
+    let openPool = markets.filter((m) => m.status === 'open');
+    if (isQuickFlipStrat) {
+      openPool = filterQuickFlipMarkets(openPool);
+      openPool = openPool.length > 0 ? rankQuickFlipMarkets(openPool) : [];
+    }
+    for (const m of openPool.slice(0, stratLimit)) {
+      marketsToFetch.push({ platform: m.platform, externalId: m.externalId });
+    }
+
+    const openPositions = await getStrategyOpenPositions(stratRow.id);
+    for (const pos of openPositions) {
+      marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
+    }
+  }
+  await bookCache.fetchBooks(marketsToFetch);
+
+  const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
+  portfolioRiskManager.setCyclePortfolioState(
+    paperRisk.state,
+    paperRisk.equityUsd,
+    paperRisk.ledger.realizedPnLUsd,
+  );
 
   const activeProfiles: ActiveStrategyProfile[] = activeStrategies.map((s) => {
     const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
@@ -321,7 +415,7 @@ export async function runOnce() {
   let signalsThisRun = 0;
   let fillsThisRun = 0;
 
-  for (const stratRow of activeStrategies) {
+  for (const stratRow of allowedStrategies) {
     const strategyImpl = getStrategy(stratRow.type);
     if (!strategyImpl) continue;
 
@@ -331,76 +425,29 @@ export async function runOnce() {
       openPositions.map((p) => [`${p.platform}:${p.marketExternalId}`, p]),
     );
 
-    // === Risk Mode Behavioral Adaptation ===
-    const currentRiskMode = riskModeManager.getCurrentMode();
-    let marketEvaluationLimit = 25;
-    let allowedStrategies = activeStrategies;
+    let allocation = allAllocations[stratRow.id] || { weight: 0.7, maxSizeMultiplier: 0.8, reason: 'Default' };
 
-    if (currentRiskMode.current === 'DEFENSIVE') {
-      marketEvaluationLimit = 12;
-      // In defensive mode, prefer stronger/more consistent strategies (simple heuristic for now)
-      allowedStrategies = activeStrategies.filter(s => 
-        !['threshold'].includes(s.type) // example: deprioritize simpler strategies
-      );
-      if (allowedStrategies.length === 0) allowedStrategies = activeStrategies;
-
-      console.warn(`⚠️ [Runner] DEFENSIVE MODE — evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} markets with extra conservatism`);
-    }
-
-    if (currentRiskMode.current === 'EMERGENCY') {
-      marketEvaluationLimit = 2;
-
-      // Define the absolute survival set — only the most proven, battle-tested edges
-      const SURVIVAL_STRATEGY_TYPES = ['orderbook-imbalance', 'resolution-proximity'];
-
-      allowedStrategies = activeStrategies.filter(s => 
-        SURVIVAL_STRATEGY_TYPES.includes(s.type)
-      );
-
-      if (allowedStrategies.length === 0) {
-        allowedStrategies = activeStrategies.slice(0, 1);
-      }
-
-      // In deep emergency, collapse to the absolute minimum
-      if (systemHealth < 0.38) {
-        marketEvaluationLimit = 1;
-        allowedStrategies = allowedStrategies.slice(0, 1);
-      }
-
-      const pausedStrategies = activeStrategies.filter(s => !allowedStrategies.some(a => a.id === s.id));
-
-      console.warn(`🚨 [Runner] EMERGENCY MODE — survival posture only.`);
-      if (pausedStrategies.length > 0) {
-        console.warn(`   PAUSED STRATEGIES due to Emergency: ${pausedStrategies.map(s => s.name).join(', ')}`);
-      }
-      console.warn(`   Evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s).`);
-    }
-
-    const allocations = await getDynamicAllocations(allowedStrategies.map(s => s.id));
-    let allocation = allocations[stratRow.id] || { weight: 0.7, maxSizeMultiplier: 0.8, reason: 'Default' };
-
-    // Further conservatism in worse risk modes
     if (currentRiskMode.current === 'DEFENSIVE') {
       allocation = {
         ...allocation,
         maxSizeMultiplier: allocation.maxSizeMultiplier * 0.75,
-        reason: allocation.reason + ' + Defensive mode conservatism'
+        reason: allocation.reason + ' + Defensive mode conservatism',
       };
     }
     if (currentRiskMode.current === 'EMERGENCY') {
       allocation = {
         ...allocation,
         maxSizeMultiplier: allocation.maxSizeMultiplier * 0.4,
-        reason: allocation.reason + ' + Emergency mode conservatism'
+        reason: allocation.reason + ' + Emergency mode conservatism',
       };
     }
 
     // Reduce market sample based on risk mode; quick-flip strategies prefer live fast markets
     let openPool = markets.filter((m) => m.status === 'open');
+    let stratMarketLimit = marketEvaluationLimit;
 
-    // Quick-flip: only near-term / in-play markets — never fall back to World Cup futures, etc.
     if (config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip') {
-      marketEvaluationLimit = 40;
+      stratMarketLimit = 40;
       const candidates = filterQuickFlipMarkets(openPool);
       openPool = candidates.length > 0 ? rankQuickFlipMarkets(candidates) : [];
       if (openPool.length === 0) {
@@ -408,7 +455,7 @@ export async function runOnce() {
       }
     }
 
-    const relevantMarkets = openPool.slice(0, marketEvaluationLimit);
+    const relevantMarkets = openPool.slice(0, stratMarketLimit);
     marketsEvaluatedThisCycle = Math.max(marketsEvaluatedThisCycle, relevantMarkets.length);
 
     if (
@@ -436,12 +483,13 @@ export async function runOnce() {
 
     for (const market of relevantMarkets) {
       try {
-        // Get fresh book/price
-        const book = market.platform === 'polymarket'
-          ? await fetchPolymarketOrderBook(market.externalId)
-          : await fetchKalshiOrderBook(market.externalId);
+        // Get fresh book/price (deduplicated per cycle)
+        const book = bookCache.getBook(market.platform, market.externalId);
 
-        const currentPrice = book.mid ?? market.lastPrice;
+        const currentPrice = book?.mid ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
+
+        const recentSnaps = await getRecentSnapshotsForMarket(market.platform, market.externalId, 8);
+        const advanced = extractFeaturesFromRecentSnapshots(recentSnaps);
 
         // === Self-Protection: Execution Health Throttle ===
         const marketHealth = executionManager.getMarketHealth(market.externalId);
@@ -452,31 +500,30 @@ export async function runOnce() {
           console.warn(`[Runner] Downweighting ${market.externalId} — poor execution health (${(marketHealth.healthScore * 100).toFixed(0)}%, ${marketHealth.recentAdverseCount}/${marketHealth.recentFills} adverse)`);
         }
 
-        // === Rich feature collection for research & future ML ===
         if (book && (book.bids?.length || book.asks?.length)) {
           const topBid = book.bids?.[0]?.size || 0;
           const topAsk = book.asks?.[0]?.size || 0;
           const imbalance = topBid / (topBid + topAsk + 0.0001);
 
-          // Compute advanced features (in production we would query recent snapshots for this market)
-          const advanced = extractFeaturesFromRecentSnapshots([]);
-
-          await saveBookSnapshot({
-            platform: market.platform,
-            marketExternalId: market.externalId,
-            bids: book.bids?.slice(0, 3) || [],
-            asks: book.asks?.slice(0, 3) || [],
-            mid: book.mid || currentPrice || 0,
-            spread: book.spread || 0,
-            timestamp: new Date(),
-            imbalance: parseFloat(imbalance.toFixed(4)),
-            topDepth: topBid + topAsk,
-            extra: {
-              regime: advanced.regime,
-              volatilityProxy: advanced.volatilityProxy,
-              imbalancePersistence: advanced.imbalancePersistence,
-            },
-          } as unknown as Parameters<typeof saveBookSnapshot>[0]);
+          snapshotSaveCounter++;
+          if (snapshotSaveCounter % 3 === 0) {
+            await saveBookSnapshot({
+              platform: market.platform,
+              marketExternalId: market.externalId,
+              bids: book.bids?.slice(0, 3) || [],
+              asks: book.asks?.slice(0, 3) || [],
+              mid: book.mid || currentPrice || 0,
+              spread: book.spread || 0,
+              timestamp: new Date(),
+              imbalance: parseFloat(imbalance.toFixed(4)),
+              topDepth: topBid + topAsk,
+              extra: {
+                regime: advanced.regime,
+                volatilityProxy: advanced.volatilityProxy,
+                imbalancePersistence: advanced.imbalancePersistence,
+              },
+            } as unknown as Parameters<typeof saveBookSnapshot>[0]);
+          }
         }
 
         const posKey = `${market.platform}:${market.externalId}`;
@@ -503,7 +550,7 @@ export async function runOnce() {
             continue;
           }
           signal = strategyImpl.evaluate(
-            { market, book, currentPrice },
+            { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
             config,
           );
           if (signal?.action === 'SELL') {
@@ -512,6 +559,15 @@ export async function runOnce() {
         }
 
         if (signal && signal.action !== 'HOLD' && signal.action !== 'CANCEL') {
+          const cooldownKey = `${stratRow.id}:${market.platform}:${market.externalId}`;
+          const cooldownMs = (config.cooldownSeconds ?? 300) * 1000;
+          if (signal.action === 'BUY' && !isExitSignal) {
+            const lastAt = lastSignalAtByKey.get(cooldownKey);
+            if (lastAt != null && Date.now() - lastAt < cooldownMs) {
+              continue;
+            }
+          }
+
           signalsThisRun++;
 
           let orderSize = signal.size;
@@ -533,6 +589,7 @@ export async function runOnce() {
             confidence: signal.confidence ?? 0.65,
             category: categoryInfo.category,
             currentPrice: signal.price,
+            isExit: isExitSignal,
           });
 
           const minAllowedUsd = isQuickFlip ? 0.5 : 5;
@@ -563,21 +620,18 @@ export async function runOnce() {
           const riskCapUsd =
             riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
 
-          let finalSize: number;
-          if (isQuickFlip && signal.action === 'BUY') {
-            const stakeUsd = Math.min(config.maxSizeUsd, riskCapUsd);
-            finalSize = Math.max(1, Math.floor(stakeUsd / signal.price));
-          } else {
-            finalSize = Math.min(orderSize, riskDecision.allowedSize) * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
-          }
+          const finalSize = computeFinalShareSize({
+            requestedShares: orderSize,
+            riskCapUsd:
+              isQuickFlip && signal.action === 'BUY'
+                ? Math.min(config.maxSizeUsd, riskCapUsd)
+                : riskCapUsd,
+            price: signal.price,
+            isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
+            minSharesUsd: isQuickFlip ? 0.5 : 1,
+          });
 
-          const minFinalSizeUsd = isQuickFlip ? 0.5 : 1;
-          const minFinalShares = isQuickFlip && signal.action === 'BUY' ? 1 : minFinalSizeUsd;
-          if (isQuickFlip && signal.action === 'BUY') {
-            if (finalSize < minFinalShares || finalSize * signal.price < minFinalSizeUsd) continue;
-          } else if (finalSize < minFinalSizeUsd) {
-            continue;
-          }
+          if (finalSize <= 0) continue;
 
           // Persist signal (with risk-adjusted size)
           let sizeReason = '';
@@ -633,7 +687,7 @@ export async function runOnce() {
 
             if (result.success) {
               fillsThisRun++;
-              status.fillsExecuted++;
+              lastSignalAtByKey.set(cooldownKey, Date.now());
               alerts.realOrder({
                 platform: market.platform,
                 side: signal.action,
@@ -648,6 +702,11 @@ export async function runOnce() {
               signal.action as 'BUY' | 'SELL',
               isExitSignal,
             );
+            const topBid = book?.bids?.[0]?.size || 0;
+            const topAsk = book?.asks?.[0]?.size || 0;
+            const bookImbalance =
+              topBid + topAsk > 0 ? (topBid - topAsk) / (topBid + topAsk) : 0;
+
             const fill = paperSimulator.snipe({
               market,
               side: signal.action as 'BUY' | 'SELL',
@@ -658,21 +717,31 @@ export async function runOnce() {
               immediate: useImmediate,
               isExit: isExitSignal,
               minFillProbability: config.minFillProbability,
+              bookImbalance,
+              regime: advanced.regime,
             });
 
             if (fill) {
               fillsThisRun++;
+              lastSignalAtByKey.set(cooldownKey, Date.now());
 
               await db.insert(paperTrades).values({
                 platform: market.platform,
                 marketExternalId: market.externalId,
-                signalId: signalId ?? null, // Now properly linked (was previously impossible due to FK bug)
+                signalId: signalId ?? null,
                 side: fill.side,
                 price: fill.price.toString(),
                 size: fill.size.toString(),
                 fee: fill.fee.toString(),
                 status: 'filled',
               });
+
+              const refreshed = await loadPaperRiskState(bookCache.toMarkPriceMap());
+              portfolioRiskManager.setCyclePortfolioState(
+                refreshed.state,
+                refreshed.equityUsd,
+                refreshed.ledger.realizedPnLUsd,
+              );
 
               alerts.paperFill(fill);
             }
@@ -707,11 +776,27 @@ export async function runOnce() {
   };
   persistStatus();
 
+  portfolioRiskManager.clearCycleCache();
+
   if (signalsThisRun > 0) {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
   }
 
-  // === Edge Decay Monitoring (lightweight) ===
+  // === Edge Decay Monitoring — feed rolling PnL windows ===
+  try {
+    const pnlStats = await computeStrategyPnlWindows(
+      activeStrategies.map((s) => s.id),
+      6,
+    );
+    for (const [, stats] of pnlStats) {
+      if (stats.fills >= 3) {
+        edgeDecayMonitor.recordWindow(stats.strategyId, statsToPerformanceWindow(stats, 6));
+      }
+    }
+  } catch (e) {
+    console.warn('[Runner] Edge decay window update failed (non-fatal):', e);
+  }
+
   for (const strat of activeStrategies) {
     const decay = edgeDecayMonitor.isDecaying(strat.id);
     if (decay.decaying) {
@@ -786,8 +871,11 @@ export async function runOnce() {
       const unhealthy = executionManager.getUnhealthyMarkets(0.5);
       const currentRisk = riskModeManager.getCurrentMode();
 
+      const primaryStrategy = activeStrategies[0];
+
       const analysis = await askGrokResearchAgent({
         type: 'strategy_analysis',
+        strategyId: primaryStrategy?.id,
         lookbackHours: 48,
         extraContext: `Current risk mode: ${currentRisk.current} (${currentRisk.reason}). 
 System health score: ${(systemHealth * 100).toFixed(1)}%. 

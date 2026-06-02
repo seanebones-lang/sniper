@@ -10,20 +10,20 @@ Designed for small, consistent edges over long periods — not gambling or home 
 
 ## What Sniper is
 
-- Market discovery and order book research UI (Polymarket + Kalshi)
-- Paper-trading simulator with manual and (intended) automated fill paths
-- 24/7 runner that collects order book snapshots and evaluates strategies
+- Market discovery and order book research UI (Polymarket + Kalshi REST + WS on detail pages)
+- Paper-trading simulator with manual and **automated** fill paths → ledger + mark-to-market P&L
+- 24/7 runner with deduplicated book cache, 4–12s adaptive interval, and five strategy types
 - Backtesting lab with synthetic and historical replay
-- Optional Grok (xAI) research layer for analysis and recommendations
-- Optional, heavily gated real execution path for **Polymarket only**
+- Grok (xAI) research layer — analysis, structured proposals, RECOMMENDED ACTIONS auto-apply
+- Optional, heavily gated real execution on **Polymarket and Kalshi**
 
 ## What Sniper is not (today)
 
-- A production-ready unattended trading bot — see [Known Issues](Known-Issues-and-Roadmap)
-- A Kalshi real-money execution system
+- A production-ready unattended real-money bot — see [Known Issues](Known-Issues-and-Roadmap)
 - A cross-venue arbitrage engine
+- CI-validated live trading (real paths are coded but gated and untested with live keys)
 
-**Authoritative status:** [Project Status](Project-Status) — capability matrix verified against code.
+**Authoritative status:** [Project Status](Project-Status) — capability matrix verified against code (June 2, 2026).
 
 ---
 
@@ -32,7 +32,7 @@ Designed for small, consistent edges over long periods — not gambling or home 
 | Principle | Meaning |
 |-----------|---------|
 | **Paper mode is sacred** | Default and primary way to operate |
-| **Self-protection first** | System throttles when hurt (while runner is up) |
+| **Self-protection first** | System throttles when hurt (edge decay, risk modes, health throttle) |
 | **Research flywheel** | Snapshots → analysis → replay → validate |
 | **Execution quality** | Adverse selection and poor fills destroy edges |
 | **Auditable everything** | Signals and audit events capture reasons |
@@ -62,9 +62,9 @@ Designed for small, consistent edges over long periods — not gambling or home 
 | **0** | Scaffold, DB schema, Railway | Complete |
 | **1** | REST clients + discovery UI | Complete |
 | **2** | Paper simulator, manual fill API, Polymarket WS | Complete |
-| **3** | Strategy engine, runner, strategies UI | Mostly complete — [FK blocker](Known-Issues-and-Roadmap) |
-| **4** | Real execution + risk stack | Partial — Polymarket gated; Kalshi N/A |
-| **5** | Backtest, Grok, docs, tests | Partial — see [Project Status](Project-Status) |
+| **3** | Strategy engine, runner, strategies UI | **Complete** — automated fills + quick-flip + Kalshi |
+| **4** | Real execution + risk stack | Partial — Polymarket + Kalshi coded + gated |
+| **5** | Backtest, Grok, docs, tests | Partial — replay realism, variant persistence, runner tests |
 
 ---
 
@@ -73,8 +73,8 @@ Designed for small, consistent edges over long periods — not gambling or home 
 - Next.js 16 (App Router), TypeScript strict, ESLint
 - Drizzle ORM + PostgreSQL
 - Polymarket: `@polymarket/clob-client-v2`, Gamma API, viem
-- Kalshi: REST (+ WS client library, not wired in UI)
-- Vitest (unit), Playwright (e2e), smoke script
+- Kalshi: REST + WS on market detail page
+- Vitest (**57 unit tests**), Playwright (e2e), smoke script
 - xAI Grok via Vercel AI SDK (optional)
 
 **Repo:** [github.com/seanebones-lang/sniper](https://github.com/seanebones-lang/sniper)

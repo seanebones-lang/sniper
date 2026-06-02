@@ -28,6 +28,7 @@ export const SpreadScalper: Strategy = {
         size: Math.max(10, Math.floor(size)),
         reason: `Wide spread ${spreadPct.toFixed(2)}% (>= ${minSpread}%)`,
         confidence: Math.min(0.9, spreadPct / 5),
+        edge: Math.min(0.08, spreadPct / 100),
       };
     }
 

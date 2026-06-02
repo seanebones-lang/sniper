@@ -93,7 +93,7 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
   const since = await getPaperPortfolioSince(periodDays);
   const runStart = await getPaperRunStartedAt();
   const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  todayStart.setUTCHours(0, 0, 0, 0);
 
   const runFilter = runStart ? gte(paperTrades.filledAt, runStart) : undefined;
 
@@ -104,8 +104,8 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
         orderBy: (t, { asc }) => [asc(t.filledAt)],
       }),
       db.query.paperTrades.findMany({
-        where: gte(paperTrades.createdAt, since),
-        orderBy: [desc(paperTrades.createdAt)],
+        where: gte(paperTrades.filledAt, since),
+        orderBy: [desc(paperTrades.filledAt)],
         limit: 500,
       }),
       db.query.signals.findMany({ where: gte(signals.createdAt, since) }),
@@ -114,8 +114,8 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
       db.select({ count: count() }).from(paperTrades).where(runFilter),
       db.select({ count: count() }).from(paperTrades).where(
         runStart
-          ? and(gte(paperTrades.createdAt, todayStart), runFilter)
-          : gte(paperTrades.createdAt, todayStart),
+          ? and(gte(paperTrades.filledAt, todayStart), runFilter)
+          : gte(paperTrades.filledAt, todayStart),
       ),
     ]);
 

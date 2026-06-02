@@ -1,21 +1,52 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
-import { getPaperPortfolio, applyPaperBudgetToRiskManager } from '@/lib/paper/portfolio';
+import { db, paperTrades } from '@/lib/db';
+import { gte, count, and } from 'drizzle-orm';
+import { getPaperRunStartedAt } from '@/lib/paper/run-session';
+import { getPaperPortfolio } from '@/lib/paper/portfolio';
 
-async function runnerPayload() {
-  const status = getRunnerStatus();
-  const portfolio = await getPaperPortfolio(1);
+async function cheapRunnerCounts() {
+  const runStart = await getPaperRunStartedAt();
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const runFilter = runStart ? gte(paperTrades.filledAt, runStart) : undefined;
+
+  const [totalCountRow, todayCountRow, stratRows] = await Promise.all([
+    db.select({ count: count() }).from(paperTrades).where(runFilter),
+    db.select({ count: count() }).from(paperTrades).where(
+      runStart
+        ? and(gte(paperTrades.filledAt, todayStart), runFilter)
+        : gte(paperTrades.filledAt, todayStart),
+    ),
+    db.query.strategies.findMany({ columns: { id: true, isActive: true } }),
+  ]);
+
   return {
+    dbPaperFillsTotal: totalCountRow[0]?.count ?? 0,
+    dbPaperFillsToday: todayCountRow[0]?.count ?? 0,
+    activeStrategies: stratRows.filter((s) => s.isActive).length,
+  };
+}
+
+async function runnerPayload(includePnl: boolean) {
+  const status = getRunnerStatus();
+  const counts = await cheapRunnerCounts();
+
+  const payload: Record<string, unknown> = {
     ...status,
-    dbPaperFillsTotal: portfolio.runner.dbPaperFillsTotal,
-    dbPaperFillsToday: portfolio.runner.dbPaperFillsToday,
-    activeStrategies: portfolio.runner.activeStrategies,
+    ...counts,
     lastRunAgeSeconds: status.lastRun
       ? Math.round((Date.now() - new Date(status.lastRun).getTime()) / 1000)
       : null,
-    pnl: portfolio.pnl,
   };
+
+  if (includePnl) {
+    const portfolio = await getPaperPortfolio(1);
+    payload.pnl = portfolio.pnl;
+  }
+
+  return payload;
 }
 
 export async function POST(req: Request) {
@@ -25,12 +56,12 @@ export async function POST(req: Request) {
     if (action === 'start') {
       const intervalMs = await getRunnerIntervalMs();
       await startRunner(intervalMs);
-      return NextResponse.json({ status: 'started', intervalMs, ...await runnerPayload() });
+      return NextResponse.json({ status: 'started', intervalMs, ...(await runnerPayload(false)) });
     }
 
     if (action === 'stop') {
       stopRunner();
-      return NextResponse.json({ status: 'stopped', ...await runnerPayload() });
+      return NextResponse.json({ status: 'stopped', ...(await runnerPayload(false)) });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
@@ -43,9 +74,10 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    return NextResponse.json(await runnerPayload());
+    const includePnl = new URL(req.url).searchParams.get('includePnl') === '1';
+    return NextResponse.json(await runnerPayload(includePnl));
   } catch (err: unknown) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 });
   }

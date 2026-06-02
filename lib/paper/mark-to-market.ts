@@ -2,6 +2,9 @@ import { fetchPolymarketPrice } from '@/lib/clients/polymarket';
 import { fetchKalshiPrice } from '@/lib/clients/kalshi';
 import type { PaperPositionRow } from './positions';
 
+/** platform:marketExternalId → mid price */
+export type MarkPriceMap = Map<string, number>;
+
 export interface MarkToMarketResult {
   openCostBasisUsd: number;
   openMarkValueUsd: number;
@@ -27,31 +30,42 @@ function cacheKey(positions: PaperPositionRow[]): string {
     .join('|');
 }
 
-async function markPosition(p: PaperPositionRow): Promise<{ valueUsd: number; marked: boolean }> {
-  try {
-    const mark =
-      p.platform === 'polymarket'
-        ? await fetchPolymarketPrice(p.marketExternalId)
-        : await fetchKalshiPrice(p.marketExternalId);
+async function markPosition(
+  p: PaperPositionRow,
+  markPrices?: MarkPriceMap,
+): Promise<{ valueUsd: number; marked: boolean }> {
+  const key = `${p.platform}:${p.marketExternalId}`;
+  let mark: number | null | undefined = markPrices?.get(key);
 
-    if (mark == null || mark <= 0 || mark > 1) {
+  if (mark == null) {
+    try {
+      mark =
+        p.platform === 'polymarket'
+          ? await fetchPolymarketPrice(p.marketExternalId)
+          : await fetchKalshiPrice(p.marketExternalId);
+    } catch {
       return { valueUsd: p.notionalUsd, marked: false };
     }
+  }
 
-    const valueUsd = Math.abs(p.netSize) * mark;
-    return { valueUsd, marked: true };
-  } catch {
+  if (mark == null || mark <= 0 || mark > 1) {
     return { valueUsd: p.notionalUsd, marked: false };
   }
+
+  const valueUsd = Math.abs(p.netSize) * mark;
+  return { valueUsd, marked: true };
 }
 
 /** Value open paper positions at live mid prices (falls back to cost when quote missing). */
-export async function computeMarkToMarket(positions: PaperPositionRow[]): Promise<MarkToMarketResult> {
+export async function computeMarkToMarket(
+  positions: PaperPositionRow[],
+  markPrices?: MarkPriceMap,
+): Promise<MarkToMarketResult> {
   const openCostBasisUsd = positions.reduce((sum, p) => sum + p.notionalUsd, 0);
   const key = cacheKey(positions);
   const now = Date.now();
 
-  if (mtmCache && mtmCache.key === key && mtmCache.expiresAt > now) {
+  if (!markPrices && mtmCache && mtmCache.key === key && mtmCache.expiresAt > now) {
     return { ...mtmCache.result, fromCache: true };
   }
 
@@ -74,7 +88,7 @@ export async function computeMarkToMarket(positions: PaperPositionRow[]): Promis
 
   for (let i = 0; i < positions.length; i += batchSize) {
     const batch = positions.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map((p) => markPosition(p)));
+    const results = await Promise.all(batch.map((p) => markPosition(p, markPrices)));
     for (const r of results) {
       openMarkValueUsd += r.valueUsd;
       if (r.marked) positionsMarked++;
@@ -91,6 +105,8 @@ export async function computeMarkToMarket(positions: PaperPositionRow[]): Promis
     fromCache: false,
   };
 
-  mtmCache = { key, result, expiresAt: now + MTM_CACHE_MS };
+  if (!markPrices) {
+    mtmCache = { key, result, expiresAt: now + MTM_CACHE_MS };
+  }
   return result;
 }

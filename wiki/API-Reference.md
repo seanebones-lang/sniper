@@ -10,7 +10,7 @@ Base URL: your deployment origin (e.g. `http://localhost:3000` or Railway URL).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/health` | System health JSON (risk mode, execution health, performance) |
+| GET | `/api/health` | System health JSON (risk mode, execution health, runner cycle timing, recent audits) |
 
 ---
 
@@ -43,10 +43,10 @@ Base URL: your deployment origin (e.g. `http://localhost:3000` or Railway URL).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/runner` | Runner status (running, last run, signal/fill counts) |
+| GET | `/api/runner` | Runner status (running, last run, signal/fill counts). Optional `?includePnl=1` |
 | POST | `/api/runner` | Start or stop runner (`{ "action": "start" }` or `"stop"`) |
 
-Runner evaluates markets every ~12 seconds when active.
+Runner evaluates markets on a **4–12s adaptive interval** when active.
 
 ---
 
@@ -54,9 +54,11 @@ Runner evaluates markets every ~12 seconds when active.
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/api/paper/portfolio` | Full portfolio snapshot (positions, equity, P&L) |
+| GET | `/api/paper/pnl` | Lightweight P&L only (ledger + MTM snapshot) |
 | POST | `/api/paper/fill` | Manual paper fill → `paper_trades` |
 
-**Example body:**
+**Example body (`POST /api/paper/fill`):**
 ```json
 {
   "platform": "polymarket",
@@ -69,7 +71,7 @@ Runner evaluates markets every ~12 seconds when active.
 }
 ```
 
-This is the **reliable** paper fill path today.
+Both manual fills and runner automated fills persist to `paper_trades`. P&L is computed via ledger + mark-to-market.
 
 ---
 
@@ -80,7 +82,7 @@ This is the **reliable** paper fill path today.
 | GET | `/api/settings` | Grok key status + research agent toggle |
 | POST | `/api/settings` | Save Grok key and toggle (file storage) |
 
-Server-side secrets (`POLYMARKET_PRIVATE_KEY`, etc.) are never exposed via this API.
+Server-side secrets (`POLYMARKET_PRIVATE_KEY`, Kalshi keys, etc.) are never exposed via this API.
 
 ---
 
@@ -89,10 +91,10 @@ Server-side secrets (`POLYMARKET_PRIVATE_KEY`, etc.) are never exposed via this 
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/grok/intel` | Single-market Grok analysis |
-| POST | `/api/research/agent` | Grok research agent (performance context) |
+| POST | `/api/research/agent` | Grok research agent (performance context + structured proposals) |
 | POST | `/api/research/replay` | Historical strategy replay |
 | GET | `/api/research/proposals` | Proposal audit events |
-| GET | `/api/research/performance` | Attribution (placeholder) |
+| GET | `/api/research/performance` | Per-strategy attribution + PnL |
 | POST | `/api/research/apply-proposal` | Create variant from proposal |
 | POST | `/api/research/apply-recommendation` | Apply/ignore Grok recommendation |
 
@@ -103,9 +105,10 @@ Server-side secrets (`POLYMARKET_PRIVATE_KEY`, etc.) are never exposed via this 
 | Route | Purpose |
 |-------|---------|
 | `/` | Landing |
-| `/dashboard` | Stats + navigation hub |
+| `/dashboard` | Stats + paper P&L hub |
+| `/paper` | Paper portfolio + P&L breakdown |
 | `/markets` | Market discovery |
-| `/markets/[platform]/[id]` | Order book, manual paper fill, Grok intel, Polymarket WS |
+| `/markets/[platform]/[id]` | Order book, manual paper fill, Grok intel, live WS |
 | `/strategies` | Strategies + runner control |
 | `/backtest` | Synthetic + historical replay, Grok lab |
 | `/settings` | Grok API key + research agent toggle |

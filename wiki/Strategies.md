@@ -1,6 +1,6 @@
 # Strategies
 
-Four built-in strategies ship with Sniper. All are **paper-only by default** when created via the UI.
+Five built-in strategies ship with Sniper (including **live-quick-flip**). All are **paper-only by default** when created via the UI.
 
 Configure them at **`/strategies`** → **+ New Strategy**.
 
@@ -28,9 +28,13 @@ Configure them at **`/strategies`** → **+ New Strategy**.
 
 ### 4. Resolution Proximity Sniper (`resolution-proximity`)
 
-- **Idea:** Strong directional pressure near the end of short-duration markets (5m–1h).
-- **Key config:** Uses volume/liquidity proxy for "time progress" until real `endDate` metadata exists.
-- **Best for:** Short-term crypto/event markets close to resolution.
+- **Idea:** Strong directional pressure near the end of short-duration markets.
+- **Key config:** Uses `market.endDate` when available; volume proxy fallback.
+
+### 5. Live Quick Flip (`live-quick-flip`)
+
+- **Idea:** Fast in-and-out on markets resolving within ~3 hours.
+- **Key config:** `tradingGoal: quick-flip`, `targetProfitMultiple`, `maxHoldSeconds`.
 
 ---
 
@@ -54,10 +58,10 @@ Stored in DB as JSON in `strategies.config`.
 
 1. **Create** a strategy on `/strategies` — starts **paused**.
 2. **Activate** via the table toggle.
-3. **Start the runner** — checks markets every ~12 seconds.
+3. **Start the runner** on `/paper` — adaptive 4–12s interval (quick-flip uses 4s target).
 4. Only **ACTIVE** strategies are evaluated.
 
-> Automated fills from the runner are currently blocked by a DB FK issue. Manual paper fills on market detail pages work reliably. See [Known Issues](Known-Issues-and-Roadmap).
+Automated paper fills persist to `paper_trades` with ledger + MTM P&L on `/dashboard`.
 
 ---
 
@@ -65,9 +69,10 @@ Stored in DB as JSON in `strategies.config`.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Allocator | Works | Sizes from signal/fill counts |
+| Allocator | Works | PnL + activity weighted sizing |
 | Risk mode awareness | Works | DEFENSIVE/EMERGENCY filters weak strategies |
 | Regime awareness | Works | `StrategyContext.regime` from snapshot features |
+| Cooldown | Works | Enforced per strategy/market in runner |
 | Variants | Partial | Grok proposals → in-memory overrides only |
 | Edge + confidence | Supported | Strategies should return these for smarter sizing |
 

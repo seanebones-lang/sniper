@@ -1,23 +1,23 @@
 # Research & Backtesting
 
-**Status:** See [Project Status](Project-Status).
+**Status:** See [Project Status](Project-Status) (June 2, 2026).
 
 **UI route:** `/backtest` — Research & Backtesting Lab
 
 ---
 
-## The research flywheel (intended)
+## The research flywheel
 
 ```
-Runner collects snapshots          ✅ Works
+Runner collects snapshots          ✅ Works (throttled 1-in-3)
         ↓
-Performance + execution data       ⚠️ Partial (attribution placeholder)
+Performance + execution data       ✅ Works (per-strategy PnL via paper_trades joins)
         ↓
-Grok Research Agent                ✅ Works (text output)
+Grok Research Agent                ✅ Works (text + structured proposals)
         ↓
-Structured proposals             ❌ NOT implemented (proposals[] always empty)
+Structured proposals               ✅ Works (JSON/PROPOSALS parsing)
         ↓
-Strategy Variants                  ⚠️ In-memory only
+Strategy Variants                  ⚠️ In-memory only (lost on restart)
         ↓
 Historical replay                  ✅ Works if snapshots exist
         ↓
@@ -42,7 +42,7 @@ Promote / reject                   Manual
 - Click **Run Historical Replay**
 - `snapshotCount === 0` is expected until sufficient runner soak time (48h+ recommended)
 
-> **Note:** The "Realistic passive fill simulation" checkbox is **UI only** — the replay engine ignores this flag today.
+> **Note:** The "Realistic passive fill simulation" checkbox is **UI only** — the replay engine ignores this flag today. See [Known Issues](Known-Issues-and-Roadmap).
 
 ---
 
@@ -63,9 +63,11 @@ Get a key from [console.x.ai](https://console.x.ai).
 | Feature | Endpoint | Status |
 |---------|----------|--------|
 | Market intel | `POST /api/grok/intel` | Single-market analysis on detail page |
-| Research agent | `POST /api/research/agent` | Performance/snapshot context → text |
-| Runner periodic | (internal) | Infrequent; parses RECOMMENDED ACTIONS |
-| Structured proposals | — | **Not implemented** |
+| Research agent | `POST /api/research/agent` | Performance/snapshot context → text + proposals |
+| Runner periodic | (internal) | Parses RECOMMENDED ACTIONS; auto-apply pause/downweight |
+| Structured proposals | `/api/research/agent` | **Works** — JSON/`PROPOSALS` parsing |
+| Apply proposal | `POST /api/research/apply-proposal` | Creates in-memory variant |
+| Apply recommendation | `POST /api/research/apply-recommendation` | Apply/ignore Grok rec; audited |
 
 ### Grok lab buttons (on `/backtest`)
 
@@ -73,7 +75,7 @@ Get a key from [console.x.ai](https://console.x.ai).
 2. **Suggest New Features from Recent Data**
 3. **Detect Market Regimes**
 
-Analyses are logged to audit events. Structured `proposals[]` in API responses are always empty until parsing is implemented.
+Analyses are logged to audit events. RECOMMENDED ACTIONS (pause, reduce allocation, downweight) are parsed and can auto-apply.
 
 ---
 
@@ -84,10 +86,12 @@ Analyses are logged to audit events. Structured `proposals[]` in API responses a
 | Snapshot storage | `lib/data/historical.ts` | Works |
 | Replay | `replayStrategyOnHistory()` | Works; no realistic fill mode |
 | Features | `lib/data/features.ts` | Works |
-| Grok agent | `lib/research/grok-agent.ts` | Text works; proposals[] empty |
-| RECOMMENDED ACTIONS | `lib/monitoring/ai-recommendations.ts` | Parsed from text |
-| Variants | `lib/strategies/variants.ts` | In-memory |
-| Apply proposal API | `/api/research/apply-proposal` | Placeholder compare market |
+| Grok agent | `lib/research/grok-agent.ts` | Text + JSON/`PROPOSALS` proposal parsing |
+| RECOMMENDED ACTIONS | `lib/monitoring/ai-recommendations.ts` | Parsed from text; auto-apply |
+| Performance | `lib/research/performance.ts` | Per-strategy PnL via `paper_trades` joins |
+| Strategy PnL | `lib/paper/strategy-pnl.ts` | Fed to edge decay each cycle |
+| Variants | `lib/strategies/variants.ts` | In-memory — persist to DB remains open |
+| Apply proposal API | `/api/research/apply-proposal` | Creates variant (in-memory) |
 
 ---
 
@@ -104,10 +108,11 @@ Use **Refresh List** on the market dropdown to pull current markets from `/api/m
 ## Workflow recommendation
 
 1. Run paper runner for 48–72+ hours on target markets
-2. Run historical replay on `/backtest`
-3. Trigger Grok analysis on underperforming strategies
-4. If a variant is created, replay it before enabling live
-5. Only consider real execution after consistent paper results
+2. Monitor P&L on `/dashboard` or `/paper`
+3. Run historical replay on `/backtest`
+4. Trigger Grok analysis on underperforming strategies
+5. If a variant is created, replay it before enabling live
+6. Only consider real execution after consistent paper results
 
 ---
 

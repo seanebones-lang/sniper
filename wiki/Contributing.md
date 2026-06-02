@@ -2,7 +2,7 @@
 
 Thank you for helping build a serious prediction-market research and execution platform.
 
-**Before contributing, read [Project Status](Project-Status)** — the verified capability matrix and critical blockers.
+**Before contributing, read [Project Status](Project-Status)** — the verified capability matrix and remaining blockers (June 2, 2026).
 
 ---
 
@@ -11,7 +11,7 @@ Thank you for helping build a serious prediction-market research and execution p
 Sniper is **not** a get-rich-quick bot. Design priorities:
 
 1. **Paper-first safety** — real money is opt-in with multiple gates
-2. **Self-protection** — runner throttles unhealthy markets automatically
+2. **Self-protection** — runner throttles unhealthy markets; edge decay feeds risk modes
 3. **Research flywheel** — collect → analyze → propose → replay → validate
 4. **Execution quality** — adverse selection and fill quality matter
 5. **Auditability** — every decision should have a logged reason
@@ -59,6 +59,7 @@ Full setup: [Getting Started](Getting-Started).
 | Minimal diffs | Match surrounding style; no unrelated refactors |
 | Secrets | Never commit keys, `.env.local`, or `data/user-settings.json` |
 | Paper default | New features must not enable real execution by default |
+| ID discipline | Always call `ensureMarketRecord()` before signal/trade inserts |
 
 ### Key directories
 
@@ -80,7 +81,7 @@ specs/         MVP specification artifacts
 |---------|--------------|----------|
 | `npm run lint` | ESLint | — |
 | `npm run build` | Production build + TypeScript | — |
-| `npm test` | Vitest unit tests | — |
+| `npm test` | Vitest unit tests (**57 tests**, 15 files) | — |
 | `npm run test:ci` | lint + build + unit | — |
 | `npm run test:smoke` | HTTP API smoke tests | Dev server |
 | `npm run test:e2e` | Playwright (14 specs) | Dev server |
@@ -90,6 +91,8 @@ When adding features, prefer:
 - **Unit tests** for pure logic in `lib/`
 - **Smoke assertions** for new API routes in `scripts/smoke-test.mjs`
 - **E2e specs** for new user flows in `e2e/`
+
+No automated tests yet cover: full runner loop, strategies `evaluate()` under load, real execution, Grok agent live calls.
 
 ---
 
@@ -101,33 +104,35 @@ When adding features, prefer:
 - [ ] Types are explicit (no new `any`)
 - [ ] Docs/wiki updated if behavior or env vars changed
 - [ ] Real-execution changes clearly gated and documented
+- [ ] Market IDs use `ensureMarketRecord()` — never raw external IDs in DB inserts
 
 ---
 
-## Fix these first
+## Remaining gaps (fix these next)
 
 See [Known Issues](Known-Issues-and-Roadmap) for full detail.
 
 | Priority | Issue | Fix direction |
 |----------|-------|---------------|
-| **P0** | `signals.market_id` FK mismatch | Sync markets to DB; insert UUID into signals |
-| **P1** | `incrementRunCount()` never called | Call at start of each runner cycle |
 | **P1** | `realisticPassiveFills` ignored in replay | Implement in replay engine |
-| **P1** | `recordWindow()` never called | Feed performance windows from runner |
+| **P1** | No runner integration tests | Add CI coverage for full loop + `evaluate()` |
+| **P1** | Runner REST-only books | Wire WS book feed into runner |
 | **P2** | Variants in-memory | Persist to DB |
-| **P2** | Grok `proposals[]` always empty | Parse model output |
+| **P2** | `/real` page placeholder | Read server execution flag from API |
+
+Recently resolved (June 2026): signal FK mismatch, paper P&L ledger, risk sizing from paper state, edge decay wiring, `incrementRunCount()`, Grok proposal parsing, performance attribution.
 
 ---
 
 ## Suggested first contributions
 
-1. Sync discovered markets to `markets` table (P0)
-2. Call `incrementRunCount()` in runner (P1)
-3. Add unit tests for spread-scalper strategy
-4. Export audit log API — `GET /api/audit?limit=100`
-5. Kalshi live WS on market detail page
-6. Parse Grok RECOMMENDED ACTIONS into structured proposals
-7. Fix `/real` page to read server execution flag
+1. Implement realistic passive fills in replay (P1)
+2. Add runner integration tests (P1)
+3. Persist strategy variants to DB (P2)
+4. Add unit tests for spread-scalper or resolution-proximity strategy
+5. Export audit log API — `GET /api/audit?limit=100`
+6. Fix `/real` page to read server execution flag
+7. Wire Kalshi WS into runner book cache
 
 Label PRs: `data`, `execution`, `strategy`, `research`, `ui`, `test`, `docs`.
 
@@ -142,6 +147,7 @@ Label PRs: `data`, `execution`, `strategy`, `research`, `ui`, `test`, `docs`.
 | Cross-venue arbitrage | Both APIs, resolution rules |
 | ML / feature engineering on snapshots | Time series, `market_snapshots` |
 | Production observability | Logging, metrics, alerting |
+| Runner integration testing | Vitest + mock books + DB fixtures |
 
 ---
 

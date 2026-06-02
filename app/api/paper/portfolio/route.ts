@@ -5,7 +5,6 @@ import { getPaperPortfolio, applyPaperBudgetToRiskManager } from '@/lib/paper/po
 
 export async function GET(req: Request) {
   try {
-    await applyPaperBudgetToRiskManager();
     const { searchParams } = new URL(req.url);
     const days = Math.min(30, Math.max(1, parseInt(searchParams.get('days') ?? '7', 10) || 7));
     const portfolio = await getPaperPortfolio(days);

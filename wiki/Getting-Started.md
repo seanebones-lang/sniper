@@ -65,19 +65,19 @@ Open **http://localhost:3000** (or the port Next.js prints if 3000 is taken).
 | 1 | `/settings` | Optionally add Grok (xAI) API key |
 | 2 | `/strategies` | Create one or more strategies (paper-only by default) |
 | 3 | `/strategies` | Start the 24/7 paper runner |
-| 4 | `/markets` | Browse markets; open detail for order books |
-| 5 | `/markets/...` | **Manual paper fill** — reliable path to DB today |
+| 4 | `/markets` | Browse markets; open detail for order books (Polymarket/Kalshi WS) |
+| 5 | `/dashboard` or `/paper` | View paper P&L, equity, realized/unrealized breakdown |
 | 6 | `/backtest` | Historical replay after runner collects snapshots |
-| 7 | `/health` | Risk mode, execution health, performance summary |
+| 7 | `/health` | Risk mode, execution health, runner cycle timing |
 
-> **Important:** Automated runner fills are currently blocked by a database FK issue. Use manual paper fills on the market detail page until fixed. See [Known Issues](Known-Issues-and-Roadmap).
+The runner automatically evaluates strategies, inserts signals, and fills paper trades. Manual fills on market detail pages also work via `POST /api/paper/fill`.
 
 ---
 
 ## 5. Verify your install
 
 ```bash
-npm run test:ci          # lint + build + unit (no server needed)
+npm run test:ci          # lint + build + unit (57 tests; no server needed)
 npm run test:smoke       # 14 API checks (dev server must be running)
 npm run test:e2e         # 14 Playwright specs (local: dev server on :3001)
 npm run test:all         # full local suite
@@ -92,6 +92,8 @@ CI runs lint → build + unit → e2e with Postgres. Smoke tests are **not** in 
 1. Get an xAI API key from [console.x.ai](https://console.x.ai)
 2. Add via **Settings** UI or set `XAI_API_KEY` in `.env.local`
 3. Enable periodic runner analysis: `ENABLE_GROK_RESEARCH_AGENT=true`
+
+Grok proposals and RECOMMENDED ACTIONS (pause, downweight) are parsed and can auto-apply.
 
 ---
 
@@ -112,4 +114,4 @@ See [Operations](Operations) for full deployment steps:
 - [UI Guide](UI-Guide) — walkthrough of every page
 - [Strategies](Strategies) — configure trading rules
 - [Project Status](Project-Status) — what works vs what doesn't
-- [Contributing](Contributing) — fix blockers and add features
+- [Contributing](Contributing) — fix remaining gaps and add features

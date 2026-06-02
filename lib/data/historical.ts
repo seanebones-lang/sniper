@@ -2,7 +2,7 @@
  * Historical snapshot storage + strategy replay on collected order book data.
  */
 
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
 import { db, marketSnapshots } from '@/lib/db';
 import type { BacktestResult } from '@/lib/backtest/engine';
 import type { Strategy, StrategyConfig } from '@/lib/strategies/types';
@@ -116,6 +116,21 @@ export async function saveBookSnapshot(input: BookSnapshotInput): Promise<void> 
   } catch (err) {
     console.warn('[historical] Failed to save snapshot:', err);
   }
+}
+
+export async function getRecentSnapshotsForMarket(
+  platform: string,
+  marketExternalId: string,
+  limit = 10,
+) {
+  return db.query.marketSnapshots.findMany({
+    where: and(
+      eq(marketSnapshots.platform, platform),
+      eq(marketSnapshots.marketExternalId, marketExternalId),
+    ),
+    orderBy: desc(marketSnapshots.timestamp),
+    limit,
+  });
 }
 
 export async function getSnapshotsForReplay(

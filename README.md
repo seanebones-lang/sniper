@@ -6,21 +6,29 @@ Designed for small, consistent edges over long periods — not gambling or home 
 
 > **High risk personal tool.** Most automated prediction market strategies lose money after fees, slippage, and adverse selection. You can lose all capital. Paper mode is strongly recommended for extended periods before any real money.
 
+## Live demo (June 2026)
+
+Paper trading runner, live P&L ledger, and dashboard in action:
+
+<video src="docs/demo/sniper-paper-trading-demo.mov" controls width="100%">
+  <a href="docs/demo/sniper-paper-trading-demo.mov">Download demo video</a>
+</video>
+
 ## What this is (and is not)
 
 **Sniper is:**
 
 - A market discovery and order book research UI (Polymarket + Kalshi)
-- A paper-trading simulator with manual and (intended) automated fill paths
+- A paper-trading simulator with manual **and automated** fill paths
 - A 24/7 runner that collects order book snapshots and evaluates strategies
+- Accurate paper P&L via cash ledger + live mark-to-market
 - A backtesting lab with synthetic and historical replay
 - An optional Grok (xAI) research layer for analysis and recommendations
-- An optional, heavily gated real execution path for **Polymarket only**
+- An optional, heavily gated real execution path for Polymarket and Kalshi
 
 **Sniper is not (today):**
 
-- A production-ready unattended trading bot — see [Critical blockers](docs/STATUS.md#critical-blockers)
-- A Kalshi real-money execution system
+- A production-ready unattended real-money bot — see [Critical blockers](docs/STATUS.md#critical-blockers)
 - A cross-venue arbitrage engine
 
 **Authoritative status:** [docs/STATUS.md](docs/STATUS.md) — capability matrix verified against code.
@@ -50,30 +58,27 @@ Local dev UI (June 2026). Paper mode is the default throughout.
 ## Core Philosophy
 
 - **Paper mode is sacred** — the default and primary way to operate.
-- **Self-protection first** — the system detects when it is getting hurt and reduces risk automatically (in-process while the runner is up).
+- **Self-protection first** — risk modes, circuit breakers, and execution health throttle sizing.
 - **Research flywheel** — snapshot collection → analysis → recommendations → replay validation.
 - **Execution quality matters** — adverse selection and poor fills destroy edges.
-- **Auditable everything** — decisions should have traceable reasons (`audit_events`, signal reasons).
+- **Auditable everything** — decisions traced via `audit_events` and signal reasons.
 
 ## What works today
 
-Verified against the codebase (June 2026):
+Verified against the codebase (June 2, 2026):
 
 | Area | Status |
 |------|--------|
 | Polymarket + Kalshi market discovery and order books (REST) | Works |
-| Markets UI with last prices | Works |
-| Manual paper fills (market UI + `POST /api/paper/fill` → DB) | Works |
-| Four strategy types + create/toggle via UI | Works |
-| Runner loop (evaluate, snapshots, risk modes) | Works |
-| Runner automated signal → DB → fill pipeline | **Broken** ([FK mismatch](docs/STATUS.md#1-signalsmarket_id-foreign-key-mismatch)) |
+| Manual + automated paper fills → `paper_trades` | Works |
+| Paper P&L (ledger + MTM) on dashboard and `/paper` | Works |
+| Five strategy types + create/toggle via UI | Works |
+| Runner loop (book cache, adaptive interval, risk-unified sizing) | Works |
+| Grok intel + research agent + auto-apply actions | Works (requires xAI key) |
+| Per-strategy PnL attribution + PnL-weighted allocator | Works |
 | Historical snapshot replay | Works (needs runner soak first) |
-| Grok intel + research agent | Works (requires xAI key) |
-| Settings UI for Grok key | Works |
-| Polymarket live WebSocket | Market detail page only |
-| Real Polymarket execution | Coded, gated, not CI-tested |
-| Real Kalshi execution | Not implemented |
-| CI (lint, build, unit, e2e) | GitHub Actions |
+| Real Polymarket / Kalshi execution | Coded, gated, not CI-tested |
+| CI (lint, build, 57 unit tests, e2e) | GitHub Actions |
 
 Full matrix: [docs/STATUS.md](docs/STATUS.md).
 
@@ -101,10 +106,11 @@ Open **http://localhost:3000** (or the port Next.js prints if 3000 is taken).
 
 1. **Settings** (`/settings`) — optionally add Grok (xAI) API key.
 2. **Strategies** (`/strategies`) — create strategies (paper-only by default).
-3. Start the runner — collects snapshots and evaluates strategies.
-4. **Markets** (`/markets`) — order books; **use manual paper fill here** for reliable DB fills today.
-5. **Backtest** (`/backtest`) — historical replay after snapshots accumulate.
-6. **Health** (`/health`) — risk mode and execution health (in-process state).
+3. **Paper Portfolio** (`/paper`) — set budget, start the runner.
+4. **Dashboard** (`/dashboard`) — live P&L, equity, and runner status.
+5. **Markets** (`/markets`) — order books; manual paper fill on detail pages.
+6. **Backtest** (`/backtest`) — historical replay after snapshots accumulate.
+7. **Health** (`/health`) — risk mode, execution health, runner cycle timing.
 
 ### Local Postgres via Docker
 
@@ -121,27 +127,28 @@ Set `DATABASE_URL=postgresql://postgres:postgres@localhost:5433/sniper` in `.env
 
 ```bash
 npm run lint          # ESLint (enforced in CI)
-npm run test          # Vitest — 8 unit tests (orderbook, paper-simulator)
+npm run test          # Vitest — 57 unit tests
 npm run test:ci       # lint + build + unit
 npm run test:smoke    # 14 API checks (requires dev server)
-npm run test:e2e      # 14 Playwright specs (local: dev server on :3001)
+npm run test:e2e      # Playwright specs
 npm run test:all      # lint + unit + smoke + e2e
 ```
 
-CI (`.github/workflows/ci.yml`): lint → build + unit → e2e with Postgres. **Smoke tests are not in CI.**
+CI (`.github/workflows/ci.yml`): lint → build + unit → e2e with Postgres.
 
 ## UI & API
 
 | Route | Purpose |
 |-------|---------|
 | `/` | Landing |
-| `/dashboard` | Stats + navigation |
+| `/dashboard` | Live paper P&L + portfolio + system status |
+| `/paper` | Full portfolio, budget, runner control |
 | `/markets` | Market discovery |
-| `/markets/[platform]/[id]` | Order book, manual paper fill, Grok intel, Polymarket WS |
+| `/markets/[platform]/[id]` | Order book, manual paper fill, Grok intel, WS |
 | `/strategies` | Strategies + runner control |
 | `/backtest` | Synthetic + historical replay, Grok lab |
 | `/settings` | Grok API key + research agent toggle |
-| `/health` | Risk mode, execution health, recommendations |
+| `/health` | Risk mode, execution health, runner timing |
 | `/real` | Real execution warnings (placeholder status UI) |
 
 API reference: [docs/STATUS.md#api-routes](docs/STATUS.md#api-routes).
@@ -150,15 +157,16 @@ API reference: [docs/STATUS.md#api-routes](docs/STATUS.md#api-routes).
 
 | Doc | Description |
 |-----|-------------|
-| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation with navigation — source in [`wiki/`](wiki/) |
+| [Wiki (GitHub)](https://github.com/seanebones-lang/sniper/wiki) | Full documentation — source in [`wiki/`](wiki/) |
 | [docs/STATUS.md](docs/STATUS.md) | **Authoritative capability matrix and blockers** |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute; fix list; dev setup |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute; dev setup |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design |
 | [docs/STRATEGIES.md](docs/STRATEGIES.md) | Strategy types and config |
 | [docs/RISK.md](docs/RISK.md) | Risk layers |
 | [docs/EXECUTION.md](docs/EXECUTION.md) | Execution layer |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Research flywheel |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | 24/7 ops and CI |
+| [FEATURES.md](FEATURES.md) | Standout capabilities |
 | [specs/001-sniper-mvp/](specs/001-sniper-mvp/) | Original MVP spec |
 
 ## MVP Phases
@@ -168,9 +176,9 @@ API reference: [docs/STATUS.md#api-routes](docs/STATUS.md#api-routes).
 | **0** | Scaffold, DB schema, Railway | Complete |
 | **1** | REST clients + discovery UI | Complete |
 | **2** | Paper simulator, manual fill API, Polymarket WS on detail | Complete |
-| **3** | Strategy engine, runner, strategies UI | Mostly complete — [automated fill FK blocker](docs/STATUS.md#1-signalsmarket_id-foreign-key-mismatch) |
-| **4** | Real execution + risk stack | Partial — Polymarket gated; Kalshi N/A; DB portfolio incomplete |
-| **5** | Backtest, Grok, docs, tests | Partial — core paths exist; see [STATUS.md](docs/STATUS.md) |
+| **3** | Strategy engine, runner, strategies UI | Complete |
+| **4** | Real execution + risk stack | Partial — coded + gated; not CI-tested |
+| **5** | Backtest, Grok, docs, tests | Partial — replay realism, variant persistence remain |
 
 ## Deployment
 
@@ -181,15 +189,15 @@ Primary target: **Railway** (`railway.toml`).
 3. Secrets: [`.env.example`](.env.example)
 4. Redeploy
 
-Real trading (opt-in, server-side only): `SNIPER_ENABLE_REAL_EXECUTION=true`, `POLYMARKET_PRIVATE_KEY`, strategy with `paperOnly: false`.
+Real trading (opt-in, server-side only): `SNIPER_ENABLE_REAL_EXECUTION=true`, platform keys, strategy with `paperOnly: false`.
 
 ## Tech Stack
 
 - Next.js 16 (App Router), TypeScript strict, ESLint
 - Drizzle ORM + PostgreSQL
 - Polymarket: `@polymarket/clob-client-v2`, Gamma API, viem
-- Kalshi: REST (+ WS client library, not wired in UI)
-- Vitest (unit), Playwright (e2e), smoke script
+- Kalshi: REST + WS on detail pages
+- Vitest (57 unit tests), Playwright (e2e)
 - xAI Grok via Vercel AI SDK (optional)
 
 ## Safety & Disclaimers

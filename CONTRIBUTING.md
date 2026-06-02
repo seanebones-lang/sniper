@@ -117,7 +117,7 @@ specs/         MVP specification artifacts
 
 **CI** (`.github/workflows/ci.yml`): ESLint → build + unit → e2e with Postgres. **Smoke tests are not in CI.**
 
-**Coverage today:** 8 unit tests (2 files), 14 smoke checks, 14 e2e specs. No tests for runner, strategies, risk, or real execution.
+**Coverage today:** 57 unit tests (15 files), 14 smoke checks, 14 e2e specs. No tests for full runner loop, strategies `evaluate()`, or real execution.
 
 When adding features, prefer:
 
@@ -162,12 +162,12 @@ See [docs/STATUS.md#critical-blockers](docs/STATUS.md#critical-blockers) for ful
 
 | Priority | Issue | Fix direction |
 |----------|-------|-------------|
-| **P0** | `signals.market_id` FK — runner uses API id, schema expects DB UUID | Sync markets to `markets` table; insert UUID into signals |
-| **P1** | `incrementRunCount()` never called | Call at start of each runner cycle |
 | **P1** | `realisticPassiveFills` ignored in replay | Implement in `replayStrategyOnHistory()` |
-| **P1** | `edgeDecayMonitor.recordWindow()` never called | Feed performance windows from runner |
 | **P2** | Variants in-memory | Persist to DB |
-| **P2** | Grok `proposals[]` always empty | Parse model output or tool calls |
+| **P2** | Runner / `evaluate()` integration tests | Add mocked-book runner tests to CI |
+| **P2** | Runner WS book feed | Optional WS cache in runner loop |
+
+**Recently resolved (June 2026):** FK mismatch, paper/risk split brain, USD↔shares sizing, `incrementRunCount`, edge decay wiring, Grok proposal parsing.
 
 ---
 
@@ -179,53 +179,41 @@ Full matrix: [docs/STATUS.md](docs/STATUS.md). Summary:
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| Markets not synced to `markets` DB table | **Bug / P0** | Runner signal insert fails FK; automated fills blocked |
-| Polymarket `externalId` must be CLOB token ID | Fixed | Was using market id; order books broke. Documented in smoke tests |
-| Order book bid/ask sort order | Fixed | Unsorted books produced wrong mid (~50¢ vs ~0.15¢) |
-| Market cache TTL ~25s | Low | `lib/markets.ts` — configurable timeout exists |
-| Kalshi WS on market detail page | Low | UI says Polymarket-only for live toggle |
+| Market cache TTL ~25s | Low | Force refresh on quick-flip cycles |
+| Kalshi WS on market detail | Works | REST books in runner |
 
 ### Execution & Paper
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| Kalshi real execution | High | `real-executor.ts` returns "not yet implemented" |
-| Replay “realistic passive fills” toggle | **Bug** | UI/API pass flag; `replayStrategyOnHistory()` ignores it |
-| Temporary adjustment expiration | **Bug** | `incrementRunCount()` never called |
-| Edge decay → risk mode | **Bug** | `recordWindow()` never called |
-| True queue simulation for passive fills | Medium | Paper uses simplified fill model |
-| Resting order management in live runner | Medium | ExecutionManager has logic; not fully wired to continuous book updates |
-| Partial fill reconciliation | Medium | Not implemented |
-| `positions` table | Medium | Schema exists; not fully updated on fills |
+| Replay “realistic passive fills” toggle | **Bug** | UI/API pass flag; replay ignores it |
+| True queue simulation for passive fills | Medium | Improved imbalance/regime wiring; not full queue sim |
+| Resting order management in live runner | Medium | REST book cache; no continuous WS in runner |
+| Partial fill reconciliation | Medium | Real path only |
 
 ### Strategies & Research
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| Cross-venue arb strategy | Low | Mentioned in specs; not implemented |
-| Grok structured proposal extraction | Medium | Agent returns text; `proposals[]` parsing not implemented |
-| Strategy variants persistence | Medium | `lib/strategies/variants.ts` is **in-memory only** — lost on restart |
-| Performance attribution | Medium | `lib/research/performance.ts` is lightweight placeholder |
-| Resolution proximity `endDate` | Low | Uses volume/liquidity proxy instead of real market metadata |
-| Historical replay needs snapshot data | Expected | Run runner 48h+ before replay shows trades |
+| Strategy variants persistence | Medium | In-memory only |
+| Cross-venue arb strategy | Low | Not implemented |
+| Runner / `evaluate()` tests | Medium | Not in CI |
+| Historical replay needs snapshot data | Expected | Run runner before replay |
 
 ### UI / UX
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| `/real` page | Low | Does not read server `SNIPER_ENABLE_REAL_EXECUTION` flag |
-| Dashboard stats | Low | Basic; could show live runner metrics |
-| Decision log export | Medium | Audit events exist in DB; no export UI |
-| Global kill switch in UI | Medium | Runner stop exists; no dedicated emergency UI |
+| `/real` page | Low | Does not read server execution flag |
+| Decision log export | Medium | Audits in `/api/health`; no export UI |
 
 ### Infrastructure & Testing
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| Unit test coverage | Medium | 8 tests in 2 files only |
-| CI smoke tests | Low | Not in GitHub Actions workflow |
+| Unit test coverage | Medium | 57 tests; runner loop not covered |
+| CI smoke tests | Low | Not in GitHub Actions |
 | E2e depends on live Polymarket API | Low | Flaky if API down |
-| Database migrations | Low | Using `drizzle-kit push`; formal migrations folder exists but push is primary |
 
 ### Security
 
@@ -242,15 +230,13 @@ Full matrix: [docs/STATUS.md](docs/STATUS.md). Summary:
 Good **first PR** targets (self-contained, high value):
 
 1. **Persist strategy variants to DB** — replace in-memory store in `lib/strategies/variants.ts`.
-2. **Sync discovered markets to `markets` table** — fix signal `market_id` FK issue in runner.
+2. **Implement replay realistic passive fills** — honor flag in `replayStrategyOnHistory()`.
 3. **Add unit tests for a strategy** — e.g. `spread-scalper` with mock order book contexts.
-4. **Export audit log API** — `GET /api/audit?limit=100` from `audit_events` table.
-5. **Kalshi live WS on market detail** — mirror Polymarket toggle for Kalshi tickers.
-6. **Parse Grok RECOMMENDED ACTIONS** into `StrategyProposal[]` in `grok-agent.ts`.
-7. **Improve performance attribution** — proper joins between signals and paper_trades.
-8. **Mock Polymarket in CI smoke tests** — reduce external API dependency.
-9. **Document strategy config fields** — already labeled in UI; mirror in `docs/STRATEGIES.md`.
-10. **Fix `/real` page** — show actual `SNIPER_ENABLE_REAL_EXECUTION` status from API.
+4. **Runner integration test** — mocked books, single cycle, assert signal/fill path.
+5. **Export audit log API** — `GET /api/audit?limit=100` from `audit_events` table.
+6. **Fix `/real` page** — show actual execution gate status from `/api/health`.
+7. **Mock Polymarket in CI smoke tests** — reduce external API dependency.
+8. **Runner WS book cache** — optional Kalshi/Polymarket WS for hot quick-flip set.
 
 Label PRs with area tags if possible: `data`, `execution`, `strategy`, `research`, `ui`, `test`, `docs`.
 

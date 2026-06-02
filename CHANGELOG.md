@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — June 2, 2026 Accuracy & Speed Pass
+
+### Added
+- **Paper P&L ledger + mark-to-market** (`lib/paper/ledger.ts`, `lib/paper/mark-to-market.ts`)
+  - Cash ledger with average-cost realized PnL; live marks for open positions.
+  - Dashboard and `/paper` show equity, realized/unrealized P&L, cash available.
+- **Risk-unified paper state** (`lib/paper/risk-state.ts`)
+  - `loadPaperRiskState()` feeds `PortfolioRiskManager` each runner cycle.
+  - Exit signals bypass exposure/daily-loss circuit breakers.
+- **Runner performance**
+  - Per-cycle deduplicated book cache (`lib/runner/book-cache.ts`).
+  - Overlap guard + adaptive interval (4–12s).
+  - Snapshot feature loading; regime passed to strategies; cooldown enforced.
+- **USD → shares sizing** (`lib/risk/sizing.ts`) — Kelly USD caps converted correctly in runner + real executor.
+- **Edge decay + allocator**
+  - `recordWindow()` from per-strategy paper PnL.
+  - Allocator weights by recent PnL + activity.
+- **API**
+  - `GET /api/paper/pnl` — lightweight P&L endpoint.
+  - Runner GET uses cheap counts; `?includePnl=1` optional.
+- **Grok** — JSON/`PROPOSALS` proposal parsing in research agent.
+- **Demo video** — `docs/demo/sniper-paper-trading-demo.mov` on README.
+- **Tests** — 57 unit tests (ledger, sizing, + existing suite).
+
+### Changed
+- Dashboard consolidated to single 5s portfolio poll.
+- Performance attribution uses `filledAt` + run-session scoping.
+- Paper simulator uses book imbalance and regime from runner.
+- Resolution proximity uses `market.endDate` when available.
+- `/api/health` exposes runner cycle timing and recent audits.
+
+### Fixed
+- Grok global risk multiplier no longer overwritten by risk-mode multiplier.
+- Real fill counter double-increment in runner.
+- Book cache prefetch includes quick-flip 40-market window + open positions.
+
+---
+
 ## [Unreleased] — June 2026 Production Hardening
 
 ### Added

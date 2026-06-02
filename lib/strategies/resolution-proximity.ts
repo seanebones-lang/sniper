@@ -19,16 +19,16 @@ export const ResolutionProximitySniper: Strategy = {
     const { market, book, currentPrice } = ctx;
     if (!currentPrice || !book) return null;
 
-    // We need to know how much time is left.
-    // For now we use a simple heuristic based on market question or external data.
-    // In production this should come from proper market metadata (endDate).
-    // For this version we assume short-term markets if the question mentions minutes/hours.
+    let progress = Math.min(0.95, (market.volume || 0) / ((market.liquidity || 1000) * 8 + 1));
 
-    // We don't have exact start time here. Use a proxy:
-    // If volume is still very low relative to liquidity, we're probably early.
-    // Better proxy in live system: use actual market creation time + current time.
-    // For MVP we'll use a simple volume-based progress estimate.
-    const progress = Math.min(0.95, (market.volume || 0) / ((market.liquidity || 1000) * 8 + 1));
+    if (market.endDate) {
+      const end = new Date(market.endDate).getTime();
+      const now = Date.now();
+      if (end <= now) return null;
+      const assumedStartMs = end - 3 * 3600_000;
+      const totalMs = Math.max(end - assumedStartMs, 60_000);
+      progress = Math.min(0.99, Math.max(0, (now - assumedStartMs) / totalMs));
+    }
 
     // Only activate in the final 35% of the market's life
     if (progress < 0.65) return null;

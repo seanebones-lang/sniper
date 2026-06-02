@@ -41,6 +41,10 @@ export interface SnipeRequest {
   isExit?: boolean;
   /** Override minimum passive fill probability (0–1). */
   minFillProbability?: number;
+  /** Book imbalance from runner (-1 to 1) */
+  bookImbalance?: number;
+  /** Market regime label from snapshots */
+  regime?: string;
 }
 
 const FEE_RATE = 0.0005;
@@ -56,6 +60,7 @@ export class PaperSimulator {
     const {
       market, side, price, size, reason, book = null,
       immediate = false, isExit = false, minFillProbability,
+      bookImbalance = 0.05, regime = 'normal',
     } = req;
 
     if (size <= 0 || price <= 0 || price >= 1) {
@@ -86,8 +91,8 @@ export class PaperSimulator {
       { action: side, price, size, reason },
       book,
       {
-        regime: 'normal',
-        recentImbalance: 0.05,
+        regime,
+        recentImbalance: bookImbalance,
         timeSinceSignal: 5,
         isRealMoney: false,
         openOrders: executionManager.getOpenOrdersForMarket(market.externalId),
@@ -104,8 +109,8 @@ export class PaperSimulator {
 
       // === Realistic Passive Fill Simulation ===
       // Base probability influenced by imbalance, regime, and time
-      const imbalance = 0.05; // placeholder — in real system this would come from recent snapshots
-      const regimeFactor = 1.0; // will be wired to actual regime later
+      const imbalance = bookImbalance;
+      const regimeFactor = regime === 'high_volatility' ? 0.85 : regime === 'low_liquidity' ? 0.9 : 1.0;
 
       // Strong imbalance in our direction = higher fill probability
       const imbalanceBonus = side === 'BUY' ? Math.max(0, imbalance) * 0.6 : Math.max(0, -imbalance) * 0.6;

@@ -58,10 +58,8 @@ export async function askGrokResearchAgent(query: ResearchQuery): Promise<Resear
     temperature: 0.35,
   });
 
-  // Try to extract structured proposals
-  const proposals: StrategyProposal[] = [];
-  // Structured proposal extraction can be added later with better prompting.
-  // For now the free-text analysis is already extremely valuable.
+  // Try to extract structured proposals from JSON block or inline array
+  const proposals = parseProposalsFromAnalysis(text, query.strategyId);
 
   return {
     query,
@@ -70,6 +68,53 @@ export async function askGrokResearchAgent(query: ResearchQuery): Promise<Resear
     timestamp: new Date(),
     model: MODEL,
   };
+}
+
+function parseProposalsFromAnalysis(text: string, defaultStrategyId?: string): StrategyProposal[] {
+  const proposals: StrategyProposal[] = [];
+
+  const jsonMatch = text.match(/```json\s*([\s\S]*?)```/i);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      const arr = Array.isArray(parsed) ? parsed : parsed.proposals;
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (item && typeof item.description === 'string') {
+            proposals.push({
+              strategyId: String(item.strategyId ?? defaultStrategyId ?? 'unknown'),
+              type: item.type ?? 'parameter_change',
+              description: item.description,
+              suggestedChange: item.suggestedChange ?? {},
+              expectedImpact: item.expectedImpact ?? '',
+              confidence: typeof item.confidence === 'number' ? item.confidence : 0.5,
+              regime: item.regime,
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
+  if (proposals.length === 0 && text.includes('PROPOSALS')) {
+    const section = text.split('PROPOSALS')[1]?.split('RECOMMENDED ACTIONS')[0] ?? '';
+    for (const line of section.split('\n')) {
+      const trimmed = line.replace(/^[-*]\s*/, '').trim();
+      if (trimmed.length < 10) continue;
+      proposals.push({
+        strategyId: defaultStrategyId ?? 'unknown',
+        type: 'parameter_change',
+        description: trimmed,
+        suggestedChange: {},
+        expectedImpact: 'See analysis',
+        confidence: 0.5,
+      });
+    }
+  }
+
+  return proposals.slice(0, 8);
 }
 
 async function gatherResearchContext(query: ResearchQuery) {
@@ -116,6 +161,8 @@ Recent snapshot features (with regimes):
 ${JSON.stringify((context.recentSnapshots as unknown[] | undefined)?.slice(-12) || [], null, 2)}
 
 Deliver a sharp analysis of what is working / broken, and why.
+
+Optionally include a \`\`\`json block with a "proposals" array of structured changes.
 
 At the end, output a section called "RECOMMENDED ACTIONS" with 0-5 concrete, executable recommendations in this exact format (one per line):
 - ACTION: [pause_strategy | reduce_allocation | increase_allocation | enter_defensive_mode | cancel_orders_on_market | other] | TARGET: [strategy_id or market_id or "global"] | VALUE: [optional number, e.g. 0.5 for 50%] | REASON: [short explanation]

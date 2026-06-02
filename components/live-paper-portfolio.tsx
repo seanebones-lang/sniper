@@ -59,8 +59,10 @@ export interface LivePortfolioData {
 }
 
 interface LivePaperPortfolioProps {
-  /** Poll interval in ms (default 3000) */
+  /** Poll interval in ms (default 5000); set 0 to disable internal polling */
   pollMs?: number;
+  /** When provided, component uses this data instead of fetching */
+  externalData?: LivePortfolioData | null;
   /** Max positions rows to show */
   maxPositions?: number;
   /** Max recent fills to show */
@@ -69,16 +71,26 @@ interface LivePaperPortfolioProps {
 }
 
 export function LivePaperPortfolio({
-  pollMs = 3000,
+  pollMs = 5000,
+  externalData,
   maxPositions = 12,
   maxFills = 8,
   showHeader = true,
 }: LivePaperPortfolioProps) {
-  const [data, setData] = useState<LivePortfolioData | null>(null);
+  const [data, setData] = useState<LivePortfolioData | null>(externalData ?? null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (externalData) {
+      setData(externalData);
+      setLastFetch(new Date());
+    }
+  }, [externalData]);
+
+  useEffect(() => {
+    if (externalData != null || pollMs <= 0) return;
+
     let cancelled = false;
 
     async function tick() {
@@ -101,7 +113,7 @@ export function LivePaperPortfolio({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [pollMs]);
+  }, [pollMs, externalData]);
 
   const positions = data?.positions.slice(0, maxPositions) ?? [];
   const fills = data?.recentFills.slice(0, maxFills) ?? [];

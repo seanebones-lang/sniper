@@ -22,7 +22,7 @@ Default URL: `http://localhost:3000`. If occupied, use `-p 3001` and set `SMOKE_
 CI (`.github/workflows/ci.yml`):
 
 1. **ESLint** — zero issues required
-2. **Build + unit tests** — 8 Vitest tests
+2. **Build + unit tests** — 57 Vitest tests
 3. **E2E** — Playwright with Postgres; builds app on port 3010
 
 **Not in CI:** smoke tests (`scripts/smoke-test.mjs`). Run locally with dev server.
@@ -58,7 +58,9 @@ E2E may call live Polymarket APIs — can be flaky when external services are do
 |----------|---------|
 | `/health` | Risk mode, restrictions, execution health, Grok recs |
 | `/api/health` | JSON version of health data |
-| `/api/runner` | Runner status (running, last run, fill counts) |
+| `/api/runner` | Runner status, cycle timing (lightweight) |
+| `/api/paper/pnl` | Lightweight P&L snapshot |
+| `/api/paper/portfolio` | Full portfolio + positions |
 | `/api/research/performance` | Recent attribution |
 | `/api/research/proposals` | Recent Grok proposals |
 

@@ -1,6 +1,6 @@
 # Execution Layer
 
-**Status:** See [Project Status](Project-Status).
+**Status:** See [Project Status](Project-Status) (June 2, 2026).
 
 ---
 
@@ -21,7 +21,7 @@ In-memory brain for:
 
 **Used by:** paper simulator (when book available), real executor, runner health throttle.
 
-**Not fully wired:** continuous resting-order management from live WS feeds in the runner loop.
+**Not fully wired:** continuous resting-order management from live WS feeds in the runner loop (runner uses REST books via `book-cache.ts`).
 
 ---
 
@@ -31,19 +31,27 @@ In-memory brain for:
 |------|--------|
 | Manual fill via `POST /api/paper/fill` | **Works** → `paper_trades` |
 | Manual fill via market detail UI | **Works** |
-| Runner automated fill | **Broken** (signal FK — see [Known Issues](Known-Issues-and-Roadmap)) |
+| Runner automated fill | **Works** — `ensureMarketRecord` before signal insert |
+| P&L (ledger + MTM) | **Works** — dashboard, `/paper`, `/api/paper/pnl` |
 | Immediate fill mode | Works (bypasses ExecutionManager when no book) |
 
 Fee model: ~5 bps in simulator.
 
-### Manual paper fill workflow
+### Paper fill workflows
+
+**Automated (recommended for strategy testing):**
+
+1. Create and activate strategies on `/strategies`
+2. Start the runner
+3. Runner evaluates markets, inserts signals, and fills via paper simulator
+4. View P&L on `/dashboard`, `/paper`, or `GET /api/paper/pnl`
+
+**Manual:**
 
 1. Navigate to `/markets`
 2. Open a market detail page
 3. Use the paper fill controls with size and side
 4. Fill persists to `paper_trades` in PostgreSQL
-
-This is the **recommended path** for paper trading today.
 
 ---
 
@@ -53,13 +61,14 @@ This is the **recommended path** for paper trading today.
 
 1. `SNIPER_ENABLE_REAL_EXECUTION=true` (server env)
 2. Strategy has `paperOnly: false` (DB field; no UI toggle yet)
-3. Risk checks pass
-4. ExecutionManager approves the decision
+3. `isRealExecutionAllowed()` — env override + durable kill switch in `system_state`
+4. Risk checks pass (including maxDrawdown)
+5. ExecutionManager approves the decision
 
 | Platform | Status |
 |----------|--------|
 | Polymarket | Coded (`placePolymarketLimitOrder`); requires `POLYMARKET_PRIVATE_KEY`; not CI-tested |
-| Kalshi | Returns "not yet implemented" |
+| Kalshi | Coded (`kalshi-trading.ts` + reconciliation); requires Kalshi API keys; not CI-tested |
 
 See `/real` for the confirmation gate UI (placeholder server status).
 
@@ -85,8 +94,9 @@ Metrics include:
 - System health score
 - Average slippage (recent)
 - Unhealthy markets count
+- Runner cycle timing
 
-State resets on process restart.
+Execution health resets on process restart; kill switch and risk mode persist via `system_state`.
 
 ---
 
@@ -98,11 +108,13 @@ State resets on process restart.
 | Adverse selection heuristics | Yes |
 | Per-market health in runner throttle | Yes (in-process) |
 | Manual paper fills to DB | Yes |
-| Runner automated paper fills | No (FK blocker) |
+| Runner automated paper fills | Yes |
+| Paper P&L ledger + MTM | Yes |
 | Real Polymarket orders | Coded, gated, untested in CI |
-| Real Kalshi orders | No |
+| Real Kalshi orders | Coded, gated, untested in CI |
 | Queue-position simulation | No |
 | Replay realistic passive fills | No (UI only) |
+| Runner WS book feed | No (REST only) |
 
 ---
 

@@ -8,77 +8,77 @@ Sniper is a **research + execution platform** first, trading bot second.
 
 1. **Data Layer**
    - REST: Gamma API + Polymarket CLOB, Kalshi trade API
-   - In-memory cache: `lib/markets.ts` (~25s TTL) — **not** synced to `markets` DB table
-   - WebSocket: Polymarket client used on market detail page only; Kalshi WS client exists but is unused in UI/runner
-   - Historical: `market_snapshots` (written by runner when books available)
+   - In-memory cache: `lib/markets.ts` (~25s TTL; force refresh on quick-flip cycles)
+   - WebSocket: Polymarket + Kalshi on market detail pages
+   - Historical: `market_snapshots` (throttled writes from runner; loaded for features)
+   - Per-cycle book cache: `lib/runner/book-cache.ts` (deduplicated parallel REST)
 
 2. **Research Layer**
-   - Replay: `lib/data/historical.ts` (`realisticPassiveFills` param exists but is **not implemented** in replay logic)
-   - Features: `lib/data/features.ts`
-   - Grok agent: `lib/research/grok-agent.ts` (text output; structured `proposals[]` not parsed)
+   - Replay: `lib/data/historical.ts` (`realisticPassiveFills` param **not implemented**)
+   - Features: `lib/data/features.ts` (regime from recent snapshots)
+   - Grok agent: `lib/research/grok-agent.ts` (text + JSON proposal parsing)
+   - Performance: `lib/research/performance.ts` (per-strategy PnL attribution)
    - Variants: `lib/strategies/variants.ts` (**in-memory**, lost on restart)
    - UI: `/backtest`
 
 3. **Strategy Layer**
-   - Four strategies in `lib/strategies/`
-   - Allocator: `lib/strategies/allocator.ts` (signal/fill counts, not execution quality)
-   - Regime: via `StrategyContext.regime` and snapshot features
+   - Five strategies in `lib/strategies/`
+   - Allocator: PnL + activity weighted (`lib/strategies/allocator.ts`)
+   - Regime passed via `StrategyContext.regime` from snapshot features
+   - Cooldown enforced per strategy/market in runner
 
 4. **Risk Layer**
-   - `PortfolioRiskManager` — Kelly sizing; portfolio state uses **placeholders** (no live `positions` DB)
-   - `RiskModeManager` — NORMAL / DEFENSIVE / EMERGENCY (**in-process**, resets on restart)
-   - `TemporaryAdjustments` — expiration **broken** (`incrementRunCount` never called)
-   - Edge decay monitor — **not fed data** (`recordWindow` never called)
-   - Per-market execution health from ExecutionManager (in-memory)
+   - `PortfolioRiskManager` — Kelly USD sizing from paper ledger + MTM (`lib/paper/risk-state.ts`)
+   - `RiskModeManager` — NORMAL / DEFENSIVE / EMERGENCY (durable transitions)
+   - `TemporaryAdjustments` — expire via `incrementRunCount()`
+   - Edge decay monitor — fed from per-strategy PnL windows
+   - Per-market execution health from ExecutionManager
 
 5. **Execution Layer**
-   - `ExecutionManager` — passive/aggressive, adverse selection heuristics
-   - `PaperSimulator` — manual immediate fill + managed path
-   - `RealExecutor` — Polymarket only; gated
+   - `ExecutionManager` — passive/aggressive, adverse selection
+   - `PaperSimulator` — imbalance/regime-aware passive fills
+   - `RealExecutor` — Polymarket + Kalshi; gated
 
 6. **Runner**
-   - `lib/runner/engine.ts` — ~12s interval via API
-   - Fetches REST order books, saves snapshots, evaluates strategies
-   - **Automated signal insert → fill path broken** until markets DB sync (see STATUS.md)
-   - Periodic Grok (probabilistic timing when enabled)
+   - `lib/runner/engine.ts` — adaptive 4–12s interval, overlap guard
+   - Book cache prefetch includes quick-flip pool + open positions
+   - Saves snapshots (1-in-3), evaluates strategies, Grok periodic analysis
 
 7. **Observability**
    - `audit_events` in PostgreSQL
-   - `/api/health`, `/health` UI
+   - `/api/health` — risk, execution, runner timing, audits
+   - `/api/paper/pnl` — lightweight P&L
    - Telegram (optional)
-   - Performance attribution API (**placeholder** logic)
 
 ## Application Structure
 
 ```
 app/
-├── page.tsx, dashboard/          Landing + nav
-├── markets/                      Discovery + detail (Polymarket WS on detail)
+├── page.tsx, dashboard/          Landing + live P&L
+├── paper/                        Full portfolio + runner
+├── markets/                      Discovery + detail (WS)
 ├── strategies/                   CRUD + runner control
 ├── backtest/                     Synthetic + historical replay
-├── settings/                     Grok key (file or env)
+├── settings/                     Grok key
 ├── health/                       Risk + execution dashboard
 ├── real/                         Warnings (placeholder server status)
 └── api/                          REST (see STATUS.md)
 ```
-
-## Design Principles
-
-- **Paper first, always.** Real money requires env flag + non-paper strategy + risk gates.
-- **Auditable.** Signals and audit events intended to capture reasons (when FK path works).
-- **Self-protecting.** Risk modes and health throttle — while process is running.
-- **Honest scope.** Document what works vs what is stubbed.
 
 ## Key Files
 
 | File | Role |
 |------|------|
 | `lib/runner/engine.ts` | 24/7 loop |
+| `lib/runner/book-cache.ts` | Per-cycle deduplicated books |
+| `lib/paper/ledger.ts` | Cash ledger + realized PnL |
+| `lib/paper/mark-to-market.ts` | Live position marks |
+| `lib/paper/risk-state.ts` | Paper → risk manager bridge |
+| `lib/risk/sizing.ts` | USD ↔ shares conversion |
 | `lib/execution/execution-manager.ts` | Execution decisions |
 | `lib/execution/paper-simulator.ts` | Paper fills |
-| `lib/execution/real-executor.ts` | Real orders (Polymarket) |
-| `lib/risk/portfolio-manager.ts` | Sizing (approximate state) |
-| `lib/clients/polymarket.ts` | Gamma + CLOB |
+| `lib/execution/real-executor.ts` | Real orders |
+| `lib/risk/portfolio-manager.ts` | Sizing + circuit breakers |
 | `lib/data/historical.ts` | Snapshots + replay |
 | `lib/db/schema.ts` | Schema source of truth |
 
@@ -87,9 +87,9 @@ app/
 | Layer | Tool |
 |-------|------|
 | Lint | ESLint (CI) |
-| Unit | Vitest — 8 tests, 2 files |
+| Unit | Vitest — 57 tests, 15 files |
 | Smoke | `scripts/smoke-test.mjs` — not in CI |
-| E2E | Playwright — 14 tests (CI) |
+| E2E | Playwright (CI) |
 
 ## Deployment
 

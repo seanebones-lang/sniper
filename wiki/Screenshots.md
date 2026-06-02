@@ -6,6 +6,16 @@ Images are stored in the repo at `docs/screenshots/` and referenced here via raw
 
 ---
 
+## Demo video
+
+A walkthrough of paper trading (runner, automated fills, P&L dashboard) is available in the repo:
+
+**`docs/demo/sniper-paper-trading-demo.mov`**
+
+Clone the repo or browse on GitHub to view the demo locally.
+
+---
+
 ## Landing
 
 ![Landing page](https://raw.githubusercontent.com/seanebones-lang/sniper/main/docs/screenshots/landing.png)
@@ -18,7 +28,7 @@ Entry point with risk disclaimer, feature cards, and dashboard link.
 
 ![Dashboard](https://raw.githubusercontent.com/seanebones-lang/sniper/main/docs/screenshots/dashboard.png)
 
-Summary stats (risk mode, active strategies, paper fills, execution health) and navigation hub.
+Summary stats (risk mode, active strategies, paper fills, execution health) and navigation hub. Paper P&L and equity breakdown available on `/dashboard` and `/paper`.
 
 ---
 
@@ -50,7 +60,7 @@ Synthetic price series backtest, historical order book replay, and Grok research
 
 ![Strategy health dashboard](https://raw.githubusercontent.com/seanebones-lang/sniper/main/docs/screenshots/health.png)
 
-Risk mode, recent performance, execution health, and Grok recommendations.
+Risk mode, recent performance, execution health, Grok recommendations, and runner cycle timing.
 
 ---
 
@@ -58,7 +68,7 @@ Risk mode, recent performance, execution health, and Grok recommendations.
 
 ![Real money execution confirmation](https://raw.githubusercontent.com/seanebones-lang/sniper/main/docs/screenshots/real-execution.png)
 
-Mandatory safety gate with explicit confirmation phrase before real capital.
+Mandatory safety gate with explicit confirmation phrase before real capital. Polymarket and Kalshi real paths are coded but gated; server status UI is still a placeholder.
 
 ---
 

@@ -2,6 +2,9 @@ import { db, paperTrades } from '../lib/db';
 import { getPaperBudgetSettings } from '../lib/settings/paper-budget';
 import { getPaperRunStartedAt } from '../lib/paper/run-session';
 import { gte } from 'drizzle-orm';
+import { computePaperLedger } from '../lib/paper/ledger';
+import { aggregatePaperPositions } from '../lib/paper/positions';
+import { computeMarkToMarket } from '../lib/paper/mark-to-market';
 
 async function main() {
   const budget = await getPaperBudgetSettings();
@@ -11,67 +14,42 @@ async function main() {
     orderBy: (t, { asc }) => [asc(t.filledAt)],
   });
 
-  let cash = budget.paperBudgetUsd;
-  let buys = 0;
-  let sells = 0;
-  let fees = 0;
+  const ledgerTrades = trades.map((t) => ({
+    platform: t.platform,
+    marketExternalId: t.marketExternalId,
+    side: t.side,
+    size: t.size,
+    price: t.price,
+    fee: t.fee,
+  }));
 
-  for (const t of trades) {
-    const size = parseFloat(t.size);
-    const price = parseFloat(t.price);
-    const fee = parseFloat(t.fee ?? '0');
-    fees += fee;
-    if (t.side === 'BUY') {
-      cash -= size * price + fee;
-      buys++;
-    } else {
-      cash += size * price - fee;
-      sells++;
-    }
-  }
+  const ledger = computePaperLedger(budget.paperBudgetUsd, ledgerTrades);
+  const positions = aggregatePaperPositions(trades);
+  const mtm = await computeMarkToMarket(positions);
 
-  const posMap = new Map<string, { net: number; cost: number }>();
-  for (const t of trades) {
-    const key = `${t.platform}:${t.marketExternalId}`;
-    const size = parseFloat(t.size);
-    const price = parseFloat(t.price);
-    const row = posMap.get(key) ?? { net: 0, cost: 0 };
-    if (t.side === 'BUY') {
-      row.net += size;
-      row.cost += size * price;
-    } else {
-      row.net -= size;
-      row.cost -= size * price;
-    }
-    posMap.set(key, row);
-  }
-
-  let exposure = 0;
-  let openCount = 0;
-  for (const [, r] of posMap) {
-    if (Math.abs(r.net) > 0.01) {
-      exposure += Math.abs(r.cost);
-      openCount++;
-    }
-  }
-
-  const brokenAvailable = budget.paperBudgetUsd - exposure;
-  const trueEquity = cash + exposure;
-  const pnl = trueEquity - budget.paperBudgetUsd;
+  const brokenAvailable = budget.paperBudgetUsd - ledger.openExposureCostUsd;
+  const costEquity = ledger.cashUsd + ledger.openExposureCostUsd;
+  const mtmEquity = ledger.cashUsd + mtm.openMarkValueUsd;
 
   console.log(JSON.stringify({
     runStart: runStart?.toISOString() ?? null,
     trades: trades.length,
-    buys,
-    sells,
-    feesUsd: Number(fees.toFixed(4)),
+    buys: ledger.buyCount,
+    sells: ledger.sellCount,
+    feesUsd: Number(ledger.totalFeesUsd.toFixed(4)),
     startingBudget: budget.paperBudgetUsd,
-    uiShowsAvailable: Number(brokenAvailable.toFixed(2)),
-    trueCashUsd: Number(cash.toFixed(2)),
-    openExposureCostUsd: Number(exposure.toFixed(2)),
-    openPositions: openCount,
-    trueTotalEquityUsd: Number(trueEquity.toFixed(2)),
-    netPnlUsd: Number(pnl.toFixed(2)),
+    legacyBrokenAvailable: Number(brokenAvailable.toFixed(2)),
+    apiAvailableUsd: Number(ledger.cashUsd.toFixed(2)),
+    openCostBasisUsd: Number(ledger.openExposureCostUsd.toFixed(2)),
+    openMarkValueUsd: Number(mtm.openMarkValueUsd.toFixed(2)),
+    openPositions: mtm.openPositionCount,
+    costBasisEquityUsd: Number(costEquity.toFixed(2)),
+    mtmEquityUsd: Number(mtmEquity.toFixed(2)),
+    realizedPnLUsd: Number(ledger.realizedPnLUsd.toFixed(2)),
+    netPnlUsd: Number((mtmEquity - budget.paperBudgetUsd).toFixed(2)),
+    regression: Math.abs(brokenAvailable - ledger.cashUsd) < 0.02 && ledger.sellCount > 0
+      ? 'BUG: available still uses startingBudget - exposure after sells'
+      : 'ok',
   }, null, 2));
 }
 

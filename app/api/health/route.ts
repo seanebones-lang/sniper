@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { db, auditEvents } from '@/lib/db';
+import { desc } from 'drizzle-orm';
 import { getStrategyPerformance } from '@/lib/research/performance';
 import { getAllVariants } from '@/lib/strategies/variants';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -8,22 +9,30 @@ import { getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/temporary-adjustments';
 import { loadRiskSnapshot, loadSystemState } from '@/lib/monitoring/system-state';
 import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
+import { getRunnerStatus } from '@/lib/runner/engine';
 import { alerts } from '@/lib/alerts/telegram';
 
 /**
  * Basic critical alert for real money events.
  * Logs + sends Telegram if configured.
  */
-export async function sendCriticalAlert(message: string, payload?: any) {
+export async function sendCriticalAlert(message: string, payload?: unknown) {
   console.error(`[CRITICAL ALERT] ${message}`, payload || '');
   try {
-    // Best-effort alerting - in production this would call a proper alert channel
+    await alerts.error(message);
+  } catch {
     console.warn(`[CRITICAL ALERT] ${message}`);
-  } catch {}
+  }
 }
 
 export async function GET() {
   const performance = await getStrategyPerformance(3);
+  const runnerStatus = getRunnerStatus();
+  const recentAudits = await db.query.auditEvents.findMany({
+    orderBy: desc(auditEvents.createdAt),
+    limit: 15,
+    columns: { action: true, actor: true, createdAt: true },
+  });
   const variants = getAllVariants();
   const execQuality = executionManager.getRecentExecutionQuality(30);
   const avgSlippage = executionManager.getAverageSlippage(50);
@@ -95,6 +104,21 @@ export async function GET() {
       totalVariants: variants.length,
       marketsWithPoorExecution: unhealthyMarkets.length,
     },
+
+    runner: {
+      running: runnerStatus.running,
+      lastRun: runnerStatus.lastRun,
+      lastCycleDurationMs: runnerStatus.lastCycleDurationMs,
+      signalsGenerated: runnerStatus.signalsGenerated,
+      fillsExecuted: runnerStatus.fillsExecuted,
+      lastCycle: runnerStatus.lastCycle,
+    },
+
+    recentAudits: recentAudits.map((a) => ({
+      action: a.action,
+      actor: a.actor,
+      at: a.createdAt.toISOString(),
+    })),
   };
 
   return NextResponse.json(health);

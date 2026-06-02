@@ -12,9 +12,9 @@ Execution quality often determines whether a theoretical edge survives fees, adv
 
 In-memory brain for passive vs aggressive decisions, adverse selection heuristics, and per-market health.
 
-**Used by:** paper simulator (when book available), real executor, runner health throttle.
+**Used by:** paper simulator (book + imbalance from runner), real executor, runner health throttle.
 
-**Not fully wired:** continuous resting-order management from live WS feeds in the runner loop.
+**Not fully wired:** continuous resting-order management from live WS feeds in the runner loop (REST books via `CycleBookCache`).
 
 ## Paper Execution
 
@@ -22,19 +22,22 @@ In-memory brain for passive vs aggressive decisions, adverse selection heuristic
 |------|--------|
 | Manual fill via `POST /api/paper/fill` | **Works** → `paper_trades` |
 | Manual fill via market detail UI | **Works** |
-| Runner automated fill | **Broken** (signal FK — see STATUS.md) |
-| Immediate fill mode | Works (bypasses ExecutionManager when no book) |
+| Runner automated fill | **Works** (signal linked via `signalId`) |
+| Immediate fill mode | Works for exits and aggressive entries |
+| Book imbalance + regime in simulator | **Works** (passed from runner snapshots) |
 
 Fee model: ~5 bps in simulator.
 
 ## Real Execution
 
-**Gate:** `SNIPER_ENABLE_REAL_EXECUTION=true` + strategy `paperOnly: false` + risk checks + ExecutionManager decision.
+**Gate:** `SNIPER_ENABLE_REAL_EXECUTION=true` + strategy `paperOnly: false` + kill switch + risk checks + ExecutionManager decision.
 
 | Platform | Status |
 |----------|--------|
 | Polymarket | Coded (`placePolymarketLimitOrder`); requires `POLYMARKET_PRIVATE_KEY`; not CI-tested |
-| Kalshi | Returns "not yet implemented" |
+| Kalshi | Coded (`kalshi-trading.ts`); requires `KALSHI_ACCESS_KEY` / `KALSHI_RSA_PRIVATE_KEY` |
+
+Real sizing uses USD cap → shares conversion (same as paper runner).
 
 ## Smart Router
 
@@ -42,7 +45,7 @@ Fee model: ~5 bps in simulator.
 
 ## Health Dashboard
 
-`/health` reads in-process execution manager state and API health endpoint. Resets on process restart.
+`/health` and `/api/health` expose execution manager state, runner cycle timing, and recent audit events. Execution fill history resets on process restart.
 
 ## Verified vs Planned
 
@@ -50,12 +53,10 @@ Fee model: ~5 bps in simulator.
 |------------|----------|
 | ExecutionManager decision logic | Yes |
 | Adverse selection heuristics | Yes |
-| Per-market health in runner throttle | Yes (in-process) |
-| Manual paper fills to DB | Yes |
-| Runner automated paper fills | No (FK blocker) |
-| Real Polymarket orders | Coded, gated, untested in CI |
-| Real Kalshi orders | No |
+| Per-market health in runner throttle | Yes |
+| Manual + automated paper fills to DB | Yes |
+| Real Polymarket / Kalshi orders | Coded, gated, untested in CI |
 | Queue-position simulation | No |
-| Replay realistic passive fills | No (UI only) |
+| Replay realistic passive fills | No (UI flag only) |
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for execution-related tasks.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for remaining execution tasks.

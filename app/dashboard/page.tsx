@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { LivePaperPortfolio } from '@/components/live-paper-portfolio';
+import { LivePaperPortfolio, type LivePortfolioData } from '@/components/live-paper-portfolio';
 import { PaperPnlIndicator } from '@/components/paper-pnl-indicator';
-import type { PaperPnlSnapshot } from '@/lib/paper/portfolio';
 import {
   ArrowLeft,
   TrendingUp,
@@ -29,7 +28,8 @@ interface RunnerData {
   running: boolean;
   lastRun: string | null;
   dbPaperFillsToday?: number;
-  pnl?: PaperPnlSnapshot;
+  dbPaperFillsTotal?: number;
+  lastCycleDurationMs?: number | null;
   lastCycle?: {
     eligibleQuickFlipMarkets: number;
     marketPoolSize: number;
@@ -48,49 +48,39 @@ interface RunnerData {
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [runner, setRunner] = useState<RunnerData | null>(null);
-  const [pnl, setPnl] = useState<PaperPnlSnapshot | null>(null);
-  const [pnlError, setPnlError] = useState<string | null>(null);
+  const [portfolio, setPortfolio] = useState<LivePortfolioData | null>(null);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadPnl() {
-      try {
-        const res = await fetch('/api/paper/portfolio?days=1', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        if (cancelled) return;
-        setPnl(json.pnl ?? null);
-        setPnlError(null);
-      } catch (e) {
-        if (!cancelled) {
-          setPnlError(e instanceof Error ? e.message : 'Failed to load P&L');
-        }
-      }
-    }
-
     async function load() {
       try {
-        const [healthRes, runnerRes] = await Promise.all([
+        const [healthRes, runnerRes, portfolioRes] = await Promise.all([
           fetch('/api/health'),
           fetch('/api/runner'),
+          fetch('/api/paper/portfolio?days=1', { cache: 'no-store' }),
         ]);
         if (healthRes.ok && !cancelled) setHealth(await healthRes.json());
         if (runnerRes.ok && !cancelled) setRunner(await runnerRes.json());
+        if (portfolioRes.ok && !cancelled) {
+          const json = await portfolioRes.json();
+          setPortfolio({ ...json, updatedAt: new Date().toISOString() });
+          setPortfolioError(null);
+        } else if (!portfolioRes.ok && !cancelled) {
+          setPortfolioError(`HTTP ${portfolioRes.status}`);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
     void load();
-    void loadPnl();
-    const healthInterval = setInterval(load, 10000);
-    const pnlInterval = setInterval(loadPnl, 5000);
+    const interval = setInterval(load, 5000);
     return () => {
       cancelled = true;
-      clearInterval(healthInterval);
-      clearInterval(pnlInterval);
+      clearInterval(interval);
     };
   }, []);
 
@@ -154,16 +144,15 @@ export default function Dashboard() {
 
       {/* Paper P&L — from paper_trades DB + live marks */}
       <PaperPnlIndicator
-        pnl={pnl}
-        loading={!pnl && !pnlError}
-        error={pnlError}
+        pnl={portfolio?.pnl ?? null}
+        loading={!portfolio && !portfolioError}
+        error={portfolioError}
         variant="hero"
         className="mb-6"
       />
 
-      {/* Live paper portfolio — polls every 3s */}
       <div className="mb-8">
-        <LivePaperPortfolio pollMs={3000} />
+        <LivePaperPortfolio pollMs={0} externalData={portfolio} />
       </div>
 
       {/* Live status strip */}

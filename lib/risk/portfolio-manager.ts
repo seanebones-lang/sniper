@@ -7,7 +7,6 @@
  */
 
 import { db } from '@/lib/db';
-import { aggregatePaperPositions, totalExposureUsd } from '@/lib/paper/positions';
 import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { categorizeMarket, getCategoryLimits } from './categorizer';
 
@@ -49,6 +48,9 @@ export class PortfolioRiskManager {
   private currentBankroll: number;
   private peakBankroll: number;
   private currentDrawdownPct: number = 0;
+  /** Per-runner-cycle cache; avoids N DB round-trips per signal */
+  private cycleStateCache: PortfolioState | null = null;
+  private lastRealizedPnLUsd = 0;
 
   constructor(params: Partial<RiskParameters> = {}, startingBankroll = 10000) {
     this.params = { ...DEFAULT_PARAMS, ...params };
@@ -56,7 +58,45 @@ export class PortfolioRiskManager {
     this.peakBankroll = startingBankroll;
   }
 
+  /** Set paper-derived state once per runner cycle (from ledger + MTM). */
+  setCyclePortfolioState(state: PortfolioState, equityUsd: number, realizedPnLUsd?: number) {
+    this.cycleStateCache = state;
+    this.currentBankroll = equityUsd;
+    if (this.peakBankroll < equityUsd) {
+      this.peakBankroll = equityUsd;
+    }
+    const drawdown =
+      this.peakBankroll > 0 ? (this.peakBankroll - equityUsd) / this.peakBankroll : 0;
+    this.currentDrawdownPct = Math.max(this.currentDrawdownPct, drawdown);
+    state.maxDrawdown = this.currentDrawdownPct;
+
+    if (realizedPnLUsd != null) {
+      const delta = realizedPnLUsd - this.lastRealizedPnLUsd;
+      if (Math.abs(delta) > 0.001) {
+        this.lastRealizedPnLUsd = realizedPnLUsd;
+      }
+    }
+  }
+
+  clearCycleCache() {
+    this.cycleStateCache = null;
+  }
+
   async getCurrentPortfolioState(): Promise<PortfolioState> {
+    if (this.cycleStateCache) {
+      return { ...this.cycleStateCache, maxDrawdown: this.currentDrawdownPct };
+    }
+
+    // Fallback: try paper ledger when positions table is empty (paper mode)
+    try {
+      const { loadPaperRiskState } = await import('@/lib/paper/risk-state');
+      const paper = await loadPaperRiskState();
+      const state = { ...paper.state, maxDrawdown: this.currentDrawdownPct };
+      this.currentBankroll = paper.equityUsd;
+      return state;
+    } catch {
+      // fall through to legacy real-position path
+    }
     // Improved real exposure tracking (advancing prod-gap-3)
     const [openPositions = [], recentReal = [], recentPaper = []] = await Promise.all([
       db.query.positions?.findMany?.({ limit: 100 }) ?? [],
@@ -98,13 +138,13 @@ export class PortfolioRiskManager {
       categoryExposures[cat] = (categoryExposures[cat] || 0) + usd;
     }
 
-    const dailyPnl = 0; // TODO: proper realized + unrealized PnL
+    const dailyPnl = 0;
 
     return {
       totalExposureUsd: totalExposure,
       dailyPnl,
       maxDrawdown: this.currentDrawdownPct,
-      openPositions: openPositions.length + recentPaper.length,
+      openPositions: openPositions.length,
       categoryExposures,
     };
   }
@@ -117,24 +157,27 @@ export class PortfolioRiskManager {
     platform: string;
     marketExternalId: string;
     side: 'BUY' | 'SELL';
-    edge: number;              // estimated edge in decimal (e.g. 0.04 = 4%)
-    confidence: number;        // 0-1
+    edge: number;
+    confidence: number;
     category?: string;
     currentPrice: number;
+    /** When true, skip circuit breakers so exits are not blocked by exposure limits */
+    isExit?: boolean;
   }): Promise<{ allowedSize: number; reason?: string; kellySize?: number }> {
     const state = await this.getCurrentPortfolioState();
 
-    // Hard circuit breakers first
-    if (state.dailyPnl <= -this.params.maxDailyLossUsd) {
-      return { allowedSize: 0, reason: 'Daily loss limit reached' };
-    }
+    if (!params.isExit) {
+      if (state.dailyPnl <= -this.params.maxDailyLossUsd) {
+        return { allowedSize: 0, reason: 'Daily loss limit reached' };
+      }
 
-    if (state.totalExposureUsd >= this.params.maxTotalExposureUsd) {
-      return { allowedSize: 0, reason: 'Total portfolio exposure limit reached' };
-    }
+      if (state.totalExposureUsd >= this.params.maxTotalExposureUsd) {
+        return { allowedSize: 0, reason: 'Total portfolio exposure limit reached' };
+      }
 
-    if (state.maxDrawdown >= this.params.maxDrawdownPct / 100) {
-      return { allowedSize: 0, reason: `Max drawdown limit reached (${(state.maxDrawdown * 100).toFixed(1)}%)` };
+      if (state.maxDrawdown >= this.params.maxDrawdownPct / 100) {
+        return { allowedSize: 0, reason: `Max drawdown limit reached (${(state.maxDrawdown * 100).toFixed(1)}%)` };
+      }
     }
 
     const rawCategory = params.category || categorizeMarket('', params.platform, params.marketExternalId).category;
@@ -143,8 +186,15 @@ export class PortfolioRiskManager {
     const dynamicLimits = getCategoryLimits ? getCategoryLimits() : this.params.maxCategoryExposureUsd;
     const catLimit = (dynamicLimits as any)[category] || this.params.maxCategoryExposureUsd[category] || 400;
 
-    if (catExposure >= catLimit) {
+    if (!params.isExit && catExposure >= catLimit) {
       return { allowedSize: 0, reason: `Category ${category} exposure limit reached` };
+    }
+
+    if (params.isExit && params.side === 'SELL') {
+      return {
+        allowedSize: this.params.maxSingleMarketExposureUsd,
+        reason: 'Exit — circuit breakers bypassed',
+      };
     }
 
     // Kelly sizing (conservative)

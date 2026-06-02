@@ -105,9 +105,20 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: `Portfolio risk rejected: ${safeSizing.reason}` };
   }
 
-  // Use the risk-managed size instead of the strategy's requested size
-  const finalSize = Math.min(req.size, safeSizing.allowedSize);
+  // Use the risk-managed USD cap, convert to shares
+  const { usdCapToShares } = await import('@/lib/risk/sizing');
+  const cappedUsd = Math.min(req.price * req.size, safeSizing.allowedSize);
+  const finalSize = usdCapToShares(cappedUsd, req.price, 1);
   const usdValue = req.price * finalSize;
+
+  if (finalSize <= 0 || usdValue < 5) {
+    await logAudit('real_order_blocked_portfolio_risk', {
+      ...req,
+      reason: 'Size below minimum after USD conversion',
+      suggestedSize: safeSizing.allowedSize,
+    });
+    return { success: false, error: 'Portfolio risk rejected: size too small' };
+  }
 
   // 1. Legacy risk engine gate (still useful as second layer)
   const risk = riskEngine.checkRisk({

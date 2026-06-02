@@ -32,7 +32,7 @@ Default URL: `http://localhost:3000`. If occupied, use `-p 3001` and set `SMOKE_
 CI (`.github/workflows/ci.yml`):
 
 1. **ESLint** — zero issues required
-2. **Build + unit tests** — 8 Vitest tests
+2. **Build + unit tests** — 57 Vitest tests
 3. **E2E** — Playwright with Postgres; builds app on port 3010
 
 **Not in CI:** smoke tests (`scripts/smoke-test.mjs`). Run locally with dev server.

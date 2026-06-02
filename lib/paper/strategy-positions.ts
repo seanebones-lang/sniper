@@ -91,7 +91,6 @@ export async function hydratePaperSimulatorFromDb() {
   const trades = await db.query.paperTrades.findMany({
     where: runStart ? gte(paperTrades.filledAt, runStart) : undefined,
     orderBy: (t, { asc }) => [asc(t.filledAt)],
-    limit: 2000,
   });
 
   paperSimulator.reset();

@@ -1,12 +1,11 @@
 # Quickstart — Running Sniper (Paper Mode 24/7)
 
-**Updated:** June 2026. **Status:** [docs/STATUS.md](../../docs/STATUS.md). See [README.md](../../README.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md).
+**Updated:** June 2, 2026. **Status:** [docs/STATUS.md](../../docs/STATUS.md).
 
 ## 1. Environment
 
 ```bash
 cp .env.example .env.local
-# Edit DATABASE_URL — see README for Docker Postgres example
 npm install
 npm run db:push
 ```
@@ -15,45 +14,39 @@ npm run db:push
 
 ```bash
 npm run dev
-# http://localhost:3000 (or -p 3001 if busy)
+# http://localhost:3000
 ```
 
 ## 3. Configure (optional)
 
 - `/settings` — Grok API key + research agent toggle
 
-## 4. Create strategies
+## 4. Create strategies & start runner
 
-1. Open `/strategies`
-2. Create 1–2 strategies on liquid short-term markets (paper-only default)
-3. Start the runner
+1. Open `/strategies` — create 1–2 strategies (paper-only default)
+2. Open `/paper` — set budget, **Start runner**
+3. Watch `/dashboard` for live P&L and portfolio
 
 ## 5. Observe
 
-- `/markets` — discovery + last prices
-- `/markets/polymarket/[tokenId]` — order book, manual paper fill
-- `/health` — risk mode + execution quality
+- `/dashboard` — live equity, P&L, runner status
+- `/markets` — discovery; detail pages for manual fills + WS
+- `/health` — risk mode, execution quality, cycle timing
 - `/backtest` — replay after snapshots accumulate
 
-## 6. Test before contributing
+## 6. Test
 
 ```bash
-npm run test:ci          # lint + build + unit
+npm run test:ci          # lint + build + 57 unit tests
 npm run test:smoke       # needs dev server
+npx tsx scripts/diagnose-paper-pnl.ts  # P&L regression check
 ```
 
 ## 7. Deploy (Railway)
 
-1. Connect repo, add Postgres plugin
-2. Set `DATABASE_URL` and optional secrets (`.env.example`)
-3. Shell: `npm run db:push`
+1. Postgres plugin → `DATABASE_URL`
+2. Shell: `npm run db:push`
+3. Set secrets from `.env.example`
 4. Redeploy
 
-## 48-Hour Soak
-
-Before any real money — see README checklist and [docs/OPERATIONS.md](../../docs/OPERATIONS.md).
-
-## Spec References
-
-- [data-model.md](./data-model.md) — entities (see `lib/db/schema.ts` for truth)
-- [research.md](./research.md) — Polymarket/Kalshi API notes
+Real execution remains opt-in — see [docs/STATUS.md](../../docs/STATUS.md).

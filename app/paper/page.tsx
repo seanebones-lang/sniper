@@ -360,9 +360,15 @@ export default function PaperPortfolioPage() {
                 <span className="font-mono">${data.budget.availableUsd.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-500">Open exposure (cost)</span>
+                <span className="text-zinc-500">Open exposure (mark)</span>
                 <span className="font-mono">${data.budget.totalExposureUsd.toFixed(2)}</span>
               </div>
+              {data.pnl && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Open cost basis</span>
+                  <span className="font-mono">${data.pnl.openCostBasisUsd.toFixed(2)}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-zinc-500">Exposure utilization</span>
                 <span className="font-mono">{data.budget.utilizationPct.toFixed(0)}%</span>
@@ -374,7 +380,7 @@ export default function PaperPortfolioPage() {
                 />
               </div>
               <div className="flex justify-between pt-2 border-t border-white/10">
-                <span className="text-zinc-500">Fees (7d)</span>
+                <span className="text-zinc-500">Fees (this run)</span>
                 <span className="font-mono">${data.budget.totalFeesUsd.toFixed(2)}</span>
               </div>
               <p className="text-[11px] text-zinc-600 leading-relaxed pt-1">

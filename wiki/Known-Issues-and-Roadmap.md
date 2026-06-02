@@ -1,62 +1,67 @@
 # Known Issues & Roadmap
 
-**Last verified:** June 2026.
+**Last verified:** June 2, 2026.
 
-These are **confirmed in code**, not speculative. They block calling the runner "production-ready" for automated trading.
+These are **confirmed in code**, not speculative. They block calling the system **fully production-ready** for unsupervised 24/7 real-money trading.
 
 Full capability matrix: [Project Status](Project-Status).
 
 ---
 
-## Critical blockers (P0)
+## Resolved (June 2026)
 
-### 1. `signals.market_id` foreign key mismatch
-
-| | |
-|---|---|
-| **Schema** | `signals.market_id` references `markets.id` (UUID) |
-| **Runner** | Inserts `marketId: market.id` where `market.id` is the **Gamma market id or Kalshi ticker**, not a DB UUID |
-| **Markets table** | No code path inserts discovered markets into `markets` |
-| **Effect** | Signal insert likely **fails PostgreSQL FK check**; automated fill path skipped |
-
-**Workaround today:** Manual paper fills via market detail UI or `POST /api/paper/fill`.
-
-**Fix direction:** Sync discovered markets to `markets` table; insert DB UUID into signals.
+| Issue | Resolution |
+|-------|------------|
+| `signals.market_id` FK mismatch | **Fixed** — `ensureMarketRecord()` called before signal/trade inserts |
+| Paper P&L unavailable | **Fixed** — ledger + MTM via `computePaperLedger` / `computeMarkToMarket` |
+| Risk sizing placeholder state | **Fixed** — `loadPaperRiskState` → `setCyclePortfolioState` each runner cycle |
+| `incrementRunCount()` never called | **Fixed** — called at start of each `runOnce()` |
+| Edge decay not wired | **Fixed** — `recordWindow()` fed from per-strategy paper PnL each cycle |
+| Grok `proposals[]` always empty | **Fixed** — JSON/`PROPOSALS` parsing in `grok-agent.ts` |
+| Performance attribution placeholder | **Fixed** — per-strategy PnL via `paper_trades` → `signals` joins |
 
 ---
 
-## High priority bugs (P1)
+## Remaining blockers
+
+### P1 — High priority
 
 | Issue | Location | Fix direction |
 |-------|----------|---------------|
-| `incrementRunCount()` never called | `lib/monitoring/temporary-adjustments.ts` | Call at start of each runner cycle |
 | `realisticPassiveFills` ignored | `lib/data/historical.ts` | Implement in `replayStrategyOnHistory()` |
-| `edgeDecayMonitor.recordWindow()` never called | `lib/monitoring/edge-decay.ts` | Feed performance windows from runner |
+| Runner integration tests | — | Add CI coverage for full runner loop and `evaluate()` |
+| Runner WS book feed | `lib/runner/engine.ts` | REST books only in runner (WS on detail page) |
 
----
-
-## Medium priority gaps (P2)
+### P2 — Medium priority
 
 | Issue | Location | Fix direction |
 |-------|----------|---------------|
 | Variants in-memory only | `lib/strategies/variants.ts` | Persist to DB |
-| Grok `proposals[]` always empty | `lib/research/grok-agent.ts` | Parse model output or tool calls |
 | `/real` page placeholder | `app/real/page.tsx` | Read server execution flag from API |
-| Performance attribution placeholder | `lib/research/performance.ts` | Proper joins signals ↔ paper_trades |
-| `positions` table not wired | `lib/db/schema.ts` | Update on fills |
 
 ---
 
-## In-memory state (lost on restart)
+## In-memory state (partially mitigated)
 
-These module singletons are not persisted:
+Durable via `system_state`: kill switch, risk mode, risk snapshots, execution health.
 
-- Runner status
+Still lost on restart:
+
+- Runner session counters
 - Strategy variants
-- AI recommendations queue
-- Execution manager health
-- Risk mode
-- Temporary adjustments
+- Execution manager fill history
+- Edge decay windows
+- Temporary adjustments (until re-loaded from DB if persisted)
+
+---
+
+## Known accuracy caveats (non-blocking)
+
+| Caveat | Notes |
+|--------|-------|
+| Daily P&L baseline | Start-of-day equity uses cost basis for open positions; intraday MTM can skew daily loss breaker slightly |
+| Long paper runs | Full run-session trades loaded for ledger (no 2000 cap on hydration) |
+| Real execution | Kill-switch + gates coded; not CI-tested with live keys |
 
 ---
 
@@ -66,10 +71,10 @@ These module singletons are not persisted:
 |-------|--------|--------|
 | **0** | Scaffold, DB schema, Railway config | **Complete** |
 | **1** | REST market clients + discovery UI | **Complete** |
-| **2** | Paper simulator, manual fill API, Polymarket WS | **Complete** (Kalshi WS: client only) |
-| **3** | Strategy engine, runner loop, strategies UI | **Mostly complete** — automated fill pipeline blocked by FK (#1) |
-| **4** | Guarded real execution + risk stack | **Partial** — Polymarket coded + gated; Kalshi N/A; DB portfolio incomplete |
-| **5** | Backtest, Grok, docs, tests | **Partial** — variant persistence, proposal parsing, replay realism remain |
+| **2** | Paper simulator, manual fill API, Polymarket WS on detail | **Complete** |
+| **3** | Strategy engine, runner loop, strategies UI | **Complete** — quick-flip + Kalshi in runner pool |
+| **4** | Guarded real execution + risk stack | **Partial** — Polymarket + Kalshi coded + gated; real path not CI-tested |
+| **5** | Backtest, Grok, docs, tests | **Partial** — replay realism, variant persistence, runner integration tests remain |
 
 ---
 
@@ -77,14 +82,13 @@ These module singletons are not persisted:
 
 Good **first PR** targets (self-contained, high value):
 
-1. **Sync discovered markets to `markets` table** — fix signal FK issue (P0)
-2. **Call `incrementRunCount()` in runner** — fix adjustment expiration (P1)
-3. **Implement realistic passive fills in replay** (P1)
-4. **Persist strategy variants to DB** (P2)
-5. **Add unit tests for a strategy** — e.g. spread-scalper with mock order book
-6. **Export audit log API** — `GET /api/audit?limit=100`
-7. **Fix `/real` page** — show actual server execution flag
-8. **Parse Grok output into `StrategyProposal[]`**
+1. **Implement realistic passive fills in replay** (P1)
+2. **Persist strategy variants to DB** (P2)
+3. **Add runner integration tests** — full loop + `evaluate()` in CI
+4. **Add unit tests for a strategy** — e.g. spread-scalper with mock order book
+5. **Export audit log API** — `GET /api/audit?limit=100`
+6. **Fix `/real` page** — show actual server execution flag
+7. **Wire Kalshi WS into runner** — reduce REST polling latency
 
 See [Contributing](Contributing) for full guidelines.
 

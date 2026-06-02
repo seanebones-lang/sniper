@@ -2,18 +2,18 @@
 
 **Status:** [STATUS.md](./STATUS.md)
 
-## The Research Flywheel (intended)
+## The Research Flywheel
 
 ```
-Runner collects snapshots (works)
+Runner collects snapshots (works — throttled 1-in-3)
         ↓
-Performance + execution data (partial — attribution placeholder)
+Performance + per-strategy PnL (works — paper_trades → signals joins)
         ↓
-Grok Research Agent (works — text output)
+Grok Research Agent (works — text + JSON proposals)
         ↓
-Structured proposals (NOT implemented — proposals[] always empty)
+RECOMMENDED ACTIONS auto-apply (works — audited temporary adjustments)
         ↓
-Strategy Variants (in-memory only)
+Strategy Variants (in-memory only — persistence gap)
         ↓
 Historical replay (works if snapshots exist)
         ↓
@@ -30,7 +30,7 @@ Promote / reject (manual)
 | Historical order book replay | Works when snapshots exist |
 | Market dropdown | Works (live `/api/markets`) |
 | Grok research agent buttons | Works with xAI key |
-| Grok proposals list | Empty unless manually seeded via audit events |
+| Grok proposals list | Parsed from JSON/`PROPOSALS` blocks when model returns them |
 | “Realistic passive fills” checkbox | **UI only** — replay engine ignores flag |
 
 ## Grok / xAI Setup
@@ -44,19 +44,18 @@ Promote / reject (manual)
 |-----------|------|--------|
 | Snapshot storage | `lib/data/historical.ts` | Works |
 | Replay | `replayStrategyOnHistory()` | Works; no realistic fill mode |
-| Features | `lib/data/features.ts` | Works |
-| Grok agent | `lib/research/grok-agent.ts` | Text works; proposals[] empty |
-| RECOMMENDED ACTIONS | `lib/monitoring/ai-recommendations.ts` | Parsed from text |
+| Features | `lib/data/features.ts` | Works — regime from snapshots |
+| Grok agent | `lib/research/grok-agent.ts` | Text + proposal parsing |
+| RECOMMENDED ACTIONS | `lib/monitoring/ai-recommendations.ts` | Parsed + auto-applied |
+| Performance | `lib/research/performance.ts` | Per-strategy PnL |
 | Variants | `lib/strategies/variants.ts` | In-memory |
-| Apply proposal API | `app/api/research/apply-proposal/route.ts` | Auto-compare uses placeholder market id |
+| Apply proposal API | `app/api/research/apply-proposal/route.ts` | Works |
 
-## What Grok Actually Does Today
+## What Grok Does Today
 
 1. **Market intel** (`POST /api/grok/intel`) — single-market analysis on detail page.
-2. **Research agent** (`POST /api/research/agent`) — performance/snapshot context → text analysis.
-3. **Runner periodic calls** — infrequent (`Math.random()` + time window); parses RECOMMENDED ACTIONS; can auto-apply temporary adjustments (expiration **buggy** — see STATUS.md).
-
-**Does not do today:** emit structured `StrategyProposal[]` from model output.
+2. **Research agent** (`POST /api/research/agent`) — performance/snapshot context → analysis + proposals.
+3. **Runner periodic calls** — infrequent; parses RECOMMENDED ACTIONS; auto-applies safe adjustments with expiration.
 
 ## Historical Replay Prerequisites
 
@@ -64,8 +63,8 @@ Promote / reject (manual)
 2. Snapshots in `market_snapshots`.
 3. Select market + lookback on `/backtest`.
 
-` snapshotCount === 0` is expected until sufficient soak time.
+`snapshotCount === 0` is expected until sufficient soak time.
 
 ## Philosophy
 
-Research is first-class in design. Several flywheel steps remain **implementation gaps** — see [CONTRIBUTING.md](../CONTRIBUTING.md#critical-blockers-fix-these-first).
+Research is first-class. Remaining gaps: variant persistence, replay passive fill realism, runner integration tests — see [CONTRIBUTING.md](../CONTRIBUTING.md).
