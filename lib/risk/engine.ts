@@ -10,6 +10,8 @@ export interface RiskCheckResult {
   reason?: string;
 }
 
+import { persistSystemState } from '@/lib/monitoring/system-state';
+
 export interface RiskContext {
   platform: string;
   marketExternalId: string;
@@ -42,10 +44,22 @@ let lastLossReset = Date.now();
 export function resetDailyLoss() {
   dailyLossTracked = 0;
   lastLossReset = Date.now();
+
+  // Best-effort durable persistence (never block callers)
+  persistSystemState('daily_loss', {
+    trackedUsd: 0,
+    lastResetAt: new Date().toISOString(),
+  }, 'daily loss reset').catch(() => {});
 }
 
 export function recordRealizedLoss(usdLoss: number) {
   dailyLossTracked += usdLoss;
+
+  // Best-effort durable persistence
+  persistSystemState('daily_loss', {
+    trackedUsd: dailyLossTracked,
+    lastResetAt: new Date(lastLossReset).toISOString(),
+  }, 'realized loss recorded').catch(() => {});
 }
 
 export function getCurrentDailyLoss(): number {
