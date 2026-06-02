@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { disableRealExecution, isRealExecutionAllowed, placeRealOrder } from './real-executor';
 import type { Market } from '@/lib/types';
+import { reconcilePendingRealTrades } from './reconcile-real-trades';
 
 describe('Real Executor Safety', () => {
   beforeEach(() => {
@@ -35,5 +36,15 @@ describe('Real Executor Safety', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('Real execution disabled');
     expect(result.tradeId).toBeUndefined();
+  });
+});
+
+describe('Reconciliation', () => {
+  it('should return a structured ReconciliationResult even on no DB / no pendings', async () => {
+    const result = await reconcilePendingRealTrades();
+    expect(result).toHaveProperty('checked');
+    expect(result).toHaveProperty('updated');
+    expect(result).toHaveProperty('errors');
+    expect(typeof result.checked).toBe('number');
   });
 });
