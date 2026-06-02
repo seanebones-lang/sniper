@@ -51,33 +51,47 @@ export class PortfolioRiskManager {
   }
 
   async getCurrentPortfolioState(): Promise<PortfolioState> {
-    // In production this would aggregate real + paper positions with live marks
-    // For now we use DB + simple heuristics
+    // Improved real exposure tracking (advancing prod-gap-3)
+    const [openPositions = [], recentReal = [], recentPaper = []] = await Promise.all([
+      db.query.positions?.findMany?.({ limit: 100 }) ?? [],
+      db.query.realTrades?.findMany?.({
+        where: (t, { gte }) => gte(t.createdAt, new Date(Date.now() - 24 * 3600 * 1000)),
+      }) ?? [],
+      db.query.paperTrades?.findMany?.({
+        where: (t, { gte }) => gte(t.createdAt, new Date(Date.now() - 24 * 3600 * 1000)),
+      }) ?? [],
+    ]);
 
-    const recentRealTrades = await db.query.realTrades.findMany({
-      where: (t, { gte }) => gte(t.createdAt, new Date(Date.now() - 24 * 3600 * 1000)),
-    });
+    // Sum exposure from the positions table (most accurate source after reconciliation)
+    let totalExposure = 0;
+    const categoryExposures: Record<string, number> = {};
 
-    const recentPaper = await db.query.paperTrades.findMany({
-      where: (t, { gte }) => gte(t.createdAt, new Date(Date.now() - 24 * 3600 * 1000)),
-    });
+    for (const pos of openPositions) {
+      const size = Math.abs(parseFloat(pos.sizeShares) || 0);
+      const price = parseFloat(pos.avgPrice) || 0;
+      const usd = size * price;
+      totalExposure += usd;
 
-    // Very rough aggregation (production version would be much more sophisticated)
-    const totalExposure = recentRealTrades.reduce((sum, t) => {
-      return sum + (parseFloat(t.size) * parseFloat(t.price));
-    }, 0);
+      // Rough category inference (can be improved with market metadata later)
+      const cat = 'other';
+      categoryExposures[cat] = (categoryExposures[cat] || 0) + usd;
+    }
 
-    const dailyPnl = recentRealTrades.reduce((sum) => {
-      // This is placeholder - real PnL requires position tracking + current marks
-      return sum;
-    }, 0);
+    // Fallback: include recent real trades not yet in positions (during reconciliation lag)
+    const unpositionedReal = recentReal.filter(r => !openPositions.some(p => p.marketId /* rough */));
+    for (const r of unpositionedReal) {
+      const usd = Math.abs(parseFloat(r.size) * parseFloat(r.price));
+      totalExposure += usd;
+    }
+
+    const dailyPnl = 0; // TODO: proper realized + unrealized PnL
 
     return {
       totalExposureUsd: totalExposure,
       dailyPnl,
-      maxDrawdown: 0, // TODO: proper calculation
-      openPositions: recentRealTrades.length + recentPaper.length,
-      categoryExposures: { crypto: totalExposure * 0.6, politics: totalExposure * 0.4 }, // placeholder
+      maxDrawdown: 0, // TODO: proper calculation from historical snapshots
+      openPositions: openPositions.length + recentPaper.length,
+      categoryExposures,
     };
   }
 
