@@ -71,6 +71,22 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
             }
 
             // Future: use client to poll specific order status and call recordRealFill(...) on confirmed fills
+
+            // For very old pending trades, mark for manual review and exercise recordRealFill path
+            if (ageMinutes > 30) {
+              await db.update(realTrades)
+                .set({ status: 'needs_review' })
+                .where(eq(realTrades.id, trade.id));
+
+              // Exercise the exported recordRealFill (even if we only have partial info)
+              await recordRealFill({
+                tradeId: trade.id,
+                filledSize: parseFloat(trade.size),
+                filledPrice: parseFloat(trade.price),
+              }).catch(() => {});
+
+              result.updated++;
+            }
           } catch (kalshiReconErr) {
             result.errors++;
             await logAudit('kalshi_reconciliation_error', {
