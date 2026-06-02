@@ -7,6 +7,7 @@
  */
 
 import { db } from '@/lib/db';
+import { categorizeMarket, getCategoryLimits } from './categorizer';
 
 export interface PortfolioState {
   totalExposureUsd: number;
@@ -72,16 +73,24 @@ export class PortfolioRiskManager {
       const usd = size * price;
       totalExposure += usd;
 
-      // Rough category inference (can be improved with market metadata later)
-      const cat = 'other';
+      // Use the real categorizer for accurate bucketing
+      // We don't have the question here, so we use a lightweight fallback + externalId
+      const catResult = categorizeMarket('', pos.platform, pos.marketId);
+      const cat = catResult.category;
       categoryExposures[cat] = (categoryExposures[cat] || 0) + usd;
     }
 
     // Fallback: include recent real trades not yet in positions (during reconciliation lag)
-    const unpositionedReal = recentReal.filter(r => !openPositions.some(p => p.marketId /* rough */));
+    const unpositionedReal = recentReal.filter(r => 
+      !openPositions.some(p => p.marketId === r.marketExternalId || p.platform === r.platform)
+    );
     for (const r of unpositionedReal) {
       const usd = Math.abs(parseFloat(r.size) * parseFloat(r.price));
       totalExposure += usd;
+
+      const catResult = categorizeMarket('', r.platform, r.marketExternalId);
+      const cat = catResult.category;
+      categoryExposures[cat] = (categoryExposures[cat] || 0) + usd;
     }
 
     const dailyPnl = 0; // TODO: proper realized + unrealized PnL
@@ -119,9 +128,11 @@ export class PortfolioRiskManager {
       return { allowedSize: 0, reason: 'Total portfolio exposure limit reached' };
     }
 
-    const category = params.category || 'other';
+    const rawCategory = params.category || categorizeMarket('', params.platform, params.marketExternalId).category;
+    const category = rawCategory as keyof typeof this.params.maxCategoryExposureUsd;
     const catExposure = state.categoryExposures[category] || 0;
-    const catLimit = this.params.maxCategoryExposureUsd[category] || 400;
+    const dynamicLimits = getCategoryLimits ? getCategoryLimits() : this.params.maxCategoryExposureUsd;
+    const catLimit = (dynamicLimits as any)[category] || this.params.maxCategoryExposureUsd[category] || 400;
 
     if (catExposure >= catLimit) {
       return { allowedSize: 0, reason: `Category ${category} exposure limit reached` };
