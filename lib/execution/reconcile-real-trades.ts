@@ -10,6 +10,7 @@
 
 import { db, realTrades, positions, markets, auditEvents } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
+import { ensureMarket } from '@/lib/markets';
 
 export interface ReconciliationResult {
   checked: number;
@@ -249,20 +250,18 @@ export async function recordRealFill(params: {
     })
     .where(eq(realTrades.id, tradeId));
 
-  const market = await db.query.markets.findFirst({
-    where: and(
-      eq(markets.platform, trade.platform),
-      eq(markets.externalId, trade.marketExternalId)
-    ),
+  // Defensive: ensure the market record exists before touching positions (ID discipline)
+  const marketId = await ensureMarket({
+    platform: trade.platform as 'polymarket' | 'kalshi',
+    externalId: trade.marketExternalId,
   });
-  if (!market) return;
 
   const signedSize = trade.side === 'BUY' ? filledSize : -filledSize;
 
   const existing = await db.query.positions.findFirst({
     where: and(
       eq(positions.platform, trade.platform),
-      eq(positions.marketId, market.id)
+      eq(positions.marketId, marketId)
     ),
   });
 
@@ -283,7 +282,7 @@ export async function recordRealFill(params: {
   } else {
     await db.insert(positions).values({
       platform: trade.platform,
-      marketId: market.id,
+      marketId: marketId,
       side: trade.side,
       sizeShares: signedSize.toString(),
       avgPrice: filledPrice.toString(),
@@ -292,7 +291,7 @@ export async function recordRealFill(params: {
 
   await logAudit('real_fill_reconciled', {
     tradeId,
-    marketId: market.id,
+    marketId: marketId,
     filledSize,
     filledPrice,
     platform: trade.platform,
