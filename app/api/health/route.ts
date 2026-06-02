@@ -5,6 +5,7 @@ import { executionManager } from '@/lib/execution/execution-manager';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/temporary-adjustments';
+import { loadRiskSnapshot, loadSystemState } from '@/lib/monitoring/system-state';
 
 export async function GET() {
   const performance = await getStrategyPerformance(3);
@@ -45,6 +46,11 @@ export async function GET() {
     temporaryAdjustments: {
       active: getActiveAdjustments(),
       summary: getAdjustmentSummary(),
+    },
+
+    durableState: {
+      lastRiskSnapshot: await loadRiskSnapshot(),
+      lastExecutionHealth: await loadSystemState<any>('execution_health_summary'),
     },
 
     summary: {
