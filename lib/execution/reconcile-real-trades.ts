@@ -43,7 +43,7 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
             const ageMs = Date.now() - new Date(trade.createdAt).getTime();
             const ageMinutes = Math.round(ageMs / 60000);
 
-            // Periodically ping balance during recon (proves auth + connectivity in the 24/7 runner loop)
+            // Periodically ping balance during recon (proves auth + connectivity)
             if (ageMinutes > 5 || (ageMinutes > 0 && ageMinutes % 30 === 0)) {
               try {
                 const bal = await client.getBalance();
@@ -53,12 +53,54 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
                   ageMinutes,
                 });
               } catch (balErr) {
-                // Non-fatal: balance ping is best-effort observability
                 await logAudit('kalshi_recon_balance_failed', {
                   tradeId: trade.id,
                   error: balErr instanceof Error ? balErr.message : String(balErr),
                 });
               }
+            }
+
+            // === Real order status polling for Kalshi (major step toward prod-gap-2) ===
+            try {
+              // trade.txHash is used to store the Kalshi order_id in our system
+              const orderId = trade.txHash;
+              if (orderId) {
+                const orderStatus = await client.getOrderStatus(orderId);
+                const raw = (orderStatus as any).raw || orderStatus;
+
+                const isFilled = orderStatus.filled || raw?.status === 'filled' || (raw?.filled_count ?? 0) > 0;
+                const filledCount = raw?.filled_count ?? (isFilled ? parseFloat(trade.size) : 0);
+
+                if (isFilled && filledCount > 0) {
+                  await recordRealFill({
+                    tradeId: trade.id,
+                    filledSize: filledCount,
+                    filledPrice: parseFloat(raw?.avg_price || trade.price),
+                    txHash: orderId,
+                  });
+                  result.updated++;
+                  await logAudit('kalshi_real_fill_confirmed_via_api', {
+                    tradeId: trade.id,
+                    orderId,
+                    filledSize: filledCount,
+                  });
+                  continue; // already reconciled
+                }
+
+                if (raw?.status === 'cancelled' || raw?.status === 'expired') {
+                  await db.update(realTrades)
+                    .set({ status: 'cancelled' })
+                    .where(eq(realTrades.id, trade.id));
+                  result.updated++;
+                  await logAudit('kalshi_order_cancelled_on_exchange', { tradeId: trade.id, orderId });
+                  continue;
+                }
+              }
+            } catch (orderErr) {
+              await logAudit('kalshi_order_status_poll_failed', {
+                tradeId: trade.id,
+                error: orderErr instanceof Error ? orderErr.message : String(orderErr),
+              });
             }
 
             if (ageMinutes > 10) {
@@ -70,21 +112,11 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
               });
             }
 
-            // Future: use client to poll specific order status and call recordRealFill(...) on confirmed fills
-
-            // For very old pending trades, mark for manual review and exercise recordRealFill path
-            if (ageMinutes > 30) {
+            // Very old trades that still have no confirmation → needs_review
+            if (ageMinutes > 45) {
               await db.update(realTrades)
                 .set({ status: 'needs_review' })
                 .where(eq(realTrades.id, trade.id));
-
-              // Exercise the exported recordRealFill (even if we only have partial info)
-              await recordRealFill({
-                tradeId: trade.id,
-                filledSize: parseFloat(trade.size),
-                filledPrice: parseFloat(trade.price),
-              }).catch(() => {});
-
               result.updated++;
             }
           } catch (kalshiReconErr) {
@@ -146,23 +178,21 @@ export async function recordRealFill(params: {
 }) {
   const { tradeId, filledSize, filledPrice, txHash } = params;
 
-  // Update the trade record
+  const trade = await db.query.realTrades.findFirst({
+    where: eq(realTrades.id, tradeId),
+  });
+  if (!trade) return;
+
+  // Update the trade record to filled
   await db.update(realTrades)
     .set({
       status: 'filled',
       filledAt: new Date(),
       price: filledPrice.toString(),
       size: filledSize.toString(),
-      txHash: txHash || undefined,
+      txHash: txHash || trade.txHash || undefined,
     })
     .where(eq(realTrades.id, tradeId));
-
-  // Find the internal market ID
-  const trade = await db.query.realTrades.findFirst({
-    where: eq(realTrades.id, tradeId),
-  });
-
-  if (!trade) return;
 
   const market = await db.query.markets.findFirst({
     where: and(
@@ -170,10 +200,10 @@ export async function recordRealFill(params: {
       eq(markets.externalId, trade.marketExternalId)
     ),
   });
-
   if (!market) return;
 
-  // Upsert into positions (basic version)
+  const signedSize = trade.side === 'BUY' ? filledSize : -filledSize;
+
   const existing = await db.query.positions.findFirst({
     where: and(
       eq(positions.platform, trade.platform),
@@ -182,11 +212,16 @@ export async function recordRealFill(params: {
   });
 
   if (existing) {
-    // Very simplified averaging (production should be more careful)
-    const totalSize = parseFloat(existing.sizeShares) + (trade.side === 'BUY' ? filledSize : -filledSize);
+    const prevSize = parseFloat(existing.sizeShares) || 0;
+    const prevAvg = parseFloat(existing.avgPrice) || 0;
+    const newSize = prevSize + signedSize;
+    const totalCost = prevSize * prevAvg + signedSize * filledPrice;
+    const newAvg = newSize !== 0 ? totalCost / newSize : filledPrice;
+
     await db.update(positions)
       .set({
-        sizeShares: totalSize.toString(),
+        sizeShares: newSize.toString(),
+        avgPrice: newAvg.toString(),
         updatedAt: new Date(),
       })
       .where(eq(positions.id, existing.id));
@@ -195,7 +230,7 @@ export async function recordRealFill(params: {
       platform: trade.platform,
       marketId: market.id,
       side: trade.side,
-      sizeShares: (trade.side === 'BUY' ? filledSize : -filledSize).toString(),
+      sizeShares: signedSize.toString(),
       avgPrice: filledPrice.toString(),
     });
   }
@@ -205,6 +240,7 @@ export async function recordRealFill(params: {
     marketId: market.id,
     filledSize,
     filledPrice,
+    platform: trade.platform,
   });
 }
 

@@ -101,12 +101,58 @@ export class KalshiTradingClient {
   // These would follow the same auth pattern as getBalance.
 
   /**
-   * Placeholder for future reconciliation use.
-   * In a full implementation this would call /portfolio/orders/{id} or similar.
+   * Get a specific order by its Kalshi order ID.
+   * Used by reconciliation to determine actual fill status.
+   */
+  async getOrder(orderId: string): Promise<any> {
+    const token = await this.getAuthToken();
+    const res = await fetch(`${KALSHI_BASE}/portfolio/orders/${orderId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Kalshi getOrder failed: ${res.status} ${text}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * List recent orders, optionally filtered by ticker.
+   * Useful for broader reconciliation sweeps.
+   */
+  async getOrders(params: { ticker?: string; status?: string; limit?: number } = {}): Promise<any> {
+    const token = await this.getAuthToken();
+    const query = new URLSearchParams();
+    if (params.ticker) query.set('ticker', params.ticker);
+    if (params.status) query.set('status', params.status);
+    if (params.limit) query.set('limit', String(params.limit));
+
+    const url = `${KALSHI_BASE}/portfolio/orders${query.toString() ? '?' + query.toString() : ''}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Kalshi getOrders failed: ${res.status} ${text}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Legacy compatibility wrapper used by early reconciliation code.
    */
   async getOrderStatus(orderIdOrTicker: string): Promise<{ status: string; filled?: boolean; [k: string]: unknown }> {
-    // For now return a safe default so recon can call it without crashing
-    return { status: 'unknown', filled: false };
+    try {
+      const data = await this.getOrder(orderIdOrTicker);
+      const order = data.order || data;
+      return {
+        status: order.status || 'unknown',
+        filled: order.status === 'filled' || (order.filled_count && order.filled_count > 0),
+        raw: order,
+      };
+    } catch {
+      return { status: 'unknown', filled: false };
+    }
   }
 
   async placeOrder(params: {
