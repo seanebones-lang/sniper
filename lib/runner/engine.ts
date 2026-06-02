@@ -11,8 +11,9 @@ import { eq } from 'drizzle-orm';
 import { getAllMarkets, getMarketsForQuickFlip, ensureMarketRecord } from '@/lib/markets';
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
+import type { Market } from '@/lib/types';
 import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
-import { resolveStrategyConfig, shouldUseImmediateFill } from '@/lib/strategies/run-profile';
+import { resolveStrategyConfig, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { evaluateExitSignal } from '@/lib/strategies/exit-engine';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { alerts } from '@/lib/alerts/telegram';
@@ -69,6 +70,23 @@ export interface RunnerCycleDiagnostics {
     polyConnected: boolean;
     kalshiConnected: boolean;
   };
+}
+
+/** Signal queued during evaluation, persisted in batch per strategy. */
+interface QueuedRunnerSignal {
+  stratRow: { id: string; name: string; type: string; paperOnly: boolean | null };
+  market: Market;
+  signal: StrategySignal;
+  config: ResolvedStrategyConfig;
+  book: import('@/lib/types').OrderBook | null | undefined;
+  advancedRegime: string | undefined;
+  finalSize: number;
+  isExitSignal: boolean;
+  isQuickFlip: boolean;
+  marketDbId: string;
+  cooldownKey: string;
+  healthMultiplier: number;
+  sizeReason: string;
 }
 
 export interface RunnerStatus {
@@ -397,9 +415,26 @@ export async function runOnce() {
   const openPositionsByStrategy = await getOpenPositionsByStrategy(
     allowedStrategies.map((s) => s.id),
   );
+
+  const evalKeys = new Set(
+    evalMarketsToFetch.map((m) => `${m.platform}:${m.externalId}`),
+  );
+  const openPosFlat: Array<{ platform: string; externalId: string; openedAt: Date }> = [];
   for (const positions of openPositionsByStrategy.values()) {
     for (const pos of positions) {
-      marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
+      openPosFlat.push({
+        platform: pos.platform,
+        externalId: pos.marketExternalId,
+        openedAt: pos.openedAt,
+      });
+    }
+  }
+  openPosFlat.sort((a, b) => b.openedAt.getTime() - a.openedAt.getTime());
+  const MAX_OPEN_BOOK_MARKETS = 60;
+  for (const pos of openPosFlat.slice(0, MAX_OPEN_BOOK_MARKETS)) {
+    const key = `${pos.platform}:${pos.externalId}`;
+    if (!evalKeys.has(key)) {
+      marketsToFetch.push({ platform: pos.platform, externalId: pos.externalId });
     }
   }
 
@@ -526,6 +561,8 @@ export async function runOnce() {
       }
     }
 
+    const queuedSignals: QueuedRunnerSignal[] = [];
+
     for (const market of relevantMarkets) {
       try {
         // Get fresh book/price (deduplicated per cycle)
@@ -614,8 +651,6 @@ export async function runOnce() {
             }
           }
 
-          signalsThisRun++;
-
           let orderSize = signal.size;
           if (signal.action === 'SELL' && openPos) {
             orderSize = Math.min(orderSize, Math.floor(openPos.netSize));
@@ -673,12 +708,10 @@ export async function runOnce() {
 
           if (finalSize <= 0) continue;
 
-          // Persist signal (with risk-adjusted size)
           let sizeReason = '';
           if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
           if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 
-          // === CRITICAL: Ensure market exists in DB before creating signal (fixes FK mismatch) ===
           const marketKey = `${market.platform}:${market.externalId}`;
           let marketDbId = marketDbIds.get(marketKey);
           if (!marketDbId) {
@@ -696,110 +729,128 @@ export async function runOnce() {
             }
           }
 
-          const insertedSignal = await db.insert(signals).values({
-            strategyId: stratRow.id,
-            marketId: marketDbId,
-            action: signal.action as 'BUY' | 'SELL' | 'CANCEL',
-            price: signal.price.toString(),
-            size: finalSize.toString(),
-            reason: `${signal.reason} | Risk-adjusted from ${signal.size} → ${finalSize.toFixed(0)}${sizeReason}`,
-          }).returning({ id: signals.id });
-
-          const signalId = insertedSignal[0]?.id;
-
-          void logAudit('runner_signal_created', {
-            strategy: stratRow.name,
-            market: market.externalId,
+          queuedSignals.push({
+            stratRow,
+            market,
+            signal,
+            config,
+            book,
+            advancedRegime: advanced.regime,
+            finalSize,
+            isExitSignal,
+            isQuickFlip,
             marketDbId,
-            signalId,
-            action: signal.action,
-            size: finalSize,
+            cooldownKey,
+            healthMultiplier,
+            sizeReason,
           });
-
-          const isRealAllowed = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !stratRow.paperOnly;
-
-          if (isRealAllowed) {
-            // Real execution path (Phase 4+)
-            const { placeRealOrder } = await import('@/lib/execution/real-executor');
-            const result = await placeRealOrder({
-              market,
-              side: signal.action as 'BUY' | 'SELL',
-              price: signal.price,
-              size: finalSize,
-              reason: `[REAL][${stratRow.name}] ${signal.reason} (risk-adjusted)`,
-            });
-
-            if (result.success) {
-              fillsThisRun++;
-              lastSignalAtByKey.set(cooldownKey, Date.now());
-              alerts.realOrder({
-                platform: market.platform,
-                side: signal.action,
-                size: signal.size,
-                price: signal.price,
-                reason: signal.reason,
-              });
-            }
-          } else {
-            const useImmediate = shouldUseImmediateFill(
-              config,
-              signal.action as 'BUY' | 'SELL',
-              isExitSignal,
-            );
-            const topBid = book?.bids?.[0]?.size || 0;
-            const topAsk = book?.asks?.[0]?.size || 0;
-            const bookImbalance =
-              topBid + topAsk > 0 ? (topBid - topAsk) / (topBid + topAsk) : 0;
-
-            const fill = paperSimulator.snipe({
-              market,
-              side: signal.action as 'BUY' | 'SELL',
-              price: signal.price,
-              size: finalSize,
-              reason: `[${stratRow.name}] ${signal.reason} (risk-adjusted)`,
-              book,
-              immediate: useImmediate,
-              isExit: isExitSignal,
-              minFillProbability: config.minFillProbability,
-              bookImbalance,
-              regime: advanced.regime,
-            });
-
-            if (fill) {
-              fillsThisRun++;
-              lastSignalAtByKey.set(cooldownKey, Date.now());
-
-              await db.insert(paperTrades).values({
-                platform: market.platform,
-                marketExternalId: market.externalId,
-                signalId: signalId ?? null,
-                side: fill.side,
-                price: fill.price.toString(),
-                size: fill.size.toString(),
-                fee: fill.fee.toString(),
-                status: 'filled',
-              });
-
-              const refreshed = await loadPaperRiskState(bookCache.toMarkPriceMap());
-              portfolioRiskManager.setCyclePortfolioState(
-                refreshed.state,
-                refreshed.equityUsd,
-                refreshed.ledger.realizedPnLUsd,
-              );
-
-              alerts.paperFill(fill);
-            }
-          }
         }
       } catch (e) {
-        // Don't let one bad market kill the runner
         console.warn(`[Runner] Error on ${market.externalId}:`, e);
-        await logAudit('runner_market_error', {
+        void logAudit('runner_market_error', {
           market: market.externalId,
           strategy: stratRow.name,
           error: e instanceof Error ? e.message : String(e),
           stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
         });
+      }
+    }
+
+    if (queuedSignals.length > 0) {
+      signalsThisRun += queuedSignals.length;
+      const inserted = await db
+        .insert(signals)
+        .values(
+          queuedSignals.map((q) => ({
+            strategyId: q.stratRow.id,
+            marketId: q.marketDbId,
+            action: q.signal.action as 'BUY' | 'SELL' | 'CANCEL',
+            price: q.signal.price.toString(),
+            size: q.finalSize.toString(),
+            reason: `${q.signal.reason} | Risk-adjusted from ${q.signal.size} → ${q.finalSize.toFixed(0)}${q.sizeReason}`,
+          })),
+        )
+        .returning({ id: signals.id });
+
+      for (let i = 0; i < queuedSignals.length; i++) {
+        const q = queuedSignals[i];
+        const signalId = inserted[i]?.id;
+        void logAudit('runner_signal_created', {
+          strategy: q.stratRow.name,
+          market: q.market.externalId,
+          marketDbId: q.marketDbId,
+          signalId,
+          action: q.signal.action,
+          size: q.finalSize,
+        });
+
+        const isRealAllowed =
+          process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !q.stratRow.paperOnly;
+
+        if (isRealAllowed) {
+          const { placeRealOrder } = await import('@/lib/execution/real-executor');
+          const result = await placeRealOrder({
+            market: q.market,
+            side: q.signal.action as 'BUY' | 'SELL',
+            price: q.signal.price,
+            size: q.finalSize,
+            reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
+          });
+
+          if (result.success) {
+            fillsThisRun++;
+            lastSignalAtByKey.set(q.cooldownKey, Date.now());
+            alerts.realOrder({
+              platform: q.market.platform,
+              side: q.signal.action,
+              size: q.signal.size,
+              price: q.signal.price,
+              reason: q.signal.reason,
+            });
+          }
+        } else {
+          const useImmediate = shouldUseImmediateFill(
+            q.config,
+            q.signal.action as 'BUY' | 'SELL',
+            q.isExitSignal,
+          );
+          const topBid = q.book?.bids?.[0]?.size || 0;
+          const topAsk = q.book?.asks?.[0]?.size || 0;
+          const bookImbalance =
+            topBid + topAsk > 0 ? (topBid - topAsk) / (topBid + topAsk) : 0;
+
+          const fill = paperSimulator.snipe({
+            market: q.market,
+            side: q.signal.action as 'BUY' | 'SELL',
+            price: q.signal.price,
+            size: q.finalSize,
+            reason: `[${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
+            book: q.book ?? undefined,
+            immediate: useImmediate,
+            isExit: q.isExitSignal,
+            minFillProbability: q.config.minFillProbability,
+            bookImbalance,
+            regime: q.advancedRegime,
+          });
+
+          if (fill) {
+            fillsThisRun++;
+            lastSignalAtByKey.set(q.cooldownKey, Date.now());
+
+            void db.insert(paperTrades).values({
+              platform: q.market.platform,
+              marketExternalId: q.market.externalId,
+              signalId: signalId ?? null,
+              side: fill.side,
+              price: fill.price.toString(),
+              size: fill.size.toString(),
+              fee: fill.fee.toString(),
+              status: 'filled',
+            });
+
+            alerts.paperFill(fill);
+          }
+        }
       }
     }
   }

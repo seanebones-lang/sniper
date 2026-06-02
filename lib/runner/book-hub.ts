@@ -210,10 +210,6 @@ export class RunnerBookHub {
       this.start();
     }
 
-    if (this.polyIds.length > 0 || this.kalshiTickers.length > 0) {
-      await this.waitMs(WS_WARMUP_MS);
-    }
-
     let wsHits = 0;
     const needRest: typeof unique = [];
 
@@ -223,6 +219,11 @@ export class RunnerBookHub {
       } else {
         needRest.push(m);
       }
+    }
+
+    const skipWarmup = needRest.length === 0 || wsHits >= unique.length * 0.9;
+    if (!skipWarmup && (this.polyIds.length > 0 || this.kalshiTickers.length > 0)) {
+      await this.waitMs(WS_WARMUP_MS);
     }
 
     let restFetched = 0;
