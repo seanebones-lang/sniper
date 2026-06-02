@@ -13,14 +13,17 @@ This document describes how to safely operate real money execution on Sniper.
    - ExecutionManager does not recommend WAIT/CANCEL
 
 ## Emergency Kill Switch
-- Set `SNIPER_DISABLE_REAL_EXECUTION=true` in the environment for an immediate hard stop (highest priority).
-- Call `disableRealExecution()` at runtime if needed (in-memory).
+- Set `SNIPER_DISABLE_REAL_EXECUTION=true` in the environment for an immediate hard stop (highest priority, checked first).
+- Runtime disable via `disableRealExecution()` is now durable (persisted in `system_state`).
+- The runner recovers the kill switch state on startup and logs loudly if it was previously disabled.
+- Risk snapshots also capture the full posture (exposure + mode + health + maxDrawdown) at the time of any incident.
 
 ## Reconciliation
 - The runner periodically calls `reconcilePendingRealTrades()`.
-- This updates `realTrades` status and basic `positions` tracking.
-- For now it uses a combination of time-based heuristics and best-effort position math.
-- Monitor the "real_trade_pending_review" and "real_fill_reconciled" audit events.
+- Kalshi: Actively polls order status via `getOrder`/`getFills` and auto-reconciles confirmed fills using `recordRealFill`.
+- Polymarket: Basic open-order reconciliation (detects when orders are no longer open).
+- Durable risk snapshots and positions table are the source of truth for exposure after reconciliation.
+- Monitor "real_fill_reconciled", "kalshi_real_fill_confirmed_via_api", and "polymarket_order_no_longer_open" audit events.
 
 ## Monitoring & Alerts
 - Telegram alerts are sent for real orders when configured.
@@ -45,12 +48,12 @@ This document describes how to safely operate real money execution on Sniper.
 4. Post-mortem and decide whether to roll back variants or strategies.
 
 ## Daily Operations Checklist
-- [ ] Confirm `SNIPER_ENABLE_REAL_EXECUTION` desired state for the deployment.
-- [ ] Check runner status + recent `real_order_attempt` / `kalshi_recon_balance_check` audit events.
-- [ ] Review `/health` and execution health scores (adverse rate, system health).
-- [ ] Spot-check `realTrades` for pending >15min (flag for review).
-- [ ] Confirm no unexpected balance drift via Kalshi client pings in recon.
-- [ ] If risk mode moved to EMERGENCY/DEFENSIVE, note reason from logs.
+- [ ] Confirm `SNIPER_ENABLE_REAL_EXECUTION` desired state.
+- [ ] Check runner startup logs for recovered kill switch / risk mode / risk snapshot state.
+- [ ] Review `/health` (now includes lastRiskSnapshot and durable state).
+- [ ] Monitor for elevated maxDrawdown or high exposure in recovered snapshots.
+- [ ] Spot-check `realTrades` for pending/needs_review states.
+- [ ] Review recent "real_fill_reconciled" and platform-specific fill confirmation audits.
 - [ ] (Paper sacred) Never promote a variant to real without full replay + small size first.
 
 ## Verification Queries & Commands
@@ -98,6 +101,8 @@ In code / logs: look for `runner_signal_created` with real context, `real_fill_r
 - Re-enable: Remove env var + restart or clear the in-memory flag (add a `resetRealExecution()` helper if operating frequently).
 
 ## Known Limitations (Updated)
-- Kalshi real execution: client + placeOrder + recon pings work; full order polling + auto recordRealFill on confirmed fills still future.
-- Position math is pragmatic (simple averaging); sophisticated cost-basis in production.
-- No cross-platform netting or automatic circuit breakers beyond PortfolioRiskManager + ExecutionManager yet.
+- Kalshi: Strong order + fills polling in recon. Still needs deeper partial fill and fee handling.
+- Polymarket: Basic open-order detection added. Full status polling is thinner than Kalshi.
+- MaxDrawdown is now tracked and acts as a circuit breaker (basic historical peak tracking).
+- Rich durable `risk_snapshot`s are persisted on every runner cycle and recovered on startup.
+- Position math remains pragmatic; full mark-to-market and sophisticated cost basis are future work.

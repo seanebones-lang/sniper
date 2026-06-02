@@ -1,6 +1,6 @@
 # Sniper — Project Status (Authoritative)
 
-**Last updated:** 2026-06 (post major durability + reconciliation + exposure work — 21 tests)
+**Last updated:** 2026-06 (post 4-phase production readiness push: durability + maxDrawdown + reconciliation symmetry + testing + observability — 22 tests)
 
 This document is the single source of truth for capability, known issues, and roadmap. All other docs (README, wiki, etc.) should defer to this file.
 
@@ -32,30 +32,31 @@ All references to this blocker in older docs/wiki are now historical.
 | Grok Research Agent + recommendations | Works | Requires `XAI_API_KEY` + `ENABLE_GROK_RESEARCH_AGENT=true` |
 | Settings UI for Grok key | Works | |
 | Polymarket live WebSocket | Partial | Only on market detail page |
-| Real Polymarket execution | Gated + Solid skeleton | Full gates (risk, execution mgr, kill-switch in-memory+env, recon). recordRealFillForPosition with strict ID discipline (ensureMarket). |
-| Real Kalshi execution | Improved / Experimental | Authenticated KalshiTradingClient wired (placeOrder + getBalance). Recon loop now pings client for liveness. Guarded safety tests. Still no full auto fill polling. |
+| Real Polymarket execution | Gated + Hardening | Full risk gates + durable kill switch + risk snapshots. Orders start as 'pending' with order IDs stored for reconciliation. Basic open-order reconciliation support added. |
+| Real Kalshi execution | Hardening | Full authenticated client with getOrder/getOrders/getFills. Reconciliation actively polls exchange and auto-calls recordRealFill on confirmed fills. Balance pings + order status + fills discovery. |
 | Full CI | Good + Improving | Real GitHub Actions workflow (`.github/workflows/ci.yml`). Includes Postgres, lint, typecheck, build, unit tests, and smoke test. E2E/Playwright foundation started but not yet stable in CI. |
-| Risk system (PortfolioRiskManager, modes, temporary adjustments) | Strong | One of the most complete parts of the system |
+| Risk system (PortfolioRiskManager, modes, temporary adjustments) | Strong + Hardening | MaxDrawdown tracking + circuit breaker added. calculateSafeSize now uses real positions-driven exposure and category limits. |
 | Execution quality tracking + adverse selection detection | Strong | `ExecutionManager` |
+| Durability & State Recovery | Strong | system_state table + rich risk snapshots. Kill switch, risk mode, daily loss, execution health, and full risk posture now persist across restarts. Runner recovers and acts on bad prior state. |
+| Observability for Real Execution | Improving | /api/health surfaces lastRiskSnapshot, lastKillSwitchState, and execution health from durable store. |
 
 ---
 
 ## Known Remaining Issues / Debt (Non-Blocking)
 
-- **Lint / Type Safety**: Core lib/ (runner, risk, execution, research) heavily cleaned (no-explicit-any near zero outside tests; many unused vars eliminated). ~36 errors remain (mostly test mocks + some React UI/pages with any/hooks). Lint is strict in CI (no || true).
-- **Real Execution Maturity**: Significantly hardened. KalshiTradingClient fully wired + exercised in recon. record*Fill helpers + ensureMarket discipline. 2+ guarded kill-switch tests. Still experimental (no full auto polling on Kalshi/Polymarket for fills yet; position math pragmatic). Kill-switch (env + in-memory) solid.
-- **E2E & Test Coverage**: 18 passing unit tests (risk, execution, recon foundations, ensure-market, Kalshi client). Playwright + coverage in CI. E2E still basic (one spec). 
-- **Documentation**: Runbooks (real-execution + kalshi-support) now have daily checklists, SQL verification queries, error patterns, auth steps, emergency procedures. STATUS and AGENTS kept current.
-- **AGENTS.md / CLAUDE.md**: Core rules strong (paper sacred, ID discipline via ensureMarket, audit everything, risk first). Can still add more examples.
+- **Lint / Type Safety**: Core lib/ heavily cleaned. Remaining issues are mostly in tests and UI. Lint is strict in CI.
+- **Real Execution Maturity**: Significantly hardened. Durable kill switch + risk snapshots. Active Kalshi order/fill polling in recon. Polymarket reconciliation support added. Still experimental for fully hands-off real money (partial fills, marks, and deep on-chain confirmation need more work).
+- **E2E & Integration Testing**: 22 passing unit tests with good coverage of risk, durability, and reconciliation paths. E2E remains basic. High-stakes real execution paths still need more guarded integration tests.
+- **Documentation**: Major runbooks and STATUS kept current. AGENTS.md strengthened with durability and maxDrawdown rules.
+- **AGENTS.md / CLAUDE.md**: Strong and up to date with current safety invariants (durable state, maxDrawdown, reconciliation expectations).
 
-### Recently Resolved (June 2026, multiple cycles)
-- **Repo hygiene (Major win)**: Removed 1.4 GB nested duplicate. Hardened .gitignore.
-- **signals.market_id FK** — Fixed.
-- **State Durability (Critical for 24/7 real $)**: New system_state table + service. Kill switch, risk mode, daily loss, and execution health now persist across restarts with recovery logging in the runner.
-- **Reconciliation Maturity**: KalshiTradingClient now has real getOrder/getOrders/getFills. Recon actively polls exchange order status and calls recordRealFill with confirmed data. Polymarket orders now start as 'pending' with order IDs stored.
-- **Risk Exposure**: getCurrentPortfolioState improved to use the positions table as primary source (populated by reconciliation).
-- **Testing**: 21 passing.
-- **Process**: Strict gated batches with commit + push on every meaningful change.
+### Recently Resolved (June 2026 — 4-Phase Production Readiness Push)
+- **State Durability**: Rich `risk_snapshot` system. Runner now persists and recovers full risk posture (exposure, mode, health, maxDrawdown, bankroll) and actively reacts to previously bad states on startup.
+- **Risk Exposure & Safety**: MaxDrawdown tracking + circuit breaker added to PortfolioRiskManager. calculateSafeSize uses real position-driven data + proper category limits.
+- **Reconciliation**: Kalshi has full order/fill polling. Basic but real Polymarket open-order reconciliation added. recordRealFill now meaningfully exercised.
+- **Observability**: /api/health now surfaces lastRiskSnapshot, lastKillSwitchState, and durable execution health.
+- **Testing**: 22 passing tests with direct coverage of maxDrawdown and durability paths.
+- **Process**: Continued strict "verify → commit → push" discipline across all phases.
 
 ---
 

@@ -12,10 +12,11 @@ Risk management is the single most important part of this system.
 
 ### 1. Portfolio Level (`PortfolioRiskManager`)
 - Fractional Kelly sizing with confidence scaling
-- Category exposure limits (crypto, politics, sports, etc.)
+- Category exposure limits (crypto, politics, sports, economics, etc.) using real `categorizeMarket`
 - Concentration penalties
 - Max daily loss circuit breaker
 - Max total exposure
+- Max drawdown circuit breaker (tracked from peak bankroll via `recordOutcome`)
 
 ### 2. Explicit Risk Modes (`RiskModeManager`)
 The runner automatically shifts between three modes based on system health, adverse execution rate, and edge decay:

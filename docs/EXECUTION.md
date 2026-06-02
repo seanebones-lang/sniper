@@ -28,6 +28,8 @@ Most systems focus too much on signal generation and not enough on how they actu
 
 ## Current Capabilities (as of latest build)
 
+Real execution paths now benefit from durable risk snapshots and active reconciliation that can confirm fills from the exchanges. ExecutionManager health data is periodically persisted as part of the overall risk posture.
+
 - Central `ExecutionManager` that decides passive vs aggressive for every signal
 - Real passive order lifecycle management (`handleBookUpdate`, `manageRestingOrders`)
 - Adverse selection detection with automatic response recommendations

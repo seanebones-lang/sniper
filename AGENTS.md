@@ -36,19 +36,13 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Bypass the risk/execution layers for "just this one thing".
 
 **Real Execution & Reconciliation (Highest Stakes)**
-- Only `placeRealOrder` (via real-executor) may touch live money. It enforces: env gate + strategy !paperOnly + `isRealExecutionAllowed()` (env override + in-memory kill switch) + portfolioRiskManager + ExecutionManager decision.
-- Always call `ensureMarket` (or `ensureMarketRecord`) **before** any insert into signals/positions/realTrades that references a market. Example:
-  ```ts
-  const marketDbId = await ensureMarket({
-    platform: m.platform,
-    externalId: m.externalId,
-    question: m.question,
-  });
-  await db.insert(signals).values({ marketId: marketDbId, ... });
-  ```
-- Reconciliation (`reconcilePendingRealTrades`) runs in the runner loop. It must produce auditable events and may call `recordRealFill` / `recordRealFillForPosition` on confirmed fills. Kalshi path exercises the trading client (balance pings etc.).
-- Kill switch: `SNIPER_DISABLE_REAL_EXECUTION=true` (deployment) or `disableRealExecution()` (runtime). After trigger, real paths must early-return with clear error; paper paths continue.
-- Test the gates: any change to real-exec or recon requires guarded tests that exercise the disable + early return without side effects.
+- Only `placeRealOrder` (via real-executor) may touch live money. It enforces: env gate + strategy !paperOnly + `isRealExecutionAllowed()` (env override + durable kill switch) + portfolioRiskManager (including maxDrawdown) + ExecutionManager.
+- Durable state is now first-class: Kill switch, risk mode, daily loss, execution health, and rich `risk_snapshot`s (exposure + maxDrawdown + health) persist in `system_state`. The runner recovers and acts on previously bad states on startup.
+- Always call `ensureMarket` (or `ensureMarketRecord`) **before** any insert into signals/positions/realTrades that references a market.
+- Reconciliation (`reconcilePendingRealTrades`) actively polls exchanges (especially Kalshi via getOrder/getFills) and calls `recordRealFill` on confirmed fills. Polymarket has basic open-order detection. All paths must remain auditable.
+- MaxDrawdown is now a real circuit breaker alongside daily loss and total exposure.
+- Kill switch: `SNIPER_DISABLE_REAL_EXECUTION=true` (deployment) or `disableRealExecution()` (now durable). After trigger, real paths must early-return cleanly.
+- Test the gates: Changes to real-exec, recon, or risk sizing require guarded tests that exercise kill switch, snapshot recovery, and maxDrawdown behavior.
 
 See also:
 - `docs/STATUS.md` (authoritative capability + known issues)

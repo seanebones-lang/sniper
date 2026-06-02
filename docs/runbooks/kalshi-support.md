@@ -3,16 +3,16 @@
 ## Current State (June 2026)
 - Market discovery and order books: Functional via public REST.
 - WebSocket: Client exists and is wired into the market detail UI for live updates.
-- Authenticated trading: Basic client skeleton with login + placeOrder (RSA key auth).
-- Real execution: Partial — can submit orders via the trading client when enabled, but fill confirmation and full flows are still thin.
+- Authenticated trading: Full client with login, getBalance, placeOrder, getOrder, getOrders, and getFills.
+- Real execution: Hardening — active order status polling and fill reconciliation in the runner. Auto-calls recordRealFill on confirmed fills. Balance pings + fills discovery.
 
 ## Configuration
 - `KALSHI_ACCESS_KEY` and `KALSHI_RSA_PRIVATE_KEY` are required for authenticated operations.
 - Real execution on Kalshi follows the same gates as Polymarket (`SNIPER_ENABLE_REAL_EXECUTION`, strategy `paperOnly`, risk checks).
 
 ## Known Gaps
-- Full order status polling and fill reconciliation for Kalshi is still basic (mostly time-based + audit for now).
-- Some advanced order types and portfolio endpoints in the trading client are not yet implemented.
+- Deeper partial fill, fee, and multi-leg handling still needed.
+- Some advanced order types (market orders with better guarantees, etc.) remain thin.
 
 ## Operational Notes
 - Monitor the "kalshi_real_order_result" and "kalshi_real_order_failed" audit events when running real on Kalshi.
@@ -36,14 +36,14 @@
 - Pending orders: Kalshi may keep limit orders open; our recon only time-based flags for now (future: poll /portfolio/orders).
 
 ## Reconciliation Specifics for Kalshi
-- Runner calls `reconcilePendingRealTrades()` on every cycle when real enabled.
-- For Kalshi pendings >5-10min: client balance ping + audit.
-- Very old pendings (>10min): `kalshi_real_trade_pending_review` audit + manual review recommended.
-- To manually close a confirmed fill: use the exported `recordRealFill({tradeId, filledSize, filledPrice})` from `lib/execution/reconcile-real-trades`.
-- Always pair with `ensureMarket` for any direct position writes (ID discipline).
+- Runner calls `reconcilePendingRealTrades()` every cycle.
+- Actively polls via `getOrderStatus` (and `getFills` as secondary source) using the order ID stored in `txHash`.
+- Confirmed fills automatically call `recordRealFill` and update positions.
+- Very old unconfirmed trades are marked `needs_review`.
+- Always use `ensureMarket` before any direct position writes.
 
 ## Future Work (Prioritized)
-- Implement `getOrder(tickerOrId)` + `getFills` in KalshiTradingClient.
-- Auto call `recordRealFill` from recon when Kalshi confirms a fill.
-- Wire Kalshi WS messages into runner/strategies for micro-structure signals (currently UI-only on detail pages).
-- Full parity with Polymarket real execution paths + tests.
+- Deeper partial fill + fee accurate reconciliation.
+- Full parity with improved Polymarket reconciliation.
+- Wire Kalshi WS into runner/strategies for live micro-structure features.
+- Stronger automated alerting on recon failures or stuck real trades.
