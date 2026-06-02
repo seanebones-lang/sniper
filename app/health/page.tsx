@@ -32,6 +32,7 @@ export default function StrategyHealthPage() {
     }
   }
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     loadHealth();
     const interval = setInterval(loadHealth, 30000); // refresh every 30s

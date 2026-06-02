@@ -132,6 +132,7 @@ export default function BacktestPage() {
     } catch {}
   }
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     loadProposals();
     loadVariants();
