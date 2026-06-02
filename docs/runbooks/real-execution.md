@@ -43,3 +43,61 @@ This document describes how to safely operate real money execution on Sniper.
 2. Review recent audit events and runner logs.
 3. Manually reconcile any stuck trades if needed.
 4. Post-mortem and decide whether to roll back variants or strategies.
+
+## Daily Operations Checklist
+- [ ] Confirm `SNIPER_ENABLE_REAL_EXECUTION` desired state for the deployment.
+- [ ] Check runner status + recent `real_order_attempt` / `kalshi_recon_balance_check` audit events.
+- [ ] Review `/health` and execution health scores (adverse rate, system health).
+- [ ] Spot-check `realTrades` for pending >15min (flag for review).
+- [ ] Confirm no unexpected balance drift via Kalshi client pings in recon.
+- [ ] If risk mode moved to EMERGENCY/DEFENSIVE, note reason from logs.
+- [ ] (Paper sacred) Never promote a variant to real without full replay + small size first.
+
+## Verification Queries & Commands
+Use these to audit real execution health:
+
+```sql
+-- Pending real trades (stuck candidates)
+SELECT id, platform, marketExternalId, side, status, createdAt, txHash
+FROM real_trades
+WHERE status = 'pending'
+ORDER BY createdAt DESC
+LIMIT 20;
+
+-- Recent real fills + positions snapshot
+SELECT rt.id, rt.platform, rt.marketExternalId, rt.status, rt.size, rt.price, p.sizeShares, p.avgPrice
+FROM real_trades rt
+LEFT JOIN positions p ON p.platform = rt.platform AND p.marketId = (
+  SELECT id FROM markets WHERE externalId = rt.marketExternalId LIMIT 1
+)
+WHERE rt.status = 'filled'
+ORDER BY rt.filledAt DESC
+LIMIT 10;
+
+-- Reconciliation activity
+SELECT action, payload, createdAt
+FROM audit_events
+WHERE actor = 'reconciliation' OR action LIKE 'kalshi_recon%'
+ORDER BY createdAt DESC
+LIMIT 30;
+```
+
+In code / logs: look for `runner_signal_created` with real context, `real_fill_reconciled`, `kalshi_recon_balance_check`.
+
+## Position & Fill Audit Steps
+1. Run the queries above.
+2. Cross-check on-exchange balances (Kalshi dashboard / Polymarket portfolio) vs local `positions` + recent `real_trades`.
+3. For a specific fill: call `recordRealFill({tradeId, filledSize, filledPrice})` manually from a script or admin route if needed (idempotent best-effort).
+4. If drift detected: disable real, manual hedge or accept, then post-mortem.
+
+## Kill Switch & Emergency Procedures
+- **Hard stop (deployment)**: Set `SNIPER_DISABLE_REAL_EXECUTION=true` (highest priority, checked first in `isRealExecutionAllowed`).
+- **Runtime**: Call `disableRealExecution()` (e.g., from health endpoint or REPL in emergency).
+- **Persistent option (future)**: Store a `real_execution_enabled` flag in DB/settings; the in-memory + env are current implementation.
+- After kill switch: runner continues in paper mode for strategies that have `paperOnly=true` (safe default).
+- Re-enable: Remove env var + restart or clear the in-memory flag (add a `resetRealExecution()` helper if operating frequently).
+
+## Known Limitations (Updated)
+- Kalshi real execution: client + placeOrder + recon pings work; full order polling + auto recordRealFill on confirmed fills still future.
+- Position math is pragmatic (simple averaging); sophisticated cost-basis in production.
+- No cross-platform netting or automatic circuit breakers beyond PortfolioRiskManager + ExecutionManager yet.

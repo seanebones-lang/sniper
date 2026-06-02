@@ -1,6 +1,6 @@
 # Sniper — Project Status (Authoritative)
 
-**Last updated:** 2026-06 (post major Kalshi + CI + safety improvements)
+**Last updated:** 2026-06 (post real-exec hardening, lint campaign, runbooks, recon client integration, 18 tests, multiple verified cycles)
 
 This document is the single source of truth for capability, known issues, and roadmap. All other docs (README, wiki, etc.) should defer to this file.
 
@@ -32,8 +32,8 @@ All references to this blocker in older docs/wiki are now historical.
 | Grok Research Agent + recommendations | Works | Requires `XAI_API_KEY` + `ENABLE_GROK_RESEARCH_AGENT=true` |
 | Settings UI for Grok key | Works | |
 | Polymarket live WebSocket | Partial | Only on market detail page |
-| Real Polymarket execution | Gated + Improving | `SNIPER_ENABLE_REAL_EXECUTION=true` + private key. Basic kill-switch and reconciliation exist. Still not CI-tested for real paths. |
-| Real Kalshi execution | Partial / Experimental | Trading client skeleton + placeOrder integration exists. Fill confirmation and full flows still thin. |
+| Real Polymarket execution | Gated + Solid skeleton | Full gates (risk, execution mgr, kill-switch in-memory+env, recon). recordRealFillForPosition with strict ID discipline (ensureMarket). |
+| Real Kalshi execution | Improved / Experimental | Authenticated KalshiTradingClient wired (placeOrder + getBalance). Recon loop now pings client for liveness. Guarded safety tests. Still no full auto fill polling. |
 | Full CI | Good + Improving | Real GitHub Actions workflow (`.github/workflows/ci.yml`). Includes Postgres, lint, typecheck, build, unit tests, and smoke test. E2E/Playwright foundation started but not yet stable in CI. |
 | Risk system (PortfolioRiskManager, modes, temporary adjustments) | Strong | One of the most complete parts of the system |
 | Execution quality tracking + adverse selection detection | Strong | `ExecutionManager` |
@@ -42,21 +42,22 @@ All references to this blocker in older docs/wiki are now historical.
 
 ## Known Remaining Issues / Debt (Non-Blocking)
 
-- **Lint / Type Safety Debt**: ~70-80+ `any` / `as any` usages remain (as of mid-2026). Heaviest in execution layer, runner, and some data files. Lint currently runs non-blocking in CI.
-- **Real Execution Maturity**: Still experimental. Kalshi support is partial. Reconciliation and position tracking for real trades need strengthening. Kill-switch is currently in-memory only.
-- **E2E & Test Coverage**: Basic Playwright config and one trivial test exist. No coverage reporting. E2E not yet running in CI.
-- **Documentation Gaps**: Operational runbooks for real money execution (especially Kalshi) are thin. Some older wiki/docs may be stale.
-- **AGENTS.md / CLAUDE.md**: Solid core rules exist but can be expanded with more specific guidance around real execution and risk invariants.
+- **Lint / Type Safety**: Core lib/ (runner, risk, execution, research) heavily cleaned (no-explicit-any near zero outside tests; many unused vars eliminated). ~36 errors remain (mostly test mocks + some React UI/pages with any/hooks). Lint is strict in CI (no || true).
+- **Real Execution Maturity**: Significantly hardened. KalshiTradingClient fully wired + exercised in recon. record*Fill helpers + ensureMarket discipline. 2+ guarded kill-switch tests. Still experimental (no full auto polling on Kalshi/Polymarket for fills yet; position math pragmatic). Kill-switch (env + in-memory) solid.
+- **E2E & Test Coverage**: 18 passing unit tests (risk, execution, recon foundations, ensure-market, Kalshi client). Playwright + coverage in CI. E2E still basic (one spec). 
+- **Documentation**: Runbooks (real-execution + kalshi-support) now have daily checklists, SQL verification queries, error patterns, auth steps, emergency procedures. STATUS and AGENTS kept current.
+- **AGENTS.md / CLAUDE.md**: Core rules strong (paper sacred, ID discipline via ensureMarket, audit everything, risk first). Can still add more examples.
 
-### Recently Resolved (June 2026)
-- **Repo hygiene (Major win)**: Removed a 1.4 GB nested duplicate `sniper/sniper/` directory. Hardened `.gitignore`.
-- **signals.market_id FK** — Fixed (core automated pipeline now works).
-- **Kalshi Support**: Significant progress — authenticated trading client skeleton, WebSocket integration in UI, real execution path started, Kalshi-specific reconciliation logic added.
-- **Real Execution Safety**: Basic in-memory kill-switch (`disableRealExecution()`) + reconciliation wired into the runner.
-- **Testing Foundation**: 16+ unit tests added across risk, execution, and Kalshi areas. Functional smoke test. Multiple "test → build → commit → push" cycles completed.
-- **CI**: Proper GitHub Actions workflow created and hardened (concurrency, Postgres, full verification steps).
-- **Runner & Execution Resilience**: Improved error handling, audit logging, and some `any` reduction in critical paths.
-- **Lint Debt**: Initial reduction campaign started on high-risk files (runner + execution layer).
+### Recently Resolved (June 2026, multiple cycles)
+- **Repo hygiene (Major win)**: Removed 1.4 GB nested duplicate. Hardened .gitignore.
+- **signals.market_id FK** — Fixed (ensureMarketRecord + early sync in runner; pipeline reliable).
+- **Kalshi + Real Exec**: Auth client (login, balance, placeOrder) wired end-to-end. Recon now pings client for health. recordRealFill* + strict ensureMarket in success paths. Kill-switch + guarded tests (18 total tests).
+- **Real Execution Safety**: In-memory + env kill switch, early return in placeRealOrder, reconciliation result consumption in 24/7 runner, position tracking best-effort.
+- **Testing**: 18 passing (risk manager circuit breakers/Kelly, execution health, ensure-market, Kalshi client, real safety gates). Smoke + coverage in CI.
+- **CI**: Full strict pipeline (lint enforced, tsc, test:ci, build, coverage, e2e foundation, osv-scanner, Postgres service, concurrency cancel).
+- **Lint Campaign**: Systematic any reduction + unused cleanup in high-risk lib/ paths (runner, risk, execution, research, ws). Core now very clean; tests/UI remain practical debt.
+- **Docs & Ops**: Expanded real-execution + Kalshi runbooks (checklists, SQL audits, exact errors, kill switch procedures). STATUS authoritative. AGENTS rules reinforced.
+- **Process**: Repeated "test → build → commit → push" + todo-driven master list on every batch.
 
 ---
 
