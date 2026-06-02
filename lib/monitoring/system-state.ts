@@ -190,6 +190,7 @@ export interface RiskSnapshot {
   systemHealthScore: number;
   adverseRate: number;
   currentBankroll?: number;
+  maxDrawdown?: number;
   snapshotAt: string;
 }
 

@@ -45,10 +45,13 @@ const DEFAULT_PARAMS: RiskParameters = {
 export class PortfolioRiskManager {
   private params: RiskParameters;
   private currentBankroll: number;
+  private peakBankroll: number;
+  private currentDrawdownPct: number = 0;
 
   constructor(params: Partial<RiskParameters> = {}, startingBankroll = 10000) {
     this.params = { ...DEFAULT_PARAMS, ...params };
     this.currentBankroll = startingBankroll;
+    this.peakBankroll = startingBankroll;
   }
 
   async getCurrentPortfolioState(): Promise<PortfolioState> {
@@ -98,7 +101,7 @@ export class PortfolioRiskManager {
     return {
       totalExposureUsd: totalExposure,
       dailyPnl,
-      maxDrawdown: 0, // TODO: proper calculation from historical snapshots
+      maxDrawdown: this.currentDrawdownPct,
       openPositions: openPositions.length + recentPaper.length,
       categoryExposures,
     };
@@ -126,6 +129,10 @@ export class PortfolioRiskManager {
 
     if (state.totalExposureUsd >= this.params.maxTotalExposureUsd) {
       return { allowedSize: 0, reason: 'Total portfolio exposure limit reached' };
+    }
+
+    if (state.maxDrawdown >= this.params.maxDrawdownPct / 100) {
+      return { allowedSize: 0, reason: `Max drawdown limit reached (${(state.maxDrawdown * 100).toFixed(1)}%)` };
     }
 
     const rawCategory = params.category || categorizeMarket('', params.platform, params.marketExternalId).category;
@@ -168,7 +175,27 @@ export class PortfolioRiskManager {
    */
   async recordOutcome(pnlUsd: number) {
     this.currentBankroll += pnlUsd;
+
+    // Basic maxDrawdown tracking
+    if (this.currentBankroll > this.peakBankroll) {
+      this.peakBankroll = this.currentBankroll;
+    }
+
+    const drawdown = this.peakBankroll > 0 
+      ? (this.peakBankroll - this.currentBankroll) / this.peakBankroll 
+      : 0;
+
+    this.currentDrawdownPct = Math.max(this.currentDrawdownPct, drawdown);
+
     // In future: update running volatility estimates, strategy performance, etc.
+  }
+
+  getCurrentDrawdownPct(): number {
+    return this.currentDrawdownPct;
+  }
+
+  getPeakBankroll(): number {
+    return this.peakBankroll;
   }
 }
 
