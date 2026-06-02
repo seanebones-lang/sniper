@@ -114,8 +114,8 @@ export default function StrategiesPage() {
           <span className={runnerStatus.running ? 'text-emerald-400' : 'text-zinc-500'}>
             {runnerStatus.running ? 'RUNNING' : 'STOPPED'}
           </span>
-          {' '}• Last run: {runnerStatus.lastRun ? new Date(runnerStatus.lastRun).toLocaleTimeString() : 'never'}
-          {' '}• Signals: {runnerStatus.signalsGenerated} • Paper fills: {runnerStatus.fillsExecuted}
+          {' '}• Last run: {(runnerStatus as any).lastRun ? new Date((runnerStatus as any).lastRun).toLocaleTimeString() : 'never'}
+          {' '}• Signals: {(runnerStatus as any).signalsGenerated ?? 0} • Paper fills: {(runnerStatus as any).fillsExecuted ?? 0}
         </div>
       )}
 
@@ -185,8 +185,8 @@ export default function StrategiesPage() {
               <tr key={s.id} className="border-b border-white/10 last:border-0">
                 <td className="py-3 px-4 font-medium">{s.name}</td>
                 <td className="py-3 px-4 text-zinc-400">{s.type}</td>
-                <td className="py-3 px-4 font-mono">${s.config?.maxSizeUsd ?? 100}</td>
-                <td className="py-3 px-4 font-mono">{s.config?.targetProfitPct ?? 2.5}%</td>
+                <td className="py-3 px-4 font-mono">${(s.config as any)?.maxSizeUsd ?? 100}</td>
+                <td className="py-3 px-4 font-mono">{(s.config as any)?.targetProfitPct ?? 2.5}%</td>
                 <td className="py-3 px-4">
                   <span className={`px-2 py-0.5 rounded text-xs ${s.isActive ? 'bg-emerald-950 text-emerald-400' : 'bg-zinc-800'}`}>
                     {s.isActive ? 'ACTIVE' : 'PAUSED'}

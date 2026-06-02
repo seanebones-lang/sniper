@@ -62,7 +62,7 @@ export async function POST(req: Request) {
       }
     }
 
-    comparisons = comparisonsResults;
+    comparisons = comparisonsResults as any;
   }
 
   return NextResponse.json({ 

@@ -14,11 +14,12 @@ export async function POST(req: Request) {
 
     // Automatically persist any structured proposals for review
     if (result.proposals && result.proposals.length > 0) {
-      await saveProposals(result.proposals, result.query);
+      await saveProposals((result.proposals || []) as any, result.query as any);
     }
 
     return NextResponse.json(result);
   } catch (err: unknown) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

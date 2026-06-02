@@ -21,9 +21,10 @@ export async function GET(req: Request) {
       const book = await fetchKalshiOrderBook(id);
       return NextResponse.json(book);
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to fetch order book', details: err?.message },
+      { error: 'Failed to fetch order book', details: message },
       { status: 500 }
     );
   }

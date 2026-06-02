@@ -88,8 +88,8 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   return {
     performance,
-    recentSnapshots: (context.recentSnapshots as Record<string, unknown>[])?.slice(-40) || snapshots.slice(-40),
-    snapshotCount: (context.recentSnapshots as Record<string, unknown>[])?.length || snapshots.length,
+    recentSnapshots: snapshots.slice(-40),
+    snapshotCount: snapshots.length,
     lookbackHours: lookback,
   };
 }

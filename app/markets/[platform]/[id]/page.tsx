@@ -76,9 +76,10 @@ export default function LiveMarketDetail({ params }: Props) {
     if (platform === 'polymarket') {
       import('@/lib/ws/polymarket').then(({ PolymarketWSClient }) => {
         const client = new PolymarketWSClient({
-          onMessage: (msg: PolymarketWSMessage) => {
-            if (msg.type === 'price_change' && msg.asset_id === marketId) {
-              const newPrice = parseFloat(String(msg.price));
+          onMessage: (msg: unknown) => {
+            const m = msg as PolymarketWSMessage;
+            if (m.type === 'price_change' && m.asset_id === marketId) {
+              const newPrice = parseFloat(String(m.price));
               if (!isNaN(newPrice) && book) {
                 setBook(prev => prev ? {
                   ...prev,
@@ -87,9 +88,9 @@ export default function LiveMarketDetail({ params }: Props) {
                 } : null);
               }
             }
-            if (msg.type === 'book' && msg.asset_id === marketId) {
-              const bids = (msg.bids || []).map((b) => ({ price: parseFloat(String(b.price)), size: parseFloat(String(b.size)) }));
-              const asks = (msg.asks || []).map((a) => ({ price: parseFloat(String(a.price)), size: parseFloat(String(a.size)) }));
+            if (m.type === 'book' && m.asset_id === marketId) {
+              const bids = (m.bids || []).map((b) => ({ price: parseFloat(String((b as any).price)), size: parseFloat(String((b as any).size)) }));
+              const asks = (m.asks || []).map((a) => ({ price: parseFloat(String((a as any).price)), size: parseFloat(String((a as any).size)) }));
               const mid = bids[0] && asks[0] ? (bids[0].price + asks[0].price) / 2 : undefined;
               setBook(prev => prev ? {
                 ...prev,
@@ -110,10 +111,11 @@ export default function LiveMarketDetail({ params }: Props) {
     } else if (platform === 'kalshi') {
       import('@/lib/ws/kalshi').then(({ KalshiWSClient }) => {
         const client = new KalshiWSClient({
-          onMessage: (data: KalshiWSMessage) => {
+          onMessage: (data: unknown) => {
+            const msg = data as KalshiWSMessage;
             // Kalshi WS messages come in different shapes (msg, etc.)
-            if (data.msg?.type === 'ticker' && data.msg?.ticker === marketId) {
-              const price = data.msg?.price ? data.msg.price / 100 : undefined;
+            if (msg.msg?.type === 'ticker' && msg.msg?.ticker === marketId) {
+              const price = msg.msg?.price ? msg.msg.price / 100 : undefined;
               if (price && book) {
                 setBook(prev => prev ? {
                   ...prev,
@@ -123,8 +125,8 @@ export default function LiveMarketDetail({ params }: Props) {
               }
             }
             // Trade messages can also update last price
-            if (data.msg?.type === 'trade' && data.msg?.ticker === marketId) {
-              const price = data.msg?.price ? data.msg.price / 100 : undefined;
+            if (msg.msg?.type === 'trade' && msg.msg?.ticker === marketId) {
+              const price = msg.msg?.price ? msg.msg.price / 100 : undefined;
               if (price && book) {
                 setBook(prev => prev ? {
                   ...prev,

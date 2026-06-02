@@ -125,11 +125,6 @@ export default function BacktestPage() {
     }
   }
 
-  useEffect(() => {
-    loadProposals();
-    loadVariants();
-  }, []);
-
   async function loadVariants() {
     try {
       const res = await fetch('/api/strategies/variants');
@@ -137,6 +132,11 @@ export default function BacktestPage() {
       setVariants(data.variants || []);
     } catch {}
   }
+
+  useEffect(() => {
+    loadProposals();
+    loadVariants();
+  }, []);
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
