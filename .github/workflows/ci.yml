@@ -68,6 +68,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sniper_test
 
+      - name: Dependency Vulnerability Scan
+        run: npm audit --audit-level=moderate || true  # Non-blocking for now; can be made stricter later
+
       - name: Smoke Test
         run: npm run test:smoke
 
