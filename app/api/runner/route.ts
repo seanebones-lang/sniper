@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
-import { getPaperPortfolio } from '@/lib/paper/portfolio';
+import { getPaperPortfolio, applyPaperBudgetToRiskManager } from '@/lib/paper/portfolio';
 
 async function runnerPayload() {
   const status = getRunnerStatus();
@@ -14,6 +14,7 @@ async function runnerPayload() {
     lastRunAgeSeconds: status.lastRun
       ? Math.round((Date.now() - new Date(status.lastRun).getTime()) / 1000)
       : null,
+    pnl: portfolio.pnl,
   };
 }
 

@@ -20,6 +20,9 @@ export interface StrategyConfig {
   /** When true, only trade markets flagged as fast-moving / live */
   liveMarketsOnly?: boolean;
 
+  /** Durable size multiplier (e.g. 0.5 = half allocation until cleared) */
+  allocationDownweight?: number;
+
   // Strategy-specific
   minSpreadPct?: number;       // for spread-scalper
   entryThreshold?: number;     // for threshold strategy

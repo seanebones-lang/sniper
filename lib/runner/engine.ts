@@ -6,7 +6,8 @@
  * If adding significantly more (e.g. full WS strategies), consider splitting into RiskOrchestrator + EvaluationLoop.
  */
 
-import { db, signals, paperTrades, auditEvents } from '@/lib/db';
+import { db, signals, paperTrades, auditEvents, strategies } from '@/lib/db';
+import { eq } from 'drizzle-orm';
 import { getAllMarkets, getMarketsForQuickFlip, ensureMarketRecord } from '@/lib/markets';
 import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
@@ -33,6 +34,7 @@ import {
   cleanupExpiredAdjustments, 
   getEffectiveGlobalRiskMultiplier,
   getStrategySizeMultiplier,
+  incrementRunCount,
 } from '@/lib/monitoring/temporary-adjustments';
 
 export interface ActiveStrategyProfile {
@@ -213,6 +215,8 @@ export function stopRunner() {
 
 export async function runOnce() {
   if (!status.running) return;
+
+  incrementRunCount();
 
   const activeStrategies = await db.query.strategies.findMany({
     where: (s, { eq }) => eq(s.isActive, true),
@@ -544,7 +548,10 @@ export async function runOnce() {
 
           let allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
 
-          // Apply any temporary strategy-specific downweights from Grok recommendations
+          // Apply durable config downweight + temporary Grok adjustments
+          if (typeof config.allocationDownweight === 'number' && config.allocationDownweight > 0) {
+            allocatorMultiplier *= Math.max(0.05, Math.min(1, config.allocationDownweight));
+          }
           allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
 
           await logAudit('runner_allocator_decision', {
@@ -813,7 +820,7 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
 
         // Auto-apply safe recommendations and create temporary adjustments
         for (const action of stored.parsedActions) {
-          const a = action.action.toLowerCase();
+          const a = action.action.toLowerCase().replace(/_/g, ' ');
           const target = action.target;
           const value = typeof action.value === 'number' ? action.value : 0.7; // default safe reduction
 
@@ -837,7 +844,54 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
             }
           }
 
-          if (a.includes('downweight') || a.includes('pause_strategy')) {
+          const strategyId = target.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+
+          if (a.includes('pause') && a.includes('strategy') && strategyId) {
+            await db.update(strategies)
+              .set({ isActive: false, updatedAt: new Date() })
+              .where(eq(strategies.id, strategyId));
+            console.warn(`[Runner] Paused strategy ${strategyId} per Grok recommendation`);
+            await logAudit('grok_auto_applied', {
+              action: action.action,
+              target: strategyId,
+              effect: 'isActive=false',
+              reason: action.reason,
+            });
+            continue;
+          }
+
+          if (a.includes('reduce') && a.includes('allocation') && strategyId) {
+            const downweight = Math.max(0.1, Math.min(1, value));
+            const expires = 40;
+            applyTemporaryAdjustment({
+              type: 'strategy_downweight',
+              target: strategyId,
+              value: downweight,
+              reason: `Grok auto: ${action.reason}`,
+              expiresAfterRuns: expires,
+              source: 'grok_auto',
+            });
+            const strat = await db.query.strategies.findFirst({ where: eq(strategies.id, strategyId) });
+            if (strat) {
+              const cfg = (strat.config ?? {}) as Record<string, unknown>;
+              await db.update(strategies)
+                .set({
+                  config: { ...cfg, allocationDownweight: downweight },
+                  updatedAt: new Date(),
+                })
+                .where(eq(strategies.id, strategyId));
+            }
+            console.warn(`[Runner] Reduced allocation for ${strategyId} to ${downweight}x`);
+            await logAudit('grok_auto_applied', {
+              action: action.action,
+              target: strategyId,
+              value: downweight,
+              expiresAfterRuns: expires,
+            });
+            continue;
+          }
+
+          if (a.includes('downweight') || (a.includes('pause') && !strategyId)) {
             const expires = 20;
             applyTemporaryAdjustment({
               type: 'strategy_downweight',

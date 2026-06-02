@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { db } from '@/lib/db';
 import { getStrategyPerformance } from '@/lib/research/performance';
 import { getAllVariants } from '@/lib/strategies/variants';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -6,6 +7,7 @@ import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { getRecentRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/temporary-adjustments';
 import { loadRiskSnapshot, loadSystemState } from '@/lib/monitoring/system-state';
+import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { alerts } from '@/lib/alerts/telegram';
 
 /**
@@ -25,6 +27,11 @@ export async function GET() {
   const variants = getAllVariants();
   const execQuality = executionManager.getRecentExecutionQuality(30);
   const avgSlippage = executionManager.getAverageSlippage(50);
+  const realExecutionAllowed = await isRealExecutionAllowed();
+  const paperOnlyActive = await db.query.strategies.findMany({
+    where: (s, { eq }) => eq(s.isActive, true),
+    columns: { id: true, name: true, paperOnly: true },
+  });
 
   const unhealthyMarkets = executionManager.getUnhealthyMarkets(0.5);
 
@@ -59,6 +66,22 @@ export async function GET() {
     temporaryAdjustments: {
       active: getActiveAdjustments(),
       summary: getAdjustmentSummary(),
+    },
+
+    realExecution: {
+      allowed: realExecutionAllowed,
+      envEnabled: process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true',
+      killSwitchEnv: process.env.SNIPER_DISABLE_REAL_EXECUTION === 'true',
+      activeStrategiesAllPaperOnly: paperOnlyActive.every((s) => s.paperOnly),
+      activeStrategyCount: paperOnlyActive.length,
+      blockers: [
+        ...(process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true' ? ['SNIPER_ENABLE_REAL_EXECUTION is not true'] : []),
+        ...(paperOnlyActive.every((s) => s.paperOnly) ? ['All active strategies have paperOnly=true'] : []),
+        ...(process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !realExecutionAllowed
+          ? ['Kill switch or durable disable is active']
+          : []),
+      ],
+      totalRealFills: performance.totalRealFills,
     },
 
     durableState: {

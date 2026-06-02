@@ -31,8 +31,13 @@ export function aggregatePaperPositions(trades: Array<{
       row.costBasis += size * price;
       row.netSize += size;
     } else {
+      const avg = row.netSize > 0.01 ? row.costBasis / row.netSize : price;
       row.netSize -= size;
-      row.costBasis -= size * price;
+      row.costBasis -= avg * size;
+      if (row.netSize <= 0.01) {
+        row.netSize = 0;
+        row.costBasis = 0;
+      }
     }
     map.set(key, row);
   }

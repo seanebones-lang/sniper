@@ -13,6 +13,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { PaperPnlIndicator } from '@/components/paper-pnl-indicator';
 
 interface PortfolioData {
   runner: {
@@ -31,6 +32,10 @@ interface PortfolioData {
     maxDailyLossUsd: number;
     totalExposureUsd: number;
     availableUsd: number;
+    cashUsd: number;
+    totalEquityUsd: number;
+    netPnlUsd: number;
+    netPnlPct: number;
     totalFeesUsd: number;
     utilizationPct: number;
   };
@@ -70,6 +75,7 @@ interface PortfolioData {
     startedAt: string | null;
     fillsInRun: number;
   };
+  pnl?: import('@/lib/paper/portfolio').PaperPnlSnapshot;
 }
 
 export default function PaperPortfolioPage() {
@@ -294,6 +300,10 @@ export default function PaperPortfolioPage() {
             )}
           </div>
 
+          {data.pnl && (
+            <PaperPnlIndicator pnl={data.pnl} variant="hero" className="mb-8" />
+          )}
+
           {/* Budget + summary */}
           <div className="grid lg:grid-cols-3 gap-6 mb-8">
             <div className="card lg:col-span-2">
@@ -334,12 +344,24 @@ export default function PaperPortfolioPage() {
 
             <div className="card space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-zinc-500">Open exposure</span>
-                <span className="font-mono">${data.budget.totalExposureUsd.toFixed(2)}</span>
+                <span className="text-zinc-500">Total equity</span>
+                <span className={`font-mono font-semibold ${data.budget.netPnlUsd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  ${data.budget.totalEquityUsd.toFixed(2)}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-500">Available (bankroll − exposure)</span>
+                <span className="text-zinc-500">Net P&amp;L (vs ${data.budget.paperBudgetUsd.toLocaleString()} start)</span>
+                <span className={`font-mono ${data.budget.netPnlUsd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {data.budget.netPnlUsd >= 0 ? '+' : ''}{data.budget.netPnlUsd.toFixed(2)} ({data.budget.netPnlPct.toFixed(2)}%)
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Cash available</span>
                 <span className="font-mono">${data.budget.availableUsd.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Open exposure (cost)</span>
+                <span className="font-mono">${data.budget.totalExposureUsd.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Exposure utilization</span>
@@ -355,6 +377,9 @@ export default function PaperPortfolioPage() {
                 <span className="text-zinc-500">Fees (7d)</span>
                 <span className="font-mono">${data.budget.totalFeesUsd.toFixed(2)}</span>
               </div>
+              <p className="text-[11px] text-zinc-600 leading-relaxed pt-1">
+                Total equity includes cash from closed trades. The old &quot;available&quot; line ignored sell proceeds.
+              </p>
             </div>
           </div>
 

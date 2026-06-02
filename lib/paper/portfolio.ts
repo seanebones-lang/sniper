@@ -4,8 +4,31 @@ import { getRunnerStatus } from '@/lib/runner/engine';
 import { getPaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { getPaperRunStartedAt, getPaperPortfolioSince } from '@/lib/paper/run-session';
 import { aggregatePaperPositions, totalExposureUsd, type PaperPositionRow } from '@/lib/paper/positions';
+import { computePaperLedger, type PaperLedgerSummary } from '@/lib/paper/ledger';
+import { computeMarkToMarket } from '@/lib/paper/mark-to-market';
 
 export type { PaperPositionRow };
+
+export interface PaperPnlSnapshot {
+  computedAt: string;
+  source: 'paper_trades_db';
+  fillsInRun: number;
+  buyFills: number;
+  sellFills: number;
+  startingBudgetUsd: number;
+  cashUsd: number;
+  openCostBasisUsd: number;
+  openMarkValueUsd: number;
+  realizedPnLUsd: number;
+  unrealizedPnLUsd: number;
+  totalEquityUsd: number;
+  netPnlUsd: number;
+  netPnlPct: number;
+  totalFeesUsd: number;
+  openPositions: number;
+  positionsMarked: number;
+  marksUpdatedAt: string;
+}
 
 export interface PaperFillRow {
   id: string;
@@ -43,6 +66,11 @@ export interface PaperPortfolioSnapshot {
     availableUsd: number;
     totalFeesUsd: number;
     utilizationPct: number;
+    /** True cash balance (includes realized PnL from closed trades) */
+    cashUsd: number;
+    totalEquityUsd: number;
+    netPnlUsd: number;
+    netPnlPct: number;
   };
   positions: PaperPositionRow[];
   recentFills: PaperFillRow[];
@@ -58,6 +86,7 @@ export interface PaperPortfolioSnapshot {
     startedAt: string | null;
     fillsInRun: number;
   };
+  pnl: PaperPnlSnapshot;
 }
 
 export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioSnapshot> {
@@ -72,8 +101,7 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
     await Promise.all([
       db.query.paperTrades.findMany({
         where: runFilter,
-        orderBy: [desc(paperTrades.createdAt)],
-        limit: 5000,
+        orderBy: (t, { asc }) => [asc(t.filledAt)],
       }),
       db.query.paperTrades.findMany({
         where: gte(paperTrades.createdAt, since),
@@ -95,9 +123,43 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
   const dbPaperFillsTotal = totalCountRow[0]?.count ?? allTrades.length;
   const dbPaperFillsToday = todayCountRow[0]?.count ?? 0;
 
-  const positions = aggregatePaperPositions([...allTrades].reverse());
+  const positions = aggregatePaperPositions(positionTrades);
   const exposure = totalExposureUsd(positions);
-  const totalFeesUsd = periodTrades.reduce((sum, t) => sum + parseFloat(t.fee ?? '0'), 0);
+  const ledgerTrades = positionTrades.map((t) => ({
+    platform: t.platform,
+    marketExternalId: t.marketExternalId,
+    side: t.side,
+    size: t.size,
+    price: t.price,
+    fee: t.fee,
+  }));
+  const ledger: PaperLedgerSummary = computePaperLedger(budget.paperBudgetUsd, ledgerTrades);
+  const mtm = await computeMarkToMarket(positions);
+  const totalEquityUsd = ledger.cashUsd + mtm.openMarkValueUsd;
+  const netPnlUsd = totalEquityUsd - budget.paperBudgetUsd;
+  const netPnlPct = budget.paperBudgetUsd > 0 ? (netPnlUsd / budget.paperBudgetUsd) * 100 : 0;
+  const totalFeesUsd = ledger.totalFeesUsd;
+
+  const pnl: PaperPnlSnapshot = {
+    computedAt: new Date().toISOString(),
+    source: 'paper_trades_db',
+    fillsInRun: ledger.fillCount,
+    buyFills: ledger.buyCount,
+    sellFills: ledger.sellCount,
+    startingBudgetUsd: budget.paperBudgetUsd,
+    cashUsd: ledger.cashUsd,
+    openCostBasisUsd: mtm.openCostBasisUsd,
+    openMarkValueUsd: mtm.openMarkValueUsd,
+    realizedPnLUsd: ledger.realizedPnLUsd,
+    unrealizedPnLUsd: mtm.unrealizedPnLUsd,
+    totalEquityUsd,
+    netPnlUsd,
+    netPnlPct,
+    totalFeesUsd,
+    openPositions: mtm.openPositionCount,
+    positionsMarked: mtm.positionsMarked,
+    marksUpdatedAt: mtm.markedAt,
+  };
 
   const stratById = Object.fromEntries(stratRows.map((s) => [s.id, s]));
   const signalIds = periodTrades.map((t) => t.signalId).filter(Boolean) as string[];
@@ -179,11 +241,15 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
       paperBudgetUsd: budget.paperBudgetUsd,
       maxExposureUsd: budget.maxExposureUsd,
       maxDailyLossUsd: budget.maxDailyLossUsd,
-      totalExposureUsd: exposure,
-      availableUsd: Math.max(0, budget.paperBudgetUsd - exposure),
+      totalExposureUsd: mtm.openMarkValueUsd,
+      availableUsd: Math.max(0, ledger.cashUsd),
+      cashUsd: ledger.cashUsd,
+      totalEquityUsd,
+      netPnlUsd,
+      netPnlPct,
       totalFeesUsd,
       utilizationPct: budget.maxExposureUsd > 0
-        ? Math.min(100, (exposure / budget.maxExposureUsd) * 100)
+        ? Math.min(100, (mtm.openMarkValueUsd / budget.maxExposureUsd) * 100)
         : 0,
     },
     positions,
@@ -200,6 +266,7 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
       startedAt: runStart?.toISOString() ?? null,
       fillsInRun: runStart ? (totalCountRow[0]?.count ?? 0) : 0,
     },
+    pnl,
   };
 }
 

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { LivePaperPortfolio } from '@/components/live-paper-portfolio';
+import { PaperPnlIndicator } from '@/components/paper-pnl-indicator';
+import type { PaperPnlSnapshot } from '@/lib/paper/portfolio';
 import {
   ArrowLeft,
   TrendingUp,
@@ -27,6 +29,7 @@ interface RunnerData {
   running: boolean;
   lastRun: string | null;
   dbPaperFillsToday?: number;
+  pnl?: PaperPnlSnapshot;
   lastCycle?: {
     eligibleQuickFlipMarkets: number;
     marketPoolSize: number;
@@ -45,24 +48,50 @@ interface RunnerData {
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [runner, setRunner] = useState<RunnerData | null>(null);
+  const [pnl, setPnl] = useState<PaperPnlSnapshot | null>(null);
+  const [pnlError, setPnlError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadPnl() {
+      try {
+        const res = await fetch('/api/paper/portfolio?days=1', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (cancelled) return;
+        setPnl(json.pnl ?? null);
+        setPnlError(null);
+      } catch (e) {
+        if (!cancelled) {
+          setPnlError(e instanceof Error ? e.message : 'Failed to load P&L');
+        }
+      }
+    }
+
     async function load() {
       try {
         const [healthRes, runnerRes] = await Promise.all([
           fetch('/api/health'),
           fetch('/api/runner'),
         ]);
-        if (healthRes.ok) setHealth(await healthRes.json());
-        if (runnerRes.ok) setRunner(await runnerRes.json());
+        if (healthRes.ok && !cancelled) setHealth(await healthRes.json());
+        if (runnerRes.ok && !cancelled) setRunner(await runnerRes.json());
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
-    load();
-    const interval = setInterval(load, 10000);
-    return () => clearInterval(interval);
+
+    void load();
+    void loadPnl();
+    const healthInterval = setInterval(load, 10000);
+    const pnlInterval = setInterval(loadPnl, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(healthInterval);
+      clearInterval(pnlInterval);
+    };
   }, []);
 
   const riskMode = health?.risk?.mode ?? 'NORMAL';
@@ -122,6 +151,15 @@ export default function Dashboard() {
           )}
         </div>
       )}
+
+      {/* Paper P&L — from paper_trades DB + live marks */}
+      <PaperPnlIndicator
+        pnl={pnl}
+        loading={!pnl && !pnlError}
+        error={pnlError}
+        variant="hero"
+        className="mb-6"
+      />
 
       {/* Live paper portfolio — polls every 3s */}
       <div className="mb-8">

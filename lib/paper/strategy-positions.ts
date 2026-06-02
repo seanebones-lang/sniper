@@ -56,8 +56,9 @@ export async function getStrategyOpenPositions(strategyId: string): Promise<Stra
         state.openedAt = row.filledAt;
       }
     } else {
+      const avg = state.netSize > 0.01 ? state.costBasis / state.netSize : price;
       state.netSize -= size;
-      state.costBasis -= size * price;
+      state.costBasis -= avg * size;
       if (state.netSize <= 0.01) {
         state.openedAt = null;
         state.costBasis = 0;

@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Radio, ExternalLink } from 'lucide-react';
+import type { PaperPnlSnapshot } from '@/lib/paper/portfolio';
 
 export interface LivePortfolioData {
   updatedAt: string;
+  pnl?: PaperPnlSnapshot;
   runner: {
     running: boolean;
     lastRun: string | null;
@@ -21,6 +23,10 @@ export interface LivePortfolioData {
     maxExposureUsd: number;
     totalExposureUsd: number;
     availableUsd: number;
+    cashUsd: number;
+    totalEquityUsd: number;
+    netPnlUsd: number;
+    netPnlPct: number;
     totalFeesUsd: number;
     utilizationPct: number;
   };
@@ -140,20 +146,29 @@ export function LivePaperPortfolio({
           {/* Portfolio summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5 text-sm">
             <div>
+              <div className="text-xs text-zinc-500 mb-0.5">Net P&amp;L</div>
+              <div className={`font-mono font-semibold text-lg ${data.budget.netPnlUsd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {data.budget.netPnlUsd >= 0 ? '+' : '−'}${Math.abs(data.budget.netPnlUsd).toFixed(2)}
+                <span className="text-xs ml-1">({data.budget.netPnlPct.toFixed(2)}%)</span>
+              </div>
+              {data.pnl && (
+                <div className="text-[10px] text-zinc-600 font-mono">
+                  R {data.pnl.realizedPnLUsd >= 0 ? '+' : ''}{data.pnl.realizedPnLUsd.toFixed(2)}
+                  {' · '}U {data.pnl.unrealizedPnLUsd >= 0 ? '+' : ''}{data.pnl.unrealizedPnLUsd.toFixed(2)}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-xs text-zinc-500 mb-0.5">Total equity</div>
+              <div className="font-mono font-semibold text-lg text-zinc-100">
+                ${data.budget.totalEquityUsd.toFixed(2)}
+              </div>
+            </div>
+            <div>
               <div className="text-xs text-zinc-500 mb-0.5">Open exposure</div>
               <div className="font-mono font-semibold text-lg">
                 ${data.budget.totalExposureUsd.toFixed(2)}
               </div>
-            </div>
-            <div>
-              <div className="text-xs text-zinc-500 mb-0.5">Available</div>
-              <div className="font-mono font-semibold text-lg">
-                ${data.budget.availableUsd.toFixed(2)}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-zinc-500 mb-0.5">Positions</div>
-              <div className="font-mono font-semibold text-lg">{data.positions.length}</div>
             </div>
             <div>
               <div className="text-xs text-zinc-500 mb-0.5">Buys / Sells (1d)</div>
