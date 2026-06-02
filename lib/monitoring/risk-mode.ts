@@ -16,6 +16,8 @@ export interface RiskModeState {
   previousMode: RiskMode;
 }
 
+import { persistSystemState } from './system-state';
+
 export class RiskModeManager {
   private state: RiskModeState = {
     current: 'NORMAL',
@@ -83,6 +85,13 @@ export class RiskModeManager {
       enteredAt: new Date(),
       previousMode: this.state.current,
     };
+
+    // Best-effort durability for the most important self-protection mechanism
+    persistSystemState('risk_mode', {
+      current: this.state.current,
+      reason: this.state.reason,
+      enteredAt: this.state.enteredAt.toISOString(),
+    }, `risk mode transition to ${newMode}`).catch(() => {});
   }
 
   /**
