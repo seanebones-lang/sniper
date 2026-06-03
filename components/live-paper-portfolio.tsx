@@ -56,6 +56,13 @@ export interface LivePortfolioData {
     startedAt: string | null;
     fillsInRun: number;
   };
+  live?: {
+    armed: boolean;
+    polymarketUsdcBalance: number | null;
+    polymarketReady: boolean;
+    geoblockBlocked: boolean;
+    note: string;
+  };
 }
 
 interface LivePaperPortfolioProps {
