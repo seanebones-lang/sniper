@@ -966,7 +966,30 @@ export async function runOnce() {
 
           // Skip BUYs we can't fund — keeps the CLOB from rejecting a flood of
           // over-budget orders. Exits (SELL) always proceed; they free cash.
-          const estimatedUsd = q.signal.price * q.finalSize;
+          let orderSize = q.finalSize;
+          let orderMaxNotional = q.config.maxSizeUsd ?? 1;
+          if (q.signal.action === 'BUY') {
+            const slotsLeft = Math.max(1, LIVE_MAX_CONCURRENT_POSITIONS - liveOpenCount);
+            const dynamicStake = Number.isFinite(realCashRemaining)
+              ? Math.min(orderMaxNotional, (realCashRemaining / slotsLeft) * 0.92)
+              : orderMaxNotional;
+            if (dynamicStake < 0.5) {
+              void logAudit('runner_real_skipped_low_stake', {
+                strategy: q.stratRow.name,
+                market: q.market.externalId,
+                dynamicStake,
+                realCashRemaining,
+              });
+              continue;
+            }
+            orderMaxNotional = dynamicStake;
+            const cappedShares = Math.max(1, Math.floor(dynamicStake / q.signal.price));
+            if (cappedShares < orderSize) {
+              orderSize = cappedShares;
+            }
+          }
+
+          const estimatedUsd = q.signal.price * orderSize;
           if (q.signal.action === 'BUY' && estimatedUsd > realCashRemaining + 1e-9) {
             void logAudit('runner_real_skipped_no_cash', {
               strategy: q.stratRow.name,
@@ -982,13 +1005,13 @@ export async function runOnce() {
             market: q.market,
             side: q.signal.action as 'BUY' | 'SELL',
             price: q.signal.price,
-            size: q.finalSize,
+            size: orderSize,
             edge: q.signal.edge,
             confidence: q.signal.confidence,
             isExit: q.isExitSignal,
             book: q.book ?? undefined,
             takeLiquidity: q.isQuickFlip && q.signal.action === 'BUY',
-            maxNotionalUsd: q.config.maxSizeUsd,
+            maxNotionalUsd: orderMaxNotional,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
             signalId,
           });
@@ -1167,6 +1190,8 @@ export async function runOnce() {
     try {
       const { checkStalePendingSells } = await import('@/lib/monitoring/pending-sells');
       const { checkRunnerStall } = await import('@/lib/monitoring/runner-stall');
+      const { repriceStalePendingSells } = await import('@/lib/monitoring/reprice-stale-sells');
+      await repriceStalePendingSells();
       await checkStalePendingSells();
       await checkRunnerStall();
     } catch {

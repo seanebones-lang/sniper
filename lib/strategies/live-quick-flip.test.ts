@@ -43,8 +43,8 @@ describe('LiveQuickFlip', () => {
   it('enters cheap asks even when ask-side dominates the book', () => {
     const signal = LiveQuickFlip.evaluate(
       {
-        market: market('Bitcoin Up or Down - June 2, 1AM ET'),
-        book: book(0.12, 0.11, 88, 11),
+        market: market('LoL: Team A vs Team B live'),
+        book: book(0.12, 0.11, 88, 15),
         currentPrice: 0.115,
       },
       config,
@@ -149,6 +149,30 @@ describe('LiveQuickFlip', () => {
         currentPrice: 0.115,
       },
       strict,
+    );
+    expect(signal).toBeNull();
+  });
+
+  it('live mode rejects wide spreads above 25%', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('Valorant: Team A vs Team B'),
+        book: book(0.10, 0.05, 100, 50),
+        currentPrice: 0.075,
+      },
+      config,
+    );
+    expect(signal).toBeNull();
+  });
+
+  it('live mode rejects when bid notional is below stake', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('Valorant: Team A vs Team B'),
+        book: book(0.05, 0.048, 100, 20),
+        currentPrice: 0.049,
+      },
+      config,
     );
     expect(signal).toBeNull();
   });

@@ -54,6 +54,12 @@ export const LIVE_MAX_CONCURRENT_POSITIONS = 3;
 /** Live entries below this price are lottery tickets with no exit liquidity. */
 export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.02;
 
+/** Max spread (mid %) for live entries — wide spreads trap exits. */
+export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 25;
+
+/** Bid notional must cover at least this fraction of stake USD. */
+export const LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO = 1;
+
 /** Max entry price uses upper band (2×) so entries leave room to run toward 2×. */
 export const QUICK_FLIP_MAX_ENTRY_MULTIPLE = 2;
 

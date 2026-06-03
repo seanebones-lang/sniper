@@ -1,6 +1,6 @@
 import type { Strategy, StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
-import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE } from './run-profile';
+import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_SPREAD_PCT, LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO } from './run-profile';
 import { assessFastMovingMarket, isQuickFlipCandidate } from '../markets/fast-moving';
 
 function asResolved(config: Parameters<Strategy['evaluate']>[1]): ResolvedStrategyConfig {
@@ -74,6 +74,10 @@ export const LiveQuickFlip: Strategy = {
       if (!hasBid || bidSize < sharesNeeded) {
         return null;
       }
+      const bidNotional = bid * bidSize;
+      if (bidNotional < stakeUsd * LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO) {
+        return null;
+      }
     } else if (config.tradingStyle !== 'aggressive' && !hasBid) {
       return null;
     }
@@ -81,9 +85,12 @@ export const LiveQuickFlip: Strategy = {
     if (hasBid) {
       const mid = book.mid ?? (ask + bid) / 2;
       const spread = book.spread ?? ask - bid;
-      const maxSpreadPct =
-        config.tradingStyle === 'conservative' ? 8
-          : config.tradingStyle === 'balanced' ? 18
+      const maxSpreadPct = isLive
+        ? LIVE_QUICK_FLIP_MAX_SPREAD_PCT
+        : config.tradingStyle === 'conservative'
+          ? 8
+          : config.tradingStyle === 'balanced'
+            ? 18
             : 50;
       if (mid > 0) {
         const spreadPct = (spread / mid) * 100;
@@ -95,11 +102,7 @@ export const LiveQuickFlip: Strategy = {
 
     const assessment = assessFastMovingMarket(market);
     if (isLive && assessment.score < LIVE_QUICK_FLIP_MIN_MARKET_SCORE) {
-      const volumeOk = (market.volume ?? 0) >= 5_000;
-      const twoSided = hasBid && askSize >= sharesNeeded;
-      if (!(volumeOk && twoSided)) {
-        return null;
-      }
+      return null;
     }
     const targetPrice = Math.min(0.99, ask * exitMult);
     const targetValue = stakeUsd * exitMult;

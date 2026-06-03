@@ -482,7 +482,8 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       !result.success &&
       (/no match/i.test(result.error ?? '') || !sellHasBidDepth)
     ) {
-      const limitPrice = bestBid ?? bestAsk ?? execPrice;
+      const { resolveAskOnlySellLimitPrice } = await import('@/lib/execution/exit-pricing');
+      const limitPrice = resolveAskOnlySellLimitPrice(book, execPrice);
       if (limitPrice > 0) {
         result = await placePolymarketLimitOrder({
           privateKey,

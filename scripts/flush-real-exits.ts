@@ -13,6 +13,7 @@ import { evaluateExitSignal } from '../lib/strategies/exit-engine';
 import { resolveStrategyConfigForType } from '../lib/strategies/run-profile';
 import type { StrategyConfig } from '../lib/strategies/types';
 import { placeRealOrder } from '../lib/execution/real-executor';
+import { resolveAskOnlySellLimitPrice } from '../lib/execution/exit-pricing';
 import { ensureMarketRecord } from '../lib/markets';
 
 const DRY_RUN = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
@@ -88,7 +89,9 @@ async function main() {
         continue;
       }
 
-      const sellPrice = book?.bids?.[0]?.price ?? book?.asks?.[0]?.price ?? currentPrice;
+      const sellPrice =
+        book?.bids?.[0]?.price ??
+        resolveAskOnlySellLimitPrice(book, currentPrice);
       const size = Math.floor(pos.netSize);
       if (size <= 0) {
         skipped++;
