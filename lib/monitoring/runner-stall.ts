@@ -2,6 +2,7 @@
  * Runner stall detection — alert when cycles stop while runner claims running.
  */
 import { getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
+import { getRunnerMaxCycleAgeMs } from '@/lib/monitoring/runner-heartbeat';
 
 let lastStallAlertAt = 0;
 const ALERT_INTERVAL_MS = 10 * 60 * 1000;
@@ -11,7 +12,7 @@ export async function checkRunnerStall(): Promise<boolean> {
   if (!runner.running) return false;
 
   const intervalMs = await getRunnerIntervalMs();
-  const maxAgeMs = intervalMs * 2.5;
+  const maxAgeMs = getRunnerMaxCycleAgeMs(intervalMs, runner.lastCycleDurationMs);
   const lastRunAge =
     runner.lastRun != null ? Date.now() - new Date(runner.lastRun).getTime() : Infinity;
 

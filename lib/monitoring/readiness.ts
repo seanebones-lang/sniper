@@ -4,6 +4,7 @@
 import { db, realTrades } from '@/lib/db';
 import { eq, sql } from 'drizzle-orm';
 import { getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
+import { getRunnerMaxCycleAgeMs } from '@/lib/monitoring/runner-heartbeat';
 import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { loadKillSwitchState, loadSystemState } from '@/lib/monitoring/system-state';
 
@@ -27,7 +28,7 @@ export async function computeReadiness(): Promise<ReadinessResult> {
 
   const runner = getRunnerStatus();
   const intervalMs = await getRunnerIntervalMs();
-  const maxAgeMs = intervalMs * 2.5;
+  const maxAgeMs = getRunnerMaxCycleAgeMs(intervalMs, runner.lastCycleDurationMs);
   const lastRunAge =
     runner.lastRun != null ? Date.now() - new Date(runner.lastRun).getTime() : Infinity;
 
@@ -79,6 +80,14 @@ export async function computeReadiness(): Promise<ReadinessResult> {
     };
   }
 
-  const ready = Object.values(checks).every((c) => c.ok);
+  const blockingKeys = [
+    'database',
+    'runner',
+    'reconciliation',
+    'killSwitch',
+    'runnerLock',
+    ...(realEnabled ? (['realExecution'] as const) : []),
+  ];
+  const ready = blockingKeys.every((k) => checks[k]?.ok);
   return { ready, checks };
 }
