@@ -89,12 +89,12 @@ describe('LiveQuickFlip', () => {
     expect(signal).toBeNull();
   });
 
-  it('still enters genuinely cheap-but-alive asks at/above the floor', () => {
+  it('still enters asks at/above the 10¢ minimum entry floor', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('NBA: Team A vs Team B live'),
-        book: book(0.06, 0.05, 200, 50),
-        currentPrice: 0.055,
+        book: book(0.1, 0.09, 200, 50),
+        currentPrice: 0.095,
       },
       config,
     );

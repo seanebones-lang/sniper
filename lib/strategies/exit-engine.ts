@@ -114,7 +114,30 @@ export function evaluateExitSignal(
         confidence: 0.7,
       };
     }
-    if (config.tradingGoal === 'quick-flip' || config.tradingStyle === 'aggressive') {
+    // Quick-flip: don't dump small drawdowns at first max-hold — wait for stop
+    // or a hard timeout (3× max hold). Forced 90s loss-cuts were bleeding paper.
+    if (config.tradingGoal === 'quick-flip') {
+      if (profitPct <= -stop) {
+        return {
+          action: 'SELL',
+          price: currentPrice,
+          size: Math.floor(position.netSize),
+          reason: `Stop loss ${profitPct.toFixed(2)}% (limit -${stop}%)`,
+          confidence: 0.9,
+        };
+      }
+      if (holdSeconds >= maxHold * 3) {
+        return {
+          action: 'SELL',
+          price: currentPrice,
+          size: Math.floor(position.netSize),
+          reason: `Hard timeout ${Math.round(maxHold * 3)}s — exit at ${profitPct.toFixed(2)}%`,
+          confidence: 0.55,
+        };
+      }
+      return null;
+    }
+    if (config.tradingStyle === 'aggressive') {
       return {
         action: 'SELL',
         price: currentPrice,

@@ -592,6 +592,10 @@ export async function runOnce() {
     process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
     activeStrategies.some((s) => !s.paperOnly);
 
+  const { getPaperBudgetSettings } = await import('@/lib/settings/paper-budget');
+  const cyclePaperBudget = await getPaperBudgetSettings();
+  let cycleLiveBalanceUsd: number | null = null;
+
   if (liveRealActive) {
     const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
       '@/lib/clients/polymarket-trading'
@@ -615,6 +619,7 @@ export async function runOnce() {
       balanceUsd = snap?.balanceUsd ?? null;
     }
     if (balanceUsd != null && balanceUsd > 0) {
+      cycleLiveBalanceUsd = balanceUsd;
       portfolioRiskManager.applyMicroRealBudget(balanceUsd);
       const realRisk = await loadRealRiskSnapshot(balanceUsd);
       portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
@@ -629,9 +634,8 @@ export async function runOnce() {
     }
   } else {
     const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
-    const { getPaperBudgetSettings } = await import('@/lib/settings/paper-budget');
     const { applyPaperBudgetToPortfolioManager } = await import('@/lib/risk/portfolio-manager');
-    applyPaperBudgetToPortfolioManager(await getPaperBudgetSettings());
+    applyPaperBudgetToPortfolioManager(cyclePaperBudget);
     portfolioRiskManager.setCyclePortfolioState(
       paperRisk.state,
       paperRisk.equityUsd,
@@ -647,7 +651,7 @@ export async function runOnce() {
       type: s.type,
       tradingStyle: cfg.tradingStyle,
       tradingGoal: cfg.tradingGoal,
-      maxSizeUsd: cfg.maxSizeUsd,
+      maxSizeUsd: s.paperOnly !== false ? cyclePaperBudget.maxExposureUsd : cfg.maxSizeUsd,
       cooldownSeconds: cfg.cooldownSeconds,
       aggressiveEntryFills: cfg.aggressiveEntryFills,
     };
@@ -741,6 +745,8 @@ export async function runOnce() {
       marketDbIds,
       lastSignalAtByKey,
       globalRiskMultiplier,
+      paperBudget: cyclePaperBudget,
+      liveBalanceUsd: cycleLiveBalanceUsd,
     };
 
     const evalResults = await runPool(

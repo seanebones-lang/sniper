@@ -11,6 +11,7 @@ import type { ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import type { Strategy, StrategySignal } from '@/lib/strategies/types';
 import type { Market } from '@/lib/types';
 import type { CycleBookCache } from '@/lib/runner/book-cache';
+import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
 
 export interface QueuedRunnerSignal {
   stratRow: { id: string; name: string; type: string; paperOnly: boolean | null };
@@ -39,6 +40,8 @@ export interface EvaluateMarketContext {
   marketDbIds: Map<string, string>;
   lastSignalAtByKey: Map<string, number>;
   globalRiskMultiplier: number;
+  paperBudget: PaperBudgetSettings;
+  liveBalanceUsd: number | null;
 }
 
 function shouldSaveSnapshot(platform: string, externalId: string): boolean {
@@ -62,6 +65,8 @@ export async function evaluateMarketForStrategy(
     marketDbIds,
     lastSignalAtByKey,
     globalRiskMultiplier,
+    paperBudget,
+    liveBalanceUsd,
   } = ctx;
 
   const book = bookCache.getBook(market.platform, market.externalId);
@@ -176,12 +181,16 @@ export async function evaluateMarketForStrategy(
   const riskCapUsd =
     riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
 
+  // Paper: size from portfolio limits (max open exposure + headroom). Live micro: cap at strategy maxSizeUsd (~$1).
+  const isLiveMicroBuy =
+    isQuickFlip && signal.action === 'BUY' && !isExitSignal && stratRow.paperOnly === false;
+  const buyCapUsd = isLiveMicroBuy
+    ? Math.min(config.maxSizeUsd ?? 1, riskCapUsd)
+    : riskCapUsd;
+
   const finalSize = computeFinalShareSize({
     requestedShares: orderSize,
-    riskCapUsd:
-      isQuickFlip && signal.action === 'BUY'
-        ? Math.min(config.maxSizeUsd, riskCapUsd)
-        : riskCapUsd,
+    riskCapUsd: buyCapUsd,
     price: signal.price,
     isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
     minSharesUsd: isQuickFlip ? 0.5 : 1,
@@ -190,6 +199,10 @@ export async function evaluateMarketForStrategy(
   if (finalSize <= 0) return null;
 
   let sizeReason = '';
+  if (isLiveMicroBuy) sizeReason += ` | Live cap $${(config.maxSizeUsd ?? 1).toFixed(0)}`;
+  else if (isQuickFlip && signal.action === 'BUY') {
+    sizeReason += ` | Exposure cap $${paperBudget.maxExposureUsd.toLocaleString()}`;
+  }
   if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
   if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 

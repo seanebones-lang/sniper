@@ -396,7 +396,8 @@ export default function PaperPortfolioPage() {
                 Reset defaults ($10k)
               </button>
               <p className="text-xs text-zinc-500 mt-3">
-                Caps paper simulation sizing (saved to database).
+                Paper bankroll sets starting equity. <strong className="text-zinc-400">Max open exposure</strong> caps
+                total deployed capital and per-trade size in paper mode (via portfolio risk limits).
                 {data.live?.armed && data.live.polymarketUsdcBalance != null && (
                   <> Live Polymarket wallet is ${data.live.polymarketUsdcBalance.toFixed(2)} — separate from this paper bankroll.</>
                 )}

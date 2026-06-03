@@ -48,9 +48,9 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
     targetProfitPct: 150,
     targetProfitMultiple: 2.5,
     targetExitValueUsd: 2.5,
-    minEntryPrice: 0.05,
+    minEntryPrice: 0.1,
     stopLossPct: 12,
-    maxHoldSeconds: 90,
+    maxHoldSeconds: 300,
     allowScaleIn: false,
     cooldownSeconds: 15,
     liveMarketsOnly: true,
@@ -142,9 +142,9 @@ export function normalizeStrategyConfig(
     next.targetExitValueUsd = next.targetExitValueUsd ?? 2.5;
     next.targetProfitPct = next.targetProfitPct ?? 150;
     next.stopLossPct = next.stopLossPct ?? 12;
-    next.maxHoldSeconds = next.maxHoldSeconds ?? 90;
+    next.maxHoldSeconds = next.maxHoldSeconds ?? 300;
     next.cooldownSeconds = next.cooldownSeconds ?? 15;
-    next.minEntryPrice = next.minEntryPrice ?? 0.05;
+    next.minEntryPrice = next.minEntryPrice ?? 0.1;
   }
   return next;
 }

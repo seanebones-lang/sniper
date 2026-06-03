@@ -285,10 +285,8 @@ export class PortfolioRiskManager {
   applyBudgetSettings(budget: PaperBudgetSettings) {
     this.params.maxTotalExposureUsd = budget.maxExposureUsd;
     this.params.maxDailyLossUsd = budget.maxDailyLossUsd;
-    this.params.maxSingleMarketExposureUsd = Math.min(
-      250,
-      Math.max(0.5, budget.paperBudgetUsd * 0.85),
-    );
+    // User-set max open exposure caps both total book and per-entry size.
+    this.params.maxSingleMarketExposureUsd = Math.max(0.5, budget.maxExposureUsd);
     this.currentBankroll = budget.paperBudgetUsd;
     // Peak persists across cycles so the drawdown breaker measures drawdown from
     // the true equity high-water mark, not just the per-cycle budget. (Use
