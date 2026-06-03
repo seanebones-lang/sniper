@@ -40,12 +40,11 @@ export async function persistRunnerDesiredState(
   );
 }
 
-/** Live mode should keep the runner up unless the operator stopped it. */
+/** Live mode keeps the runner up unless the operator stopped it (runner_control). Paper uses SNIPER_AUTO_START_RUNNER. */
 export async function shouldAutoStartRunner(): Promise<boolean> {
-  if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') {
-    return process.env.SNIPER_AUTO_START_RUNNER === 'true';
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+    const control = await loadRunnerControlState();
+    return control.desired === 'running';
   }
-  if (process.env.SNIPER_AUTO_START_RUNNER === 'false') return false;
-  const control = await loadRunnerControlState();
-  return control.desired === 'running';
+  return process.env.SNIPER_AUTO_START_RUNNER === 'true';
 }
