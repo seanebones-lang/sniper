@@ -543,7 +543,12 @@ export function ZenView() {
   const animPnl = useAnimatedValue(netPnl, 0.07);
   const animPct = useAnimatedValue(pct, 0.07);
 
-  const points = data?.points ?? [{ t: Date.now(), equity: starting, pnl: 0 }];
+  // Stable timestamp for the placeholder point shown before data loads. Captured
+  // once on mount so we don't call Date.now() during render
+  // (react-hooks: "Cannot call impure function during render").
+  const [fallbackT] = useState(() => Date.now());
+
+  const points = data?.points ?? [{ t: fallbackT, equity: starting, pnl: 0 }];
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-[#030305] text-zinc-100 select-none">

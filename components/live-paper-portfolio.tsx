@@ -77,16 +77,19 @@ export function LivePaperPortfolio({
   maxFills = 8,
   showHeader = true,
 }: LivePaperPortfolioProps) {
-  const [data, setData] = useState<LivePortfolioData | null>(externalData ?? null);
-  const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  // Internal state is only used in uncontrolled (polling) mode. In controlled
+  // mode we derive straight from `externalData` rather than mirroring props into
+  // state inside an effect (avoids react-hooks/set-state-in-effect).
+  const [fetchedData, setFetchedData] = useState<LivePortfolioData | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (externalData) {
-      setData(externalData);
-      setLastFetch(new Date());
-    }
-  }, [externalData]);
+  const data = externalData ?? fetchedData;
+  const lastFetch = externalData
+    ? externalData.updatedAt
+      ? new Date(externalData.updatedAt)
+      : null
+    : fetchedAt;
 
   useEffect(() => {
     if (externalData != null || pollMs <= 0) return;
@@ -99,8 +102,8 @@ export function LivePaperPortfolio({
         if (!res.ok) throw new Error('Failed to load portfolio');
         const json = await res.json();
         if (cancelled) return;
-        setData({ ...json, updatedAt: new Date().toISOString() });
-        setLastFetch(new Date());
+        setFetchedData({ ...json, updatedAt: new Date().toISOString() });
+        setFetchedAt(new Date());
         setError(null);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Load failed');
