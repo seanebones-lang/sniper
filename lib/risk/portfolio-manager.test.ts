@@ -221,6 +221,17 @@ describe('PortfolioRiskManager', () => {
     expect(m.getCurrentDrawdownPct()).toBeCloseTo(0);
   });
 
+  it('applyMicroRealBudget clears paper HWM so live micro is not drawdown-blocked', () => {
+    const m = new PortfolioRiskManager({}, 10000);
+    m.restoreDrawdownState(10000, 0.25);
+    expect(m.getPeakBankroll()).toBe(10000);
+
+    m.applyMicroRealBudget(13.77);
+    expect(m.getCurrentBankroll()).toBeCloseTo(13.77);
+    expect(m.getPeakBankroll()).toBeCloseTo(13.77);
+    expect(m.getCurrentDrawdownPct()).toBe(0);
+  });
+
   it('restoreDrawdownState lifts the high-water mark so a redeploy does not reset the breaker', () => {
     const m = new PortfolioRiskManager({}, 100);
     m.restoreDrawdownState(200, 0.1);

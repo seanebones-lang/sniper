@@ -319,7 +319,9 @@ export class PortfolioRiskManager {
   applyMicroRealBudget(balanceUsd: number) {
     const b = Math.max(0.5, balanceUsd);
     this.currentBankroll = b;
-    if (this.peakBankroll < b) this.peakBankroll = b;
+    // Reset HWM/drawdown — paper peak ($10k+) must not block live micro entries.
+    this.peakBankroll = b;
+    this.currentDrawdownPct = 0;
     this.params.maxTotalExposureUsd = Math.max(1, b * 0.95);
     this.params.maxSingleMarketExposureUsd = Math.max(0.5, Math.min(2, b * 0.85));
     this.params.maxDailyLossUsd = Math.max(1, b * 0.5);
