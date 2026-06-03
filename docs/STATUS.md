@@ -1,6 +1,6 @@
 # Project Status
 
-**Last verified:** June 3, 2026 (live-trading safety pass: real-position exit lifecycle, single-runner lock, durable state restore, reconciliation/exposure hardening).
+**Last verified:** June 3, 2026 (10/10 roadmap: reconciliation hardening, live ops UI, readiness probe, API auth, variant persistence, replay realism).
 
 This document is the **authoritative capability matrix** for reviewers. If README or other docs disagree with this file, **this file wins** until updated.
 
@@ -8,15 +8,17 @@ This document is the **authoritative capability matrix** for reviewers. If READM
 
 The real-money path was hardened so it is safe to soak with tiny capital. Changes:
 
-- **Real-position exit lifecycle (the unblocker):** real fills now attribute to a strategy (`real_trades.signalId` set on insert), `getRealOpenPositionsByStrategy()` aggregates them, and the runner feeds those into the exit engine for `paperOnly:false` strategies. Real BUYs now get take-profit / stop / max-hold SELLs (previously trapped forever).
-- **Marketable exits:** real SELL exits use a FAK market order (Polymarket `amount` = shares) and always cross — a one-sided/missing book can no longer strand a position.
-- **Dedup + idempotency:** per-market in-flight guard, cooldown on failed entries (not exits), and a `signalId` idempotency check stop the retry spam that produced 450+ rejected orders.
-- **Single-runner lock:** a `system_state` lease + heartbeat prevents two loops (deploy overlap / replica) from trading the same DB (fails closed when real execution is on).
-- **Durable state restore:** risk mode, daily-loss, drawdown high-water mark, and execution-health posture are now *restored* (not just logged) on startup; the drawdown breaker is recoverable rather than a one-way latch.
-- **Reconciliation/accounting:** idempotent `recordRealFill`, accurate fee on filled notional, `needs_review` draining + alerting, real exposure tracking in `riskEngine`.
-- **Hydration no longer pollutes execution-health metrics.**
+- **Real-position exit lifecycle:** real fills attribute to a strategy; `getRealOpenPositionsByStrategy()` feeds the exit engine for `paperOnly:false` strategies.
+- **Reconciliation hardening:** token-balance fallback for BUY/SELL confirmation; `tryImmediatePolymarketFill` after submit; idempotent `recordRealFill`; `needs_review` draining + throttled alerts.
+- **Ghost inventory audit:** `scripts/reconcile-ledger-vs-chain.ts` compares ledger vs on-chain balances; can cancel phantom pending BUYs (`APPLY=1`).
+- **Live ops:** `/real` dashboard + `GET /api/real/ops` (positions, pending orders, `needs_review`, runner lock, kill switch).
+- **Readiness:** `GET /api/health/ready` — DB, runner cycle age, `needs_review` backlog, kill switch, alert channel when live.
+- **API auth:** `SNIPER_API_SECRET` bearer token on mutating routes (`POST /api/runner`, strategy PATCH, settings, `/api/real/*` POST).
+- **Grok live guard:** auto-apply skipped when any active strategy is `paperOnly:false`.
+- **Micro cap:** max 3 concurrent live open markets (`LIVE_MAX_CONCURRENT_POSITIONS`).
+- **Zen PnL:** live equity uses `filled` real trades only (excludes `needs_review`).
 
-All active strategies remain `paperOnly:true`. Do not re-arm live until the paper edge is proven and a tiny-live soak passes (see the real-execution runbook).
+**Live mode:** `live-quick-flip` can run with `paperOnly:false` when `SNIPER_ENABLE_REAL_EXECUTION=true`. Runner auto-starts on deploy (watchdog restarts if stopped). Complete the [soak gate](runbooks/real-execution.md#soak-gate-before-scaling-capital) before scaling capital.
 
 ## Summary
 
@@ -31,7 +33,7 @@ What reviewers can evaluate today with confidence:
 - Dashboard paper P&L, equity, realized/unrealized breakdown
 - Historical replay (when snapshots exist)
 - Grok analysis + RECOMMENDED ACTIONS auto-apply + structured proposal parsing
-- CI: ESLint, build, 57 unit tests, Playwright e2e
+- CI: ESLint, build, unit tests, Playwright e2e
 
 ---
 
@@ -52,7 +54,7 @@ What reviewers can evaluate today with confidence:
 | Strategy CRUD + runner start/stop UI | **Works** | Dashboard + `/paper` |
 | `market_snapshots` collection | **Works** | Throttled 1-in-3 saves; loaded for feature extraction |
 | Historical replay | **Works** | Requires prior runner soak; 0 snapshots = empty result |
-| Replay “realistic passive fills” toggle | **Not implemented** | API/UI pass flag; replay engine ignores it |
+| Replay “realistic passive fills” toggle | **Works** | Skips passive BUYs when spread >15% or insufficient book depth |
 | Synthetic backtest (price series) | **Works** | In-process; no DB |
 | Risk modes (NORMAL / DEFENSIVE / EMERGENCY) | **Works** | In-process + durable `system_state` on transition |
 | Edge decay → risk mode | **Works** | `recordWindow()` fed from per-strategy paper PnL each cycle |
@@ -60,10 +62,11 @@ What reviewers can evaluate today with confidence:
 | Grok market intel (`/api/grok/intel`) | **Works** | Requires xAI key |
 | Grok research agent (`/api/research/agent`) | **Works** | Text + JSON/`PROPOSALS` proposal parsing |
 | RECOMMENDED ACTIONS parse + auto-apply | **Works** | Pause/reduce allocation/downweight; audited |
-| Strategy variants | **Partial** | In-memory only; lost on restart |
+| Strategy variants | **Works** | Persisted to `system_state.strategy_variants` |
 | Performance attribution API | **Works** | Per-strategy PnL via `paper_trades` → `signals` joins |
 | Dynamic strategy allocator | **Works** | Weights by recent PnL + activity |
 | Polymarket live WebSocket (market detail) | **Works** | Detail page only |
+| Runner book hub (WS + REST) | **Partial** | WS when connected; REST fallback each cycle |
 | Kalshi WebSocket client | **Works (detail page)** | `KalshiWSClient` on `/markets/kalshi/[id]` |
 | Real Polymarket orders (entry + exit) | **Coded, gated** | `SNIPER_ENABLE_REAL_EXECUTION` + keys; entries FOK, exits FAK marketable; not CI-tested with live keys |
 | Real-position exit lifecycle | **Works** | `getRealOpenPositionsByStrategy` → exit engine emits real SELLs for `paperOnly:false` |
@@ -73,9 +76,10 @@ What reviewers can evaluate today with confidence:
 | Real exposure tracking | **Works** | `riskEngine.getRealExposure` / `checkRealExposure` from `positions` + pending `real_trades` |
 | Cross-venue arbitrage | **Not implemented** | — |
 | `positions` DB table | **Works** | Real fill tracking + exposure; paper uses `paper_trades` aggregation |
-| `/real` status page | **Placeholder** | Does not read server execution flag |
-| `/api/paper/pnl` | **Works** | Lightweight ledger + MTM snapshot |
-| CI (lint, build, unit, e2e) | **Works** | 93 unit tests; smoke not in CI |
+| `/real` status + live ops page | **Works** | Server status, ops panel (`/api/real/ops`), runner control |
+| `GET /api/health/ready` | **Works** | DB, runner, reconciliation backlog, kill switch |
+| API auth (production) | **Works** | `SNIPER_API_SECRET` on mutating routes when set |
+| CI (lint, build, unit, e2e) | **Works** | Unit tests include reconcile, engine smoke, ledger-chain audit |
 
 ---
 
@@ -95,10 +99,8 @@ Critical safety state is now **restored** on startup from `system_state`: kill s
 
 | Feature | Location | Issue |
 |---------|----------|-------|
-| Realistic passive replay fills | `lib/data/historical.ts` | `realisticPassiveFills` param unused |
-| Strategy variant persistence | `lib/strategies/variants.ts` | In-memory only |
-| Runner WS book feed | `lib/runner/engine.ts` | REST books only in runner (WS on detail page) |
-| Automated tests for runner / `evaluate()` | — | Not in CI |
+| Automated tests for full runner under load | — | Smoke test only; not load-tested |
+| Real execution CI with live keys | — | Mocked unit tests only |
 
 ### 4. Known accuracy caveats (non-blocking)
 
@@ -127,7 +129,7 @@ Critical safety state is now **restored** on startup from `system_state`: kill s
 
 | Layer | Count | Scope |
 |-------|-------|--------|
-| Unit (Vitest) | 93 tests / 21 files | orderbook, kalshi, quick-flip, ledger, sizing, paper-simulator, system-state, real-positions, risk-engine, risk-mode, real buy→exit round-trip, … |
+| Unit (Vitest) | 110+ tests / 25+ files | orderbook, kalshi, reconcile, engine smoke, ledger-chain audit, … |
 | Smoke | 14 checks | `scripts/smoke-test.mjs` (not in CI) |
 | E2E (Playwright) | 14 tests / 5 specs | Navigation, markets, strategies, backtest, paper fill |
 | CI | lint + build + unit + e2e | `.github/workflows/ci.yml` |
@@ -141,6 +143,8 @@ No automated tests cover: full runner loop, strategies `evaluate()`, risk modes 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/health` | System health, runner timing, recent audits |
+| GET | `/api/health/ready` | Readiness probe (DB, runner, needs_review, kill switch) |
+| GET | `/api/real/ops` | Live ops snapshot (positions, pending, needs_review) |
 | GET | `/api/markets` | Market discovery |
 | GET | `/api/markets/orderbook` | Order book + metadata |
 | GET/POST | `/api/settings` | Grok key + research toggle |
@@ -165,7 +169,9 @@ No automated tests cover: full runner loop, strategies `evaluate()`, risk modes 
 
 See [`.env.example`](../.env.example). Server-side secrets are never exposed to the browser.
 
-Real execution requires **both** `SNIPER_ENABLE_REAL_EXECUTION=true` and a strategy with `paperOnly: false` (DB field; no UI toggle yet).
+Real execution requires **both** `SNIPER_ENABLE_REAL_EXECUTION=true` and a strategy with `paperOnly: false` (DB field; Strategies PATCH or DB).
+
+When `SNIPER_API_SECRET` is set, mutating API routes require `Authorization: Bearer <secret>` or `X-Sniper-Secret` header.
 
 ---
 

@@ -289,6 +289,45 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
               continue;
             }
 
+            // Token-balance fallback when order API is ambiguous (common on FOK/limit).
+            if (!recon || recon.status === 'unknown' || recon.status === 'open') {
+              const { getPolymarketTokenBalance } = await import('@/lib/clients/polymarket-trading');
+              const onChain = await getPolymarketTokenBalance(privateKey, trade.marketExternalId);
+              const expectedSize = parseFloat(trade.size);
+              const fillPrice = parseFloat(trade.price);
+
+              if (trade.side === 'BUY' && onChain != null && onChain >= expectedSize * 0.95) {
+                await recordRealFill({
+                  tradeId: trade.id,
+                  filledSize: onChain,
+                  filledPrice: fillPrice,
+                  txHash: orderId ?? undefined,
+                });
+                result.updated++;
+                await logAudit('polymarket_fill_confirmed_via_token_balance', {
+                  tradeId: trade.id,
+                  onChain,
+                  expectedSize,
+                });
+                continue;
+              }
+
+              if (trade.side === 'SELL' && onChain != null && onChain <= 0.05) {
+                await recordRealFill({
+                  tradeId: trade.id,
+                  filledSize: expectedSize,
+                  filledPrice: fillPrice,
+                  txHash: orderId ?? undefined,
+                });
+                result.updated++;
+                await logAudit('polymarket_sell_confirmed_via_token_balance', {
+                  tradeId: trade.id,
+                  onChain,
+                });
+                continue;
+              }
+            }
+
             if (ageMinutes > 45) {
               await db.update(realTrades)
                 .set({ status: 'needs_review' })
@@ -355,6 +394,69 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
   }
 
   return result;
+}
+
+/**
+ * Poll the CLOB right after submit — FOK/market orders often fill before the
+ * next runner cycle. Returns true when the trade row is promoted to `filled`.
+ */
+export async function tryImmediatePolymarketFill(tradeId: string): Promise<boolean> {
+  const trade = await db.query.realTrades.findFirst({
+    where: eq(realTrades.id, tradeId),
+  });
+  if (!trade || trade.platform !== 'polymarket' || trade.status === 'filled') {
+    return false;
+  }
+
+  const {
+    getPolymarketPrivateKey,
+    fetchPolymarketOrder,
+    fetchPolymarketTradesForOrder,
+    isValidPolymarketOrderId,
+  } = await import('@/lib/clients/polymarket-trading');
+
+  const privateKey = getPolymarketPrivateKey();
+  const orderId = isValidPolymarketOrderId(trade.txHash) ? trade.txHash! : null;
+  if (!privateKey || !orderId) return false;
+
+  let recon = await fetchPolymarketOrder(privateKey, orderId);
+
+  if (!recon || recon.status === 'unknown' || (recon.status === 'open' && recon.filledSize <= 0)) {
+    const fills = await fetchPolymarketTradesForOrder(
+      privateKey,
+      orderId,
+      trade.marketExternalId,
+    );
+    if (fills.length > 0) {
+      const totalSize = fills.reduce((s, t) => s + t.size, 0);
+      const avgPrice =
+        fills.reduce((s, t) => s + t.size * t.price, 0) / totalSize;
+      recon = {
+        orderId,
+        status: 'filled',
+        filledSize: totalSize,
+        originalSize: parseFloat(trade.size),
+        avgPrice,
+      };
+    }
+  }
+
+  if (recon?.status === 'filled' && recon.filledSize > 0) {
+    await recordRealFill({
+      tradeId: trade.id,
+      filledSize: recon.filledSize,
+      filledPrice: recon.avgPrice > 0 ? recon.avgPrice : parseFloat(trade.price),
+      txHash: orderId,
+    });
+    await logAudit('polymarket_immediate_fill_confirmed', {
+      tradeId: trade.id,
+      orderId,
+      recon,
+    });
+    return true;
+  }
+
+  return false;
 }
 
 /** Throttle needs_review alerts so a backlog doesn't spam Telegram every cycle. */

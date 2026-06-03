@@ -331,8 +331,10 @@ export async function fetchPolymarketTradesForOrder(
     return list
       .filter((t) => {
         const row = t as unknown as Record<string, unknown>;
-        const oid = String(row.order_id ?? row.orderID ?? row.taker_order_id ?? '');
-        return oid === orderId;
+        for (const key of ['order_id', 'orderID', 'orderId', 'taker_order_id', 'maker_order_id']) {
+          if (String(row[key] ?? '') === orderId) return true;
+        }
+        return false;
       })
       .map((t) => {
         const row = t as unknown as Record<string, unknown>;
@@ -375,6 +377,43 @@ function collateralBalanceParams(): BalanceAllowanceParams {
     asset_type: AssetType.COLLATERAL,
     signature_type: getPolymarketSignatureType(),
   } as BalanceAllowanceParams;
+}
+
+function conditionalBalanceParams(tokenId: string): BalanceAllowanceParams {
+  return {
+    asset_type: AssetType.CONDITIONAL,
+    token_id: tokenId,
+    signature_type: getPolymarketSignatureType(),
+  } as BalanceAllowanceParams;
+}
+
+/** Sync CLOB conditional token cache before SELL orders. */
+export async function syncPolymarketConditionalBalance(
+  privateKey: string,
+  tokenId: string,
+): Promise<void> {
+  const client = getTradingClient(privateKey);
+  await ensurePolymarketApiCreds(client);
+  await client.updateBalanceAllowance(conditionalBalanceParams(tokenId));
+}
+
+/** Outcome token balance in shares (6-decimal fixed point from CLOB). */
+export async function getPolymarketTokenBalance(
+  privateKey: string,
+  tokenId: string,
+): Promise<number | null> {
+  try {
+    const client = getTradingClient(privateKey);
+    await ensurePolymarketApiCreds(client);
+    await client.updateBalanceAllowance(conditionalBalanceParams(tokenId));
+    const bal = await client.getBalanceAllowance(conditionalBalanceParams(tokenId));
+    const raw = parseFloat((bal as { balance?: string })?.balance ?? '');
+    if (!Number.isFinite(raw)) return null;
+    return raw >= 1_000_000 ? raw / 10 ** COLLATERAL_TOKEN_DECIMALS : raw;
+  } catch (err) {
+    console.warn('[Polymarket] getTokenBalance failed:', getErrorMessage(err));
+    return null;
+  }
 }
 
 /** Sync CLOB balance cache after deposits (required for Magic/deposit wallets). */
@@ -522,6 +561,9 @@ export async function placePolymarketMarketOrder(params: {
     const client = getTradingClient(params.privateKey);
     await ensurePolymarketApiCreds(client);
     await client.updateBalanceAllowance(collateralBalanceParams());
+    if (params.side === 'SELL') {
+      await client.updateBalanceAllowance(conditionalBalanceParams(params.tokenId));
+    }
 
     const options = await getPolymarketOrderOptions(params.tokenId);
     const orderType = params.orderType === 'FAK' ? OrderType.FAK : OrderType.FOK;
@@ -571,6 +613,9 @@ export async function placePolymarketLimitOrder(params: {
     const client = getTradingClient(params.privateKey);
     await ensurePolymarketApiCreds(client);
     await client.updateBalanceAllowance(collateralBalanceParams());
+    if (params.side === 'SELL') {
+      await client.updateBalanceAllowance(conditionalBalanceParams(params.tokenId));
+    }
 
     const options = await getPolymarketOrderOptions(params.tokenId);
 

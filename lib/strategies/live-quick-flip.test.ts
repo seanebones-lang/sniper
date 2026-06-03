@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { LiveQuickFlip, maxQuickFlipEntryPrice } from './live-quick-flip';
-import { resolveStrategyConfig } from './run-profile';
+import { resolveStrategyConfig, resolveStrategyConfigForType } from './run-profile';
 import type { Market, OrderBook } from '../types';
 
-function market(question: string, endHours = 2): Market {
+function market(question: string, endHours = 2, volume = 10_000): Market {
   return {
     id: 'm1',
     platform: 'polymarket',
     externalId: 'tok-1',
     question,
     status: 'open',
-    volume: 10_000,
+    volume,
+    liquidity: volume / 2,
     updatedAt: new Date().toISOString(),
     endDate: new Date(Date.now() + endHours * 3600 * 1000).toISOString(),
   };
@@ -52,17 +53,29 @@ describe('LiveQuickFlip', () => {
     expect(signal?.price).toBe(0.12);
   });
 
-  it('aggressive mode enters ask-only books (cheap in-play esports)', () => {
+  it('live mode rejects ask-only books (no bid to exit into)', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Valorant: Team A vs Team B'),
-        book: book(0.001, undefined, 1000),
-        currentPrice: 0.001,
+        book: book(0.05, undefined, 1000),
+        currentPrice: 0.05,
+      },
+      config,
+    );
+    expect(signal).toBeNull();
+  });
+
+  it('live mode enters when bid depth covers the position size', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('Valorant: Team A vs Team B'),
+        book: book(0.05, 0.048, 100, 25),
+        currentPrice: 0.049,
       },
       config,
     );
     expect(signal?.action).toBe('BUY');
-    expect(signal?.size).toBe(1000);
+    expect(signal?.size).toBe(20);
   });
 
   it('balanced mode rejects ask-only books', () => {
@@ -97,32 +110,25 @@ describe('LiveQuickFlip', () => {
     expect(maxQuickFlipEntryPrice()).toBeCloseTo(0.495, 2);
   });
 
-  it('rejects asks below the minimum entry price floor', () => {
-    const strict = resolveStrategyConfig({
-      ...config,
-      minEntryPrice: 0.01,
-    });
+  it('rejects asks below the live minimum entry price floor (2¢)', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Counter-Strike: Team A vs Team B'),
-        book: book(0.001, undefined, 1000),
-        currentPrice: 0.001,
-      },
-      strict,
-    );
-    expect(signal).toBeNull();
-  });
-
-  it('enters asks at/above the 0.1¢ minimum entry floor', () => {
-    const signal = LiveQuickFlip.evaluate(
-      {
-        market: market('NBA: Team A vs Team B live'),
-        book: book(0.001, undefined, 200),
+        book: book(0.001, 0.001, 1000, 1000),
         currentPrice: 0.001,
       },
       config,
     );
-    expect(signal?.action).toBe('BUY');
+    expect(signal).toBeNull();
+  });
+
+  it('live-quick-flip type normalizes min entry to 2¢', () => {
+    const cfg = resolveStrategyConfigForType('live-quick-flip', {
+      maxSizeUsd: 1,
+      targetProfitPct: 50,
+    });
+    expect(cfg.minEntryPrice).toBe(0.02);
+    expect(cfg.maxHoldSeconds).toBe(180);
   });
 
   it('respects a custom minEntryPrice override', () => {

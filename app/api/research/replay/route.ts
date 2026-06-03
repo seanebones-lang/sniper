@@ -39,7 +39,7 @@ export async function POST(req: Request) {
 
   // Apply variant if provided
   if (variantId) {
-    const variants = getAllVariants();
+    const variants = await getAllVariants();
     const variant = variants.find(v => v.id === variantId && v.baseStrategyId === strategyType);
     if (variant) {
       config = applyVariantConfig(config, variant) as typeof config;

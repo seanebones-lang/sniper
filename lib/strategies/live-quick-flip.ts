@@ -1,6 +1,6 @@
 import type { Strategy, StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
-import { QUICK_FLIP_MAX_ENTRY_MULTIPLE } from './run-profile';
+import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE } from './run-profile';
 import { assessFastMovingMarket, isQuickFlipCandidate } from '../markets/fast-moving';
 
 function asResolved(config: Parameters<Strategy['evaluate']>[1]): ResolvedStrategyConfig {
@@ -16,9 +16,9 @@ export function maxQuickFlipEntryPrice(mult = QUICK_FLIP_MAX_ENTRY_MULTIPLE): nu
  * Live quick-flip scalper: $1 in, sell at 1.5× (entries sized for up to 2× room).
  * Only enters markets that resolve within 3 hours (exchange endDate required).
  *
- * Aggressive mode lifts cheap asks (including 0.1¢ esports) even on one-sided
- * books — matching live micro fills on Polymarket. Balanced/conservative still
- * require a live bid and tighter spreads.
+ * Aggressive mode lifts cheap asks when there is real two-sided liquidity.
+ * Live micro accounts require bid depth to exit — ask-only lottery entries
+ * are rejected even in aggressive mode.
  */
 export const LiveQuickFlip: Strategy = {
   id: 'live-quick-flip',
@@ -39,10 +39,13 @@ export const LiveQuickFlip: Strategy = {
     const askSize = book.asks[0].size;
     if (ask <= 0 || ask >= 1) return null;
 
+    const isLive = config.liveMarketsOnly !== false;
+
     // Floor out dead longshots (e.g. 0.1¢ outcomes that almost always settle to
-    // zero and have no real exit). A genuine flip needs a price with room to run
-    // AND a real chance of resolving — sub-floor asks are lottery tickets.
-    const minEntry = config.minEntryPrice ?? 0;
+    // zero and have no real exit). Live uses a higher floor (2¢ default).
+    const minEntry = isLive
+      ? Math.max(config.minEntryPrice ?? 0, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE)
+      : (config.minEntryPrice ?? 0);
     if (ask < minEntry) {
       return null;
     }
@@ -66,9 +69,12 @@ export const LiveQuickFlip: Strategy = {
     const bidSize = bidLevel?.size ?? 0;
     const hasBid = bid > 0 && bidSize > 0;
 
-    // Balanced/conservative: require a live bid to sell into. Aggressive live
-    // micro scalps lift ask-only books (common on cheap in-play esports).
-    if (config.tradingStyle !== 'aggressive' && !hasBid) {
+    // Live: must be able to sell into the bid — no ask-only lottery tickets.
+    if (isLive) {
+      if (!hasBid || bidSize < sharesNeeded) {
+        return null;
+      }
+    } else if (config.tradingStyle !== 'aggressive' && !hasBid) {
       return null;
     }
 
@@ -88,6 +94,13 @@ export const LiveQuickFlip: Strategy = {
     }
 
     const assessment = assessFastMovingMarket(market);
+    if (isLive && assessment.score < LIVE_QUICK_FLIP_MIN_MARKET_SCORE) {
+      const volumeOk = (market.volume ?? 0) >= 5_000;
+      const twoSided = hasBid && askSize >= sharesNeeded;
+      if (!(volumeOk && twoSided)) {
+        return null;
+      }
+    }
     const targetPrice = Math.min(0.99, ask * exitMult);
     const targetValue = stakeUsd * exitMult;
 

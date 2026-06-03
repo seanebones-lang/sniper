@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import {
   clearPolymarketBrowserSession,
   getPolymarketBrowserSessionFromDb,
@@ -22,6 +23,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
     const body = (await req.json()) as {
       cfClearance?: string | null;

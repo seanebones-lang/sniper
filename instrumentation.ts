@@ -1,19 +1,26 @@
 /**
- * Production: auto-start the trading runner when SNIPER_AUTO_START_RUNNER=true.
- * Live mode NEVER auto-starts — you must start/stop from /strategies or /paper.
+ * Production: auto-start the trading runner when configured.
+ * Live mode: auto-starts on deploy and runs a watchdog to restart if the loop
+ * stops unexpectedly (unless the operator stopped it from the UI).
  * Only runs in the Node.js server runtime (not edge).
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'edge') return;
 
-  if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
-    console.log(
-      '[instrumentation] Live execution is enabled — runner will NOT auto-start on deploy. Start and stop it manually from the UI.',
-    );
+  const live = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  const paperAutoStart = process.env.SNIPER_AUTO_START_RUNNER === 'true';
+
+  if (!live && !paperAutoStart) return;
+
+  const { shouldAutoStartRunner } = await import('@/lib/monitoring/runner-control');
+  if (!(await shouldAutoStartRunner())) {
+    console.log('[instrumentation] Runner auto-start skipped — operator stopped the runner.');
+    if (live) {
+      const { startLiveRunnerWatchdog } = await import('@/lib/runner/engine');
+      startLiveRunnerWatchdog();
+    }
     return;
   }
-
-  if (process.env.SNIPER_AUTO_START_RUNNER !== 'true') return;
 
   const { bootstrapPolymarketHttpFromEnv, bootstrapPolymarketHttp } = await import(
     '@/lib/clients/polymarket-http-proxy'
@@ -21,7 +28,14 @@ export async function register() {
   bootstrapPolymarketHttpFromEnv();
   await bootstrapPolymarketHttp();
 
-  const { startRunner, getRunnerIntervalMs } = await import('@/lib/runner/engine');
+  const { startRunner, getRunnerIntervalMs, startLiveRunnerWatchdog } = await import(
+    '@/lib/runner/engine'
+  );
+
+  if (live) {
+    startLiveRunnerWatchdog();
+  }
+
   const delayMs = parseInt(process.env.SNIPER_RUNNER_START_DELAY_MS ?? '20000', 10);
   setTimeout(() => {
     void (async () => {
@@ -31,4 +45,10 @@ export async function register() {
       console.error('[instrumentation] Failed to auto-start runner:', err);
     });
   }, Number.isFinite(delayMs) ? delayMs : 20000);
+
+  if (live) {
+    console.log(
+      '[instrumentation] Live execution enabled — runner will auto-start and self-restart if it stops.',
+    );
+  }
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import {
   clearPolymarketProxyUrl,
   getPolymarketProxyFromDb,
@@ -28,6 +29,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
     const body = (await req.json()) as { url?: string | null; testOnly?: boolean };
     if (body.url === null || body.url === '') {

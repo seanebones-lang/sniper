@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import {
   clearPolymarketSetupCache,
   ensurePolymarketTradingReady,
 } from '@/lib/clients/polymarket-trading-setup';
 
 /** Force Polymarket CLOB sync + gasless pUSD approvals via relayer. */
-export async function POST() {
+export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
     clearPolymarketSetupCache();
     const result = await ensurePolymarketTradingReady({ force: true });

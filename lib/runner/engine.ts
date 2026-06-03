@@ -13,7 +13,7 @@ import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
 import type { StrategyConfig } from '@/lib/strategies/types';
-import { resolveStrategyConfigForType, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
+import { resolveStrategyConfigForType, shouldUseImmediateFill, type ResolvedStrategyConfig, LIVE_MAX_CONCURRENT_POSITIONS } from '@/lib/strategies/run-profile';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { persistPaperFill } from '@/lib/paper/record-fill';
 import { countRunnerSessionStats } from '@/lib/runner/session-counters';
@@ -226,7 +226,12 @@ export async function startRunner(intervalMs = 15000) {
   status.running = true;
   persistStatus();
   getRunnerBookHub().start();
-  console.log('[Runner] Starting 24/7 paper runner...');
+  console.log(
+    `[Runner] Starting 24/7 ${realEnabledAtStart ? 'live' : 'paper'} runner...`,
+  );
+  void import('@/lib/monitoring/runner-control')
+    .then((m) => m.persistRunnerDesiredState('running', 'system', 'runner started'))
+    .catch(() => {});
 
   // === Durable Safety State Recovery (critical for real capital) ===
   // We RESTORE (not just log) persisted posture so a redeploy mid-session does
@@ -335,7 +340,7 @@ export async function startRunner(intervalMs = 15000) {
       );
       if (!stillOwn) {
         console.warn('[Runner] Lost the runner lock to another instance — stopping this loop.');
-        stopRunner();
+        stopRunner({ manual: false });
         return;
       }
     } catch {
@@ -367,7 +372,7 @@ export async function startRunner(intervalMs = 15000) {
   persistStatus();
 }
 
-export function stopRunner() {
+export function stopRunner(options?: { manual?: boolean }) {
   syncStatusFromStore();
   if (interval) {
     clearInterval(interval);
@@ -383,14 +388,36 @@ export function stopRunner() {
   void import('@/lib/monitoring/system-state')
     .then((m) => m.releaseRunnerLock(RUNNER_INSTANCE_ID))
     .catch(() => {});
+  if (options?.manual !== false) {
+    void import('@/lib/monitoring/runner-control')
+      .then((m) => m.persistRunnerDesiredState('stopped', 'user', 'manual stop'))
+      .catch(() => {});
+  }
   console.log('[Runner] Stopped');
   alerts.runnerStopped();
+}
+
+async function reconcileRealTradesIfEnabled(phase: 'pre' | 'post'): Promise<void> {
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') return;
+  try {
+    const { reconcilePendingRealTrades } = await import('@/lib/execution/reconcile-real-trades');
+    const recon = await reconcilePendingRealTrades();
+    if (recon.checked > 0 || recon.updated > 0) {
+      console.log(
+        `[Runner] Real trade reconciliation (${phase}): checked=${recon.checked}, updated=${recon.updated}, errors=${recon.errors}`,
+      );
+    }
+  } catch (reconErr) {
+    console.warn(`[Runner] Reconciliation error (${phase}, non-fatal):`, reconErr);
+  }
 }
 
 export async function runOnce() {
   if (!status.running) return;
 
   incrementRunCount();
+
+  await reconcileRealTradesIfEnabled('pre');
 
   const activeStrategies = await db.query.strategies.findMany({
     where: (s, { eq }) => eq(s.isActive, true),
@@ -494,6 +521,45 @@ export async function runOnce() {
 
   const allAllocations = await getDynamicAllocations(activeStrategies.map((s) => s.id));
 
+  const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  const liveRealActive =
+    realEnabled && activeStrategies.some((s) => !s.paperOnly);
+
+  let cycleLiveBalanceUsd: number | null = null;
+  let skipLiveEntryScan = false;
+
+  if (liveRealActive) {
+    const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
+      '@/lib/clients/polymarket-trading'
+    );
+    const pk = getPolymarketPrivateKey();
+    if (pk) {
+      cycleLiveBalanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
+      if (cycleLiveBalanceUsd == null) {
+        const snap = (await import('@/lib/clients/polymarket-trading-setup'))
+          .getPolymarketSetupSnapshot();
+        cycleLiveBalanceUsd = snap?.balanceUsd ?? null;
+      }
+      if (cycleLiveBalanceUsd == null) {
+        cycleLiveBalanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: true });
+      }
+    }
+    if (cycleLiveBalanceUsd == null || cycleLiveBalanceUsd <= 0) {
+      const snap = (await import('@/lib/clients/polymarket-trading-setup')).getPolymarketSetupSnapshot();
+      cycleLiveBalanceUsd = snap?.balanceUsd ?? cycleLiveBalanceUsd;
+    }
+    if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
+      const { minRealOrderUsd } = await import('@/lib/risk/sizing');
+      const minUsd = minRealOrderUsd(Math.max(cycleLiveBalanceUsd, 0.01));
+      skipLiveEntryScan = cycleLiveBalanceUsd < minUsd;
+      if (skipLiveEntryScan) {
+        console.log(
+          `[Runner] Live bankroll $${cycleLiveBalanceUsd.toFixed(2)} < $${minUsd.toFixed(2)} min — exit-only cycle (skipping entry scan)`,
+        );
+      }
+    }
+  }
+
   const bookCache = new CycleBookCache();
   const evalMarketsToFetch: Array<{ platform: string; externalId: string }> = [];
   const marketsToFetch: Array<{ platform: string; externalId: string }> = [];
@@ -504,6 +570,11 @@ export async function runOnce() {
     const isQuickFlipStrat =
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
     const stratLimit = isQuickFlipStrat ? 40 : marketEvaluationLimit;
+    const isLiveStrat = realEnabled && stratRow.paperOnly === false;
+
+    if (isLiveStrat && skipLiveEntryScan) {
+      continue;
+    }
 
     let openPool = markets.filter((m) => m.status === 'open');
     if (isQuickFlipStrat) {
@@ -518,7 +589,6 @@ export async function runOnce() {
 
   // Live strategies (paperOnly === false) must track their REAL inventory, not
   // paper fills, so exits (take-profit / stop / max-hold) fire on real holdings.
-  const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
   const realStrategyIds = realEnabled
     ? allowedStrategies.filter((s) => s.paperOnly === false).map((s) => s.id)
     : [];
@@ -588,40 +658,14 @@ export async function runOnce() {
     8,
   );
 
-  const liveRealActive =
-    process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
-    activeStrategies.some((s) => !s.paperOnly);
-
   const { getPaperBudgetSettings } = await import('@/lib/settings/paper-budget');
   const cyclePaperBudget = await getPaperBudgetSettings();
-  let cycleLiveBalanceUsd: number | null = null;
 
   if (liveRealActive) {
-    const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
-      '@/lib/clients/polymarket-trading'
-    );
     const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
-    const pk = getPolymarketPrivateKey();
-    let balanceUsd: number | null = null;
-    if (pk) {
-      balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
-      if (balanceUsd == null) {
-        const snap = (await import('@/lib/clients/polymarket-trading-setup'))
-          .getPolymarketSetupSnapshot();
-        balanceUsd = snap?.balanceUsd ?? null;
-      }
-      if (balanceUsd == null) {
-        balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: true });
-      }
-    }
-    if (balanceUsd == null || balanceUsd <= 0) {
-      const snap = (await import('@/lib/clients/polymarket-trading-setup')).getPolymarketSetupSnapshot();
-      balanceUsd = snap?.balanceUsd ?? null;
-    }
-    if (balanceUsd != null && balanceUsd > 0) {
-      cycleLiveBalanceUsd = balanceUsd;
-      portfolioRiskManager.applyMicroRealBudget(balanceUsd);
-      const realRisk = await loadRealRiskSnapshot(balanceUsd);
+    if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
+      portfolioRiskManager.applyMicroRealBudget(cycleLiveBalanceUsd);
+      const realRisk = await loadRealRiskSnapshot(cycleLiveBalanceUsd);
       portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
     } else {
       console.warn('[Runner] Live mode: could not read Polymarket balance — using paper risk caps (orders may be blocked)');
@@ -663,6 +707,9 @@ export async function runOnce() {
 
   if (hasQuickFlipStrategy && eligibleQuickFlipMarkets === 0) {
     skipReason = `No markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h (pool: ${markets.length} fetched)`;
+  }
+  if (skipLiveEntryScan && cycleLiveBalanceUsd != null) {
+    skipReason = `Live bankroll $${cycleLiveBalanceUsd.toFixed(2)} — exit-only cycle (no cash for entries)`;
   }
 
   let signalsThisRun = 0;
@@ -708,7 +755,10 @@ export async function runOnce() {
       }
     }
 
-    const relevantMarkets = openPool.slice(0, stratMarketLimit);
+    const relevantMarkets =
+      realEnabled && stratRow.paperOnly === false && skipLiveEntryScan
+        ? []
+        : openPool.slice(0, stratMarketLimit);
     marketsEvaluatedThisCycle = Math.max(marketsEvaluatedThisCycle, relevantMarkets.length);
 
     if (
@@ -724,12 +774,40 @@ export async function runOnce() {
     for (const pos of openPositions) {
       const key = `${pos.platform}:${pos.marketExternalId}`;
       if (!marketKeys.has(key)) {
-        const found = markets.find(
+        let found = markets.find(
           (m) => m.platform === pos.platform && m.externalId === pos.marketExternalId,
         );
+        if (!found && pos.platform === 'polymarket') {
+          try {
+            const { fetchPolymarketMarketByTokenId } = await import('@/lib/clients/polymarket');
+            found =
+              (await fetchPolymarketMarketByTokenId(pos.marketExternalId)) ??
+              ({
+                platform: 'polymarket',
+                externalId: pos.marketExternalId,
+                question: '',
+                status: 'open',
+                volume: 0,
+                updatedAt: new Date().toISOString(),
+              } as Market);
+          } catch {
+            found = {
+              platform: 'polymarket',
+              externalId: pos.marketExternalId,
+              question: '',
+              status: 'open',
+              volume: 0,
+              updatedAt: new Date().toISOString(),
+            } as Market;
+          }
+        }
         if (found) {
           relevantMarkets.push(found);
           marketKeys.add(key);
+          if (!evalKeys.has(key)) {
+            evalKeys.add(key);
+            marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
+          }
         }
       }
     }
@@ -747,6 +825,7 @@ export async function runOnce() {
       globalRiskMultiplier,
       paperBudget: cyclePaperBudget,
       liveBalanceUsd: cycleLiveBalanceUsd,
+      skipEntryScan: realEnabled && stratRow.paperOnly === false && skipLiveEntryScan,
     };
 
     const evalResults = await runPool(
@@ -833,6 +912,9 @@ export async function runOnce() {
         }
       }
 
+      const liveOpenCount =
+        stratRow.paperOnly === false ? openPositions.length : 0;
+
       for (let i = 0; i < queuedSignals.length; i++) {
         const q = queuedSignals[i];
         const signalId = inserted[i]?.id;
@@ -847,6 +929,19 @@ export async function runOnce() {
 
         const isRealAllowed =
           process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !q.stratRow.paperOnly;
+
+        if (
+          isRealAllowed &&
+          q.signal.action === 'BUY' &&
+          liveOpenCount >= LIVE_MAX_CONCURRENT_POSITIONS
+        ) {
+          void logAudit('runner_real_skipped_max_positions', {
+            strategy: q.stratRow.name,
+            market: q.market.externalId,
+            liveOpenCount,
+          });
+          continue;
+        }
 
         if (isRealAllowed) {
           const marketKey = `${q.market.platform}:${q.market.externalId}`;
@@ -1065,16 +1160,17 @@ export async function runOnce() {
     } catch {}
   }
 
-  // === Real Trade Reconciliation (important for live execution) ===
+  // === Real Trade Reconciliation (drain after cycle trading) ===
+  await reconcileRealTradesIfEnabled('post');
+
   if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
     try {
-      const { reconcilePendingRealTrades } = await import('@/lib/execution/reconcile-real-trades');
-      const recon = await reconcilePendingRealTrades();
-      if (recon.checked > 0) {
-        console.log(`[Runner] Real trade reconciliation: checked=${recon.checked}, updated=${recon.updated}, errors=${recon.errors}`);
-      }
-    } catch (reconErr) {
-      console.warn('[Runner] Reconciliation error (non-fatal):', reconErr);
+      const { checkStalePendingSells } = await import('@/lib/monitoring/pending-sells');
+      const { checkRunnerStall } = await import('@/lib/monitoring/runner-stall');
+      await checkStalePendingSells();
+      await checkRunnerStall();
+    } catch {
+      // non-fatal
     }
   }
 
@@ -1129,6 +1225,15 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
           parsedCount: stored.parsedActions.length,
         });
 
+        const liveStrategyActive = allowedStrategies.some((s) => s.paperOnly === false);
+        if (liveStrategyActive) {
+          console.warn(
+            '[Runner] Grok auto-apply skipped — live strategy active (manual review only)',
+          );
+          await logAudit('grok_auto_skipped_live', {
+            parsedCount: stored.parsedActions.length,
+          });
+        } else {
         // Auto-apply safe recommendations and create temporary adjustments
         for (const action of stored.parsedActions) {
           const a = action.action.toLowerCase().replace(/_/g, ' ');
@@ -1216,6 +1321,7 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
             await logAudit('grok_auto_applied', { action: action.action, target, expiresAfterRuns: expires });
           }
         }
+        }
 
         // Send high-priority recommendations via Telegram
         if (stored.parsedActions.some(a => 
@@ -1251,6 +1357,42 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
       }
     }
   }
+}
+
+let liveRunnerWatchdogStarted = false;
+
+/**
+ * When live execution is enabled, restart the runner if it stops unexpectedly
+ * (deploy, stale lock expiry, crash). Manual UI stop sets desired=stopped and
+ * suppresses restarts until the operator starts again.
+ */
+export function startLiveRunnerWatchdog(): void {
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') return;
+  if (liveRunnerWatchdogStarted) return;
+  liveRunnerWatchdogStarted = true;
+
+  const tickMs = Math.max(
+    15_000,
+    parseInt(process.env.SNIPER_RUNNER_WATCHDOG_MS ?? '45000', 10) || 45_000,
+  );
+
+  setInterval(() => {
+    void (async () => {
+      try {
+        const { shouldAutoStartRunner } = await import('@/lib/monitoring/runner-control');
+        if (!(await shouldAutoStartRunner())) return;
+        syncStatusFromStore();
+        if (status.running) return;
+        console.log('[Runner] Watchdog: live runner is off — attempting restart');
+        const intervalMs = await getRunnerIntervalMs();
+        await startRunner(intervalMs);
+      } catch (err) {
+        console.warn('[Runner] Watchdog restart failed (will retry):', err);
+      }
+    })();
+  }, tickMs);
+
+  console.log(`[Runner] Live watchdog armed (every ${tickMs / 1000}s)`);
 }
 
 async function logAudit(action: string, payload: Record<string, unknown>) {

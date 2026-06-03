@@ -45,6 +45,15 @@ const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
 /** Take-profit multiple for quick-flip exits (1.5× — lower bound of 1.5–2× band). */
 export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.5;
 
+/** Minimum fast-moving score for live quick-flip entries (filters dead tails). */
+export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 25;
+
+/** Max concurrent live open markets on micro accounts. */
+export const LIVE_MAX_CONCURRENT_POSITIONS = 3;
+
+/** Live entries below this price are lottery tickets with no exit liquidity. */
+export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.02;
+
 /** Max entry price uses upper band (2×) so entries leave room to run toward 2×. */
 export const QUICK_FLIP_MAX_ENTRY_MULTIPLE = 2;
 
@@ -148,9 +157,9 @@ export function normalizeStrategyConfig(
     next.targetExitValueUsd = 1.5;
     next.targetProfitPct = 50;
     next.stopLossPct = 30;
-    next.maxHoldSeconds = next.maxHoldSeconds ?? 300;
+    next.maxHoldSeconds = next.maxHoldSeconds ?? 180;
     next.cooldownSeconds = next.cooldownSeconds ?? 15;
-    next.minEntryPrice = 0.001;
+    next.minEntryPrice = LIVE_QUICK_FLIP_MIN_ENTRY_PRICE;
   }
   return next;
 }

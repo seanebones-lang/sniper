@@ -1,14 +1,9 @@
 /**
- * Strategy Variants System
- *
- * This allows the Grok Research Agent (and humans) to propose and test
- * variations of strategies without polluting the main strategy list.
- *
- * Variants can be A/B tested in replay and promoted to production.
+ * Strategy Variants System — persisted to system_state for restart survival.
  */
-
 import type { StrategyProposal } from '@/lib/research/grok-agent';
 import type { StrategyConfig } from '@/lib/strategies/types';
+import { loadSystemState, persistSystemState } from '@/lib/monitoring/system-state';
 
 export interface StrategyVariant {
   id: string;
@@ -18,7 +13,7 @@ export interface StrategyVariant {
   configOverrides: Record<string, unknown>;
   source: 'grok_proposal' | 'manual';
   status: 'proposed' | 'testing' | 'promoted' | 'rejected';
-  createdAt: Date;
+  createdAt: string;
   performance?: {
     replayPnl: number;
     trades: number;
@@ -27,9 +22,23 @@ export interface StrategyVariant {
   };
 }
 
-const variantsStore: StrategyVariant[] = [];
+const VARIANTS_KEY = 'strategy_variants' as const;
+let variantsCache: StrategyVariant[] | null = null;
 
-export function createVariantFromProposal(proposal: StrategyProposal): StrategyVariant {
+async function loadVariantsFromDb(): Promise<StrategyVariant[]> {
+  if (variantsCache) return variantsCache;
+  const row = await loadSystemState<StrategyVariant[]>(VARIANTS_KEY);
+  variantsCache = row ?? [];
+  return variantsCache;
+}
+
+async function saveVariants(variants: StrategyVariant[]): Promise<void> {
+  variantsCache = variants;
+  await persistSystemState(VARIANTS_KEY, variants, 'strategy variants updated');
+}
+
+export async function createVariantFromProposal(proposal: StrategyProposal): Promise<StrategyVariant> {
+  const variants = await loadVariantsFromDb();
   const variant: StrategyVariant = {
     id: `variant_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     baseStrategyId: proposal.strategyId,
@@ -38,34 +47,35 @@ export function createVariantFromProposal(proposal: StrategyProposal): StrategyV
     configOverrides: proposal.suggestedChange,
     source: 'grok_proposal',
     status: 'proposed',
-    createdAt: new Date(),
+    createdAt: new Date().toISOString(),
   };
-
-  variantsStore.push(variant);
+  variants.push(variant);
+  await saveVariants(variants);
   return variant;
 }
 
-export function getAllVariants(): StrategyVariant[] {
-  return [...variantsStore];
+export async function getAllVariants(): Promise<StrategyVariant[]> {
+  return [...(await loadVariantsFromDb())];
 }
 
-export function getVariantsForStrategy(baseStrategyId: string): StrategyVariant[] {
-  return variantsStore.filter(v => v.baseStrategyId === baseStrategyId);
+export async function getVariantsForStrategy(baseStrategyId: string): Promise<StrategyVariant[]> {
+  return (await loadVariantsFromDb()).filter((v) => v.baseStrategyId === baseStrategyId);
 }
 
-export function updateVariantStatus(
+export async function updateVariantStatus(
   id: string,
   status: StrategyVariant['status'],
   performance?: StrategyVariant['performance'],
 ) {
-  const variant = variantsStore.find(v => v.id === id);
+  const variants = await loadVariantsFromDb();
+  const variant = variants.find((v) => v.id === id);
   if (variant) {
     variant.status = status;
     if (performance) variant.performance = performance;
+    await saveVariants(variants);
   }
 }
 
-/** Apply variant overrides on top of base config */
 export function applyVariantConfig(
   baseConfig: StrategyConfig,
   variant: StrategyVariant,
@@ -75,3 +85,10 @@ export function applyVariantConfig(
     ...variant.configOverrides,
   } as StrategyConfig;
 }
+
+/** Sync load for legacy sync callers — returns cache or empty until hydrated. */
+export function getAllVariantsSync(): StrategyVariant[] {
+  return variantsCache ? [...variantsCache] : [];
+}
+
+void loadVariantsFromDb().catch(() => {});

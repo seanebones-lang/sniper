@@ -83,7 +83,7 @@ async function computeHealth(base: Record<string, unknown>): Promise<Record<stri
     limit: 15,
     columns: { action: true, actor: true, createdAt: true },
   });
-  const variants = getAllVariants();
+  const variants = await getAllVariants();
   const execQuality = executionManager.getRecentExecutionQuality(30);
   const avgSlippage = executionManager.getAverageSlippage(50);
   const realExecutionAllowed = await isRealExecutionAllowed();

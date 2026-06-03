@@ -241,6 +241,18 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       await logAudit('real_order_blocked_exit_zero_size', { ...req });
       return { success: false, error: 'Exit size resolved to zero shares' };
     }
+    // Cap to on-chain token balance when available (ledger may over-count pending BUYs).
+    if (req.market.platform === 'polymarket') {
+      const pk = getPolymarketPrivateKey();
+      if (pk) {
+        const { getPolymarketTokenBalance } = await import('@/lib/clients/polymarket-trading');
+        const onChain = await getPolymarketTokenBalance(pk, req.market.externalId);
+        if (onChain != null && onChain > 0 && onChain < finalSize) {
+          finalSize = Math.floor(onChain);
+          usdValue = req.price * finalSize;
+        }
+      }
+    }
   } else if (microLive && microCapUsd >= minOrderUsd) {
     finalSize = usdCapToShares(microCapUsd, req.price, 1);
     usdValue = req.price * finalSize;
@@ -433,11 +445,18 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     );
     const { isPolymarketGeoblockOrderError } = await import('@/lib/clients/polymarket-geoblock');
 
+    const bestBid = book?.bids?.[0]?.price;
+    const bestAsk = book?.asks?.[0]?.price;
+    const sellHasBidDepth = (book?.bids?.length ?? 0) > 0 && (book?.bids?.[0]?.size ?? 0) > 0;
+
     // Polymarket market orders: BUY `amount` = USD to spend; SELL `amount` =
-    // shares to sell. Entries use FOK (all-or-nothing); exits use FAK so we
-    // sell whatever fills immediately and cancel the rest (never get stuck).
-    const useMarketOrder = (req.takeLiquidity && req.side === 'BUY') || isAggressiveExit;
-    const result = useMarketOrder
+    // shares to sell. Entries use FOK (all-or-nothing); exits use FAK when
+    // bids exist. Ask-only books need a limit sell (join the ask side).
+    const useMarketOrder =
+      (req.takeLiquidity && req.side === 'BUY') ||
+      (isAggressiveExit && sellHasBidDepth);
+
+    let result = useMarketOrder
       ? await placePolymarketMarketOrder({
           privateKey,
           tokenId: req.market.externalId,
@@ -451,11 +470,30 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       : await placePolymarketLimitOrder({
           privateKey,
           tokenId: req.market.externalId,
-          price: Math.max(0.01, Math.min(0.99, execPrice)),
+          price: Math.max(0.001, Math.min(0.99, execPrice)),
           size: finalSize,
           side: req.side,
           postOnly,
         });
+
+    // Ask-only / thin bid: market SELL fails with "no match" — list at best ask.
+    if (
+      isAggressiveExit &&
+      !result.success &&
+      (/no match/i.test(result.error ?? '') || !sellHasBidDepth)
+    ) {
+      const limitPrice = bestBid ?? bestAsk ?? execPrice;
+      if (limitPrice > 0) {
+        result = await placePolymarketLimitOrder({
+          privateKey,
+          tokenId: req.market.externalId,
+          price: Math.max(0.001, Math.min(0.99, limitPrice)),
+          size: finalSize,
+          side: 'SELL',
+          postOnly: false,
+        });
+      }
+    }
 
     if (result.success) {
       executionManager.recordOrderPosted(
@@ -476,6 +514,11 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         txHash: result.orderId || undefined,
       })
       .where(eq(realTrades.id, trade.id));
+
+    if (result.success && result.orderId) {
+      const { tryImmediatePolymarketFill } = await import('./reconcile-real-trades');
+      await tryImmediatePolymarketFill(trade.id).catch(() => {});
+    }
 
     await logAudit('real_order_result', { tradeId: trade.id, finalSize, usdValue, ...result });
 

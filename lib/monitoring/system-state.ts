@@ -24,6 +24,8 @@ export type SystemStateKey =
   | 'execution_health_summary'
   | 'risk_snapshot'
   | 'runner_lock'
+  | 'runner_control'
+  | 'strategy_variants'
   | 'polymarket_http_proxy'
   | 'polymarket_browser_session'
   | 'paper_budget_settings';
@@ -251,6 +253,7 @@ export async function tryAcquireRunnerLock(
 ): Promise<boolean> {
   const now = Date.now();
   const staleBefore = now - ttlMs;
+  const futureSkewMs = 60_000;
   try {
     const result = await db.execute(sql`
       INSERT INTO system_state (key, value, updated_at)
@@ -263,6 +266,7 @@ export async function tryAcquireRunnerLock(
         SET value = EXCLUDED.value, updated_at = now()
         WHERE (system_state.value->>'owner') = ${instanceId}
            OR COALESCE((system_state.value->>'heartbeatAt')::bigint, 0) < ${staleBefore}
+           OR COALESCE((system_state.value->>'heartbeatAt')::bigint, 0) > ${now + futureSkewMs}
       RETURNING (value->>'owner') AS owner
     `);
     const rows = result as unknown as { length?: number; rowCount?: number };

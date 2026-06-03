@@ -7,6 +7,7 @@ import type { HealthResponse } from '@/lib/health-types';
 
 export default function StrategyHealthPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [readiness, setReadiness] = useState<{ ready: boolean; checks: Record<string, { ok: boolean; detail?: string }> } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -14,9 +15,15 @@ export default function StrategyHealthPage() {
 
     async function fetchHealth() {
       try {
-        const res = await fetch('/api/health');
-        const data = await res.json() as HealthResponse;
+        const [healthRes, readyRes] = await Promise.all([
+          fetch('/api/health'),
+          fetch('/api/health/ready'),
+        ]);
+        const data = await healthRes.json() as HealthResponse;
         if (!cancelled) setHealth(data);
+        if (readyRes.ok && !cancelled) {
+          setReadiness(await readyRes.json());
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -49,6 +56,21 @@ export default function StrategyHealthPage() {
             <div className="text-xs text-zinc-500 mb-1">Last Updated</div>
             <div className="font-mono text-sm">{new Date(health.timestamp).toLocaleString()}</div>
           </div>
+
+          {readiness && (
+            <div className={`card border-2 ${readiness.ready ? 'border-emerald-600' : 'border-amber-500'}`}>
+              <div className="font-medium mb-2">
+                Deploy readiness: {readiness.ready ? 'READY' : 'NOT READY'}
+              </div>
+              <div className="text-xs space-y-1">
+                {Object.entries(readiness.checks).map(([name, check]) => (
+                  <div key={name} className={check.ok ? 'text-emerald-400' : 'text-amber-300'}>
+                    {name}: {check.ok ? 'ok' : check.detail ?? 'fail'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className={`card border-2 ${health.risk?.mode === 'EMERGENCY' ? 'border-red-600 bg-red-950/40' :
             health.risk?.mode === 'DEFENSIVE' ? 'border-amber-500 bg-amber-950/30' : 'border-emerald-600'}`}>

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { reloadPolymarketHttp } from '@/lib/clients/polymarket-http-proxy';
 import { checkPolymarketGeoblock } from '@/lib/clients/polymarket-geoblock';
@@ -11,7 +12,10 @@ import {
 import { fetchPolymarketMarkets } from '@/lib/clients/polymarket';
 import { ensurePolymarketTradingReady } from '@/lib/clients/polymarket-trading-setup';
 
-export async function POST() {
+export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   if (!(await isRealExecutionAllowed())) {
     return NextResponse.json({ error: 'Real execution not allowed' }, { status: 403 });
   }

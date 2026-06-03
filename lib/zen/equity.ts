@@ -36,7 +36,7 @@ export interface ZenEquitySnapshot {
   points: ZenEquityPoint[];
 }
 
-const LIVE_TRADE_STATUSES = ['filled', 'needs_review'] as const;
+const LIVE_TRADE_STATUSES = ['filled'] as const;
 
 function inferLiveStartingBudget(clobCash: number, trades: LedgerTrade[]): number {
   if (trades.length === 0) return clobCash;

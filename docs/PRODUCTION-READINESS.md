@@ -1,7 +1,7 @@
 # Sniper — Production Readiness Review
 
-**Date:** June 2, 2026  
-**Status:** Experimental / Hardening for Real Capital
+**Date:** June 3, 2026  
+**Status:** Tiny-live capable with human oversight
 
 Companion to [docs/STATUS.md](STATUS.md).
 
@@ -9,13 +9,13 @@ Companion to [docs/STATUS.md](STATUS.md).
 
 ## Executive Summary
 
-**Overall Assessment: Not yet ready for unsupervised real capital deployment.**
+**Overall Assessment:** Suitable for **tiny live capital ($4–$50)** with continuous monitoring. Not yet ready for unsupervised or meaningful capital.
 
-**Paper trading: Production-ready.** Ledger + MTM P&L, automated fills, risk-unified sizing, and dashboard observability are verified (57 unit tests, e2e in CI).
+**Paper trading: Production-ready.** Ledger + MTM P&L, automated fills, risk-unified sizing, and dashboard observability are verified (110+ unit tests, e2e in CI).
 
-**Real capital with heavy human oversight + very small size:** Feasible — durable kill switch, risk snapshots, and gated execution paths exist. Not CI-tested with live keys.
+**Real capital with heavy human oversight + very small size:** Operational — reconciliation hardening, live ops UI, readiness probe, API auth, Grok live guard, and max-3 position cap shipped June 3, 2026.
 
-**Unsupervised or meaningful real capital:** Not recommended yet.
+**Unsupervised or meaningful real capital:** Not recommended until 48h+ soak with zero manual DB edits.
 
 ---
 
@@ -24,11 +24,12 @@ Companion to [docs/STATUS.md](STATUS.md).
 | Area | Assessment |
 |------|------------|
 | **Paper accounting** | Strong — cash ledger + MTM; unified with risk manager |
-| **State durability** | Strong — `system_state`, kill switch, risk snapshots |
-| **Self-protection** | Strong — risk modes, edge decay, health throttle, exit bypass |
-| **Runner reliability** | Improved — book cache, overlap guard, adaptive interval |
+| **Live ops observability** | Improved — `/real` ops panel, `/api/real/ops`, readiness endpoint |
+| **Reconciliation** | Improved — token-balance fallback, immediate fill hook, idempotent fills |
+| **State durability** | Strong — `system_state`, kill switch, risk snapshots, variant persistence |
+| **Self-protection** | Strong — risk modes, Grok auto-apply disabled when live, max 3 positions |
+| **Security** | Improved — optional `SNIPER_API_SECRET` on mutating routes |
 | **Auditability** | Strong — `audit_events` + health API recent audits |
-| **ID discipline** | Strong — `ensureMarketRecord` enforced |
 
 ---
 
@@ -36,21 +37,14 @@ Companion to [docs/STATUS.md](STATUS.md).
 
 ### Critical (blocks unsupervised real capital)
 
-1. **Reconciliation completeness** — partial fills, fee accuracy, Polymarket fill confirmation
-2. **Real execution CI** — no automated tests with live or sandbox keys
-3. **High-stakes failure injection** — kill switch, maxDrawdown, reconciliation under fault
-
-### High
-
-4. **Variant persistence** — in-memory only
-5. **Replay passive fill realism** — UI flag not implemented
-6. **Runner integration tests** — no CI coverage for full cycle
+1. **Live soak evidence** — code is ready; need 48h+ with zero manual DB surgery
+2. **Real execution CI with live keys** — mocked unit tests only
+3. **Failure injection under load** — kill switch, lock loss, geoblock, DB down
 
 ### Medium
 
-7. **Daily P&L baseline** — start-of-day uses cost basis, not MTM
-8. **In-memory partial state** — execution manager history, edge decay windows on restart
-9. **`/real` page** — placeholder server status
+4. **Daily P&L baseline** — start-of-day uses cost basis, not MTM
+5. **In-memory partial state** — execution manager history, edge decay windows on restart
 
 ---
 
@@ -58,4 +52,13 @@ Companion to [docs/STATUS.md](STATUS.md).
 
 **Ready for extended 24/7 paper operation** with monitoring via `/dashboard`, `/health`, and `scripts/diagnose-paper-pnl.ts`.
 
-See [OPERATIONS.md](OPERATIONS.md) for run checklists.
+## Live Mode Verdict
+
+**Ready for tiny-live soak** when:
+
+- `SNIPER_ENABLE_REAL_EXECUTION=true`
+- `SNIPER_API_SECRET` set on public deployments
+- `TELEGRAM_*` configured for alerts
+- Soak gate in [runbooks/real-execution.md](runbooks/real-execution.md) completed
+
+See `/real` for live ops and `/api/health/ready` for deploy readiness.

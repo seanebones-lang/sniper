@@ -22,7 +22,7 @@ Default URL: `http://localhost:3000`. If occupied, use `-p 3001` and set `SMOKE_
 CI (`.github/workflows/ci.yml`):
 
 1. **ESLint** — zero issues required
-2. **Build + unit tests** — 57 Vitest tests
+2. **Build + unit tests** — 110+ Vitest tests
 3. **E2E** — Playwright with Postgres; builds app on port 3010
 
 **Not in CI:** smoke tests (`scripts/smoke-test.mjs`). Run locally with dev server.
@@ -56,8 +56,12 @@ E2E may call live Polymarket APIs — can be flaky when external services are do
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/health` | Risk mode, restrictions, execution health, Grok recs |
+| `/health` | Risk mode, restrictions, execution health, readiness checks |
+| `/real` | Live execution status + ops panel (positions, pending, needs_review) |
 | `/api/health` | JSON version of health data |
+| `/api/health/ready` | Readiness probe (503 when not ready) |
+| `/api/health/live` | Liveness probe (Railway healthcheck — no DB) |
+| `/api/real/ops` | Live ops JSON snapshot |
 | `/api/runner` | Runner status, cycle timing (lightweight) |
 | `/api/paper/pnl` | Lightweight P&L snapshot |
 | `/api/paper/portfolio` | Full portfolio + positions |
@@ -80,7 +84,8 @@ E2E may call live Polymarket APIs — can be flaky when external services are do
 | `ENABLE_GROK_RESEARCH_AGENT` | env **or** Settings UI | Periodic runner analysis |
 | `POLYMARKET_PRIVATE_KEY` | env only | Real trading; never in browser |
 | `SNIPER_ENABLE_REAL_EXECUTION` | env only | Must be `true` for real orders |
-| Telegram tokens | env only | Optional alerts |
+| `SNIPER_API_SECRET` | env only | Bearer token for mutating API routes (required on public deploys) |
+| Telegram tokens | env only | Strongly recommended when live |
 
 **Never** put real trading keys in code or commit them. Use a dedicated low-balance Polymarket wallet.
 
@@ -101,6 +106,6 @@ Only after **48–72+ hours** of paper soak with acceptable execution quality:
 2. Add Postgres → copy `DATABASE_URL` to service variables
 3. Shell: `npm run db:push`
 4. Set optional secrets from `.env.example`
-5. Deploy → verify `/api/health`
+5. Deploy → verify `/api/health/ready` and `/api/health/live`
 
-Healthcheck hits `/` with 120s timeout (see `railway.toml`).
+Healthcheck hits `/api/health/live` with 300s timeout (see `railway.toml`). Use `/api/health/ready` for operational readiness (DB + runner + reconciliation backlog).

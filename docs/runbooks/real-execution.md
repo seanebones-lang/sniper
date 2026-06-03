@@ -61,12 +61,14 @@ Restored (not just logged) from `system_state`:
 - Polls both `pending` **and** `needs_review` (cap 200/cycle) so a backlog can drain.
 - `recordRealFill` is **idempotent** (won't double-apply a fill to `positions`) and records an **accurate fee** on the filled notional. Partial FAK fills record the actually-filled quantity.
 - Any trades stuck in `needs_review` raise a **throttled critical alert** (every ≤15 min).
+- **Pending SELL monitor:** alerts when limit exits unfilled >30m (`checkStalePendingSells`).
+- **Runner stall alert:** no cycle within 2.5× interval while `running=true`.
 - `positions` + durable risk snapshots are the source of truth for exposure after reconciliation.
 - Watch audit events: `real_fill_reconciled`, `polymarket_real_fill_confirmed_via_api`, `kalshi_real_fill_confirmed_via_api`, `real_order_skipped_duplicate_signal`, `runner_real_skipped_in_flight`, `real_order_blocked_real_exposure`.
 
 ## Monitoring & alerts
 
-Telegram alerts fire for: real order submitted (entry + exit), `needs_review` backlog, kill-switch engaged, and durable-state **persist failures** (so you know if safety state isn't surviving restarts). Also check `/api/real/status`, `/api/health`, and runner status.
+Telegram alerts fire for: real order submitted (entry + exit), `needs_review` backlog, kill-switch engaged, stale pending SELLs, runner stall, and durable-state **persist failures**. Also check `/real`, `/api/real/ops`, `/api/health/ready`, and runner status.
 
 ## Soak gate (before scaling capital)
 
@@ -80,6 +82,61 @@ Do **not** scale capital on an unproven edge — that is the real risk. Gate ord
    - [ ] Telegram alerts arrive for fills, exits, `needs_review`, and kill-switch.
    - [ ] Restart the service mid-soak → confirm risk mode / daily-loss / drawdown / kill-switch restored and no second loop runs.
 3. **Scale in steps**, only after the above is clean. Raise per-strategy `maxSizeUsd` and portfolio caps gradually; keep alerts on.
+
+### Capital scale ladder (after tiny-live soak)
+
+| Step | Capital | Gate |
+|------|---------|------|
+| 1 | ~$13 | 48h soak, ≥1 filled SELL, no manual DB edits |
+| 2 | ~$25 | 72h clean, win rate + flip count tracked in `/real` ops |
+| 3 | ~$50 | 1 week clean, zero `needs_review` backlog |
+
+Do not skip steps. If reconciliation breaks at any step, revert capital and fix before proceeding.
+
+## Incident playbooks
+
+### Flush stuck exits
+
+When positions should exit but no SELL is pending:
+
+```bash
+railway run -- npx tsx scripts/flush-real-exits.ts
+```
+
+Re-check `/api/real/ops` for pending SELLs. For ask-only books the executor posts a limit SELL fallback — monitor with:
+
+```bash
+railway run -- npx tsx scripts/monitor-real-exits.ts
+```
+
+Inspect order books for dead markets:
+
+```bash
+railway run -- npx tsx scripts/inspect-position-books.ts
+```
+
+### Runner lock stuck
+
+Symptoms: runner won't start, audit shows lock held by stale instance.
+
+1. Check lease: `SELECT value, updated_at FROM system_state WHERE key = 'runner_lock';`
+2. If heartbeat is >5 min old, the next cycle from a healthy instance should take over (stale lock takeover).
+3. Manual recovery: stop runner from UI, redeploy, or delete stale `runner_lock` row **only** when no runner is actually running.
+4. Verify single replica on Railway when live.
+
+### Ghost positions (ledger vs chain)
+
+When ledger shows open positions but on-chain balance is zero:
+
+```bash
+# Dry run
+railway run -- npx tsx scripts/reconcile-ledger-vs-chain.ts
+
+# Apply — cancels phantom pending/needs_review BUYs
+APPLY=1 railway run -- npx tsx scripts/reconcile-ledger-vs-chain.ts
+```
+
+Review output for ghost markets and dead-book positions. Cancel or write off via script before re-entering those markets.
 
 ## When something goes wrong
 

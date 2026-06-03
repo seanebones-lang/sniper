@@ -42,6 +42,8 @@ export interface EvaluateMarketContext {
   globalRiskMultiplier: number;
   paperBudget: PaperBudgetSettings;
   liveBalanceUsd: number | null;
+  /** When live bankroll can't fund a min order — skip BUY evaluation, exits only. */
+  skipEntryScan?: boolean;
 }
 
 function shouldSaveSnapshot(platform: string, externalId: string): boolean {
@@ -67,11 +69,14 @@ export async function evaluateMarketForStrategy(
     globalRiskMultiplier,
     paperBudget,
     liveBalanceUsd,
+    skipEntryScan,
   } = ctx;
 
   const book = bookCache.getBook(market.platform, market.externalId);
+  const markFromBook =
+    book?.bids?.[0]?.price ?? book?.mid ?? book?.asks?.[0]?.price ?? undefined;
   const currentPrice =
-    book?.mid ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
+    markFromBook ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
 
   const recentSnaps = snapshotBatch.get(`${market.platform}:${market.externalId}`) ?? [];
   const advanced = extractFeaturesFromRecentSnapshots(recentSnaps);
@@ -127,6 +132,9 @@ export async function evaluateMarketForStrategy(
     if (openPos && !config.allowScaleIn) {
       return null;
     }
+    if (skipEntryScan) {
+      return null;
+    }
     signal = strategyImpl.evaluate(
       { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
       config,
@@ -157,54 +165,66 @@ export async function evaluateMarketForStrategy(
 
   const isQuickFlip = config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
 
-  const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
-  const riskDecision = await portfolioRiskManager.calculateSafeSize({
-    platform: market.platform,
-    marketExternalId: market.externalId,
-    side: signal.action as 'BUY' | 'SELL',
-    edge: signal.edge ?? (signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025),
-    confidence: signal.confidence ?? 0.65,
-    category: categoryInfo.category,
-    currentPrice: signal.price,
-    isExit: isExitSignal,
-  });
-
-  const minAllowedUsd = isQuickFlip ? 0.5 : 5;
-  if (riskDecision.allowedSize < minAllowedUsd) {
-    return null;
-  }
-
-  let allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
-  if (typeof config.allocationDownweight === 'number' && config.allocationDownweight > 0) {
-    allocatorMultiplier *= Math.max(0.05, Math.min(1, config.allocationDownweight));
-  }
-  allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
-
-  const riskCapUsd =
-    riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
-
-  // Paper: size from portfolio limits (max open exposure + headroom). Live micro: cap at strategy maxSizeUsd (~$1).
-  const isLiveMicroBuy =
-    isQuickFlip && signal.action === 'BUY' && !isExitSignal && stratRow.paperOnly === false;
-  const buyCapUsd = isLiveMicroBuy
-    ? Math.min(config.maxSizeUsd ?? 1, riskCapUsd)
-    : riskCapUsd;
-
-  const finalSize = computeFinalShareSize({
-    requestedShares: orderSize,
-    riskCapUsd: buyCapUsd,
-    price: signal.price,
-    isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
-    minSharesUsd: isQuickFlip ? 0.5 : 1,
-  });
-
-  if (finalSize <= 0) return null;
-
+  let finalSize: number;
   let sizeReason = '';
-  if (isLiveMicroBuy) sizeReason += ` | Live cap $${(config.maxSizeUsd ?? 1).toFixed(0)}`;
-  else if (isQuickFlip && signal.action === 'BUY') {
-    sizeReason += ` | Exposure cap $${paperBudget.maxExposureUsd.toLocaleString()}`;
+
+  // Exits always liquidate the full open position — Kelly caps must not strand inventory.
+  if (isExitSignal && openPos) {
+    finalSize = Math.floor(openPos.netSize);
+    if (finalSize <= 0) return null;
+  } else {
+    const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
+    const riskDecision = await portfolioRiskManager.calculateSafeSize({
+      platform: market.platform,
+      marketExternalId: market.externalId,
+      side: signal.action as 'BUY' | 'SELL',
+      edge: signal.edge ?? (signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025),
+      confidence: signal.confidence ?? 0.65,
+      category: categoryInfo.category,
+      currentPrice: signal.price,
+      isExit: false,
+    });
+
+    const minAllowedUsd = isQuickFlip ? 0.5 : 5;
+    if (riskDecision.allowedSize < minAllowedUsd) {
+      return null;
+    }
+
+    let allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
+    if (typeof config.allocationDownweight === 'number' && config.allocationDownweight > 0) {
+      allocatorMultiplier *= Math.max(0.05, Math.min(1, config.allocationDownweight));
+    }
+    allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
+
+    const riskCapUsd =
+      riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
+
+    const isLiveMicroBuy =
+      isQuickFlip && signal.action === 'BUY' && stratRow.paperOnly === false;
+    const liveStakeCap =
+      isLiveMicroBuy && liveBalanceUsd != null && liveBalanceUsd > 0
+        ? Math.min(config.maxSizeUsd ?? 1, Math.max(0.5, liveBalanceUsd * 0.12))
+        : (config.maxSizeUsd ?? 1);
+    const buyCapUsd = isLiveMicroBuy
+      ? Math.min(liveStakeCap, riskCapUsd)
+      : riskCapUsd;
+
+    finalSize = computeFinalShareSize({
+      requestedShares: orderSize,
+      riskCapUsd: buyCapUsd,
+      price: signal.price,
+      isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
+      minSharesUsd: isQuickFlip ? 0.5 : 1,
+    });
+
+    if (finalSize <= 0) return null;
+
+    if (isLiveMicroBuy) sizeReason += ` | Live cap $${liveStakeCap.toFixed(2)}`;
+    else if (isQuickFlip && signal.action === 'BUY') {
+      sizeReason += ` | Exposure cap $${paperBudget.maxExposureUsd.toLocaleString()}`;
+    }
   }
+
   if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
   if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
 

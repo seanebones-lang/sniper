@@ -1,5 +1,5 @@
 import { db, realTrades, signals } from '@/lib/db';
-import { and, eq, gte, inArray, or, isNotNull, ne } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, isNotNull, ne, isNull } from 'drizzle-orm';
 import type { StrategyOpenPosition } from '@/lib/strategies/exit-engine';
 
 /**
@@ -140,6 +140,58 @@ export async function getRealOpenPositionsByStrategy(
       at: r.filledAt ?? r.createdAt,
     }));
     result.set(strategyId, aggregateRealPositions(stratRows, strategyId));
+  }
+
+  // Orphan BUY/SELL rows (no signalId) — attribute to the sole live strategy when unambiguous.
+  if (strategyIds.length === 1) {
+    const orphanRows = await db
+      .select({
+        platform: realTrades.platform,
+        marketExternalId: realTrades.marketExternalId,
+        side: realTrades.side,
+        size: realTrades.size,
+        price: realTrades.price,
+        filledAt: realTrades.filledAt,
+        createdAt: realTrades.createdAt,
+      })
+      .from(realTrades)
+      .where(
+        and(
+          isNull(realTrades.signalId),
+          gte(realTrades.createdAt, since),
+          or(
+            inArray(realTrades.status, ['filled', 'needs_review']),
+            and(
+              eq(realTrades.status, 'pending'),
+              eq(realTrades.side, 'BUY'),
+              isNotNull(realTrades.txHash),
+              ne(realTrades.txHash, 'submitted'),
+            ),
+          ),
+        ),
+      )
+      .orderBy(realTrades.createdAt);
+
+    if (orphanRows.length > 0) {
+      const strategyId = strategyIds[0];
+      const joinedLedger = (byStrategy.get(strategyId) ?? []).map((r) => ({
+        platform: r.platform,
+        marketExternalId: r.marketExternalId,
+        side: r.side,
+        size: r.size,
+        price: r.price,
+        at: r.filledAt ?? r.createdAt,
+      }));
+      const orphanLedger = orphanRows.map((r) => ({
+        platform: r.platform,
+        marketExternalId: r.marketExternalId,
+        side: r.side,
+        size: r.size,
+        price: r.price,
+        at: r.filledAt ?? r.createdAt,
+      }));
+      result.set(strategyId, aggregateRealPositions([...joinedLedger, ...orphanLedger], strategyId));
+    }
   }
 
   return result;

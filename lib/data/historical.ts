@@ -276,6 +276,16 @@ export async function replayStrategyOnHistory(params: {
       if (openPosition) {
         continue;
       }
+      if (params.realisticPassiveFills) {
+        const topAsk = book?.asks?.[0];
+        const topBid = book?.bids?.[0];
+        if (!topAsk || topAsk.size < signal.size) continue;
+        const mid = book?.mid ?? currentPrice;
+        const spreadPct =
+          mid && mid > 0 && book?.spread != null ? (book.spread / mid) * 100 : 100;
+        if (spreadPct > 15) continue;
+        if (!topBid || topBid.size < signal.size * 0.5) continue;
+      }
       openPosition = {
         platform: params.platform,
         marketExternalId: params.marketExternalId,

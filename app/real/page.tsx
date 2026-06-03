@@ -41,6 +41,27 @@ interface RealStatusPayload {
   }>;
 }
 
+interface LiveOpsSnapshot {
+  runner: { running: boolean; lastRun: string | null; lastCycleDurationMs: number | null };
+  runnerControl: { desired: string; updatedAt?: string } | null;
+  runnerLock: { owner?: string; heartbeatAt?: number } | null;
+  killSwitch: { disabled: boolean; reason?: string };
+  tradeStats: Array<{ status: string; count: number }>;
+  needsReview: Array<{ id: string; side: string; size: string; price: string; marketExternalId: string; createdAt: string }>;
+  pendingOrders: Array<{ id: string; side: string; size: string; price: string; marketExternalId: string; createdAt: string; txHash: string | null }>;
+  openPositions: Array<{
+    marketExternalId: string;
+    question: string;
+    netSize: number;
+    avgEntryPrice: number;
+    markPrice: number | null;
+    unrealizedPct: number | null;
+    onChainSize: number | null;
+    openedAt: string;
+  }>;
+  clobOpenOrders: unknown[];
+}
+
 export default function RealExecutionPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [typed, setTyped] = useState('');
@@ -61,6 +82,20 @@ export default function RealExecutionPage() {
   const [testOrderRunning, setTestOrderRunning] = useState(false);
   const [runnerRunning, setRunnerRunning] = useState<boolean | null>(null);
   const [runnerBusy, setRunnerBusy] = useState(false);
+  const [ops, setOps] = useState<LiveOpsSnapshot | null>(null);
+  const [apiSecret, setApiSecret] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = sessionStorage.getItem('sniper_api_secret');
+    if (stored) setApiSecret(stored);
+  }, []);
+
+  function authHeaders(): Record<string, string> {
+    const h: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiSecret.trim()) h.Authorization = `Bearer ${apiSecret.trim()}`;
+    return h;
+  }
 
   const canEnable = typed.trim().toUpperCase() === 'I ACCEPT FULL RISK AND RESPONSIBILITY';
 
@@ -84,7 +119,7 @@ export default function RealExecutionPage() {
     try {
       const res = await fetch('/api/runner', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ action }),
       });
       const json = await res.json().catch(() => ({}));
@@ -102,10 +137,16 @@ export default function RealExecutionPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const res = await fetch('/api/real/status');
-        if (!res.ok) throw new Error('status fetch failed');
-        const data = (await res.json()) as RealStatusPayload;
+        const [statusRes, opsRes] = await Promise.all([
+          fetch('/api/real/status'),
+          fetch('/api/real/ops'),
+        ]);
+        if (!statusRes.ok) throw new Error('status fetch failed');
+        const data = (await statusRes.json()) as RealStatusPayload;
         if (!cancelled) setStatus(data);
+        if (opsRes.ok && !cancelled) {
+          setOps((await opsRes.json()) as LiveOpsSnapshot);
+        }
       } catch {
         if (!cancelled) setStatus(null);
       } finally {
@@ -151,10 +192,31 @@ export default function RealExecutionPage() {
         </div>
 
         {status && (
+          <div className="rounded-xl border border-white/10 bg-zinc-900/50 p-5 space-y-3">
+            <div className="font-semibold text-zinc-200 text-sm">API secret (production)</div>
+            <p className="text-zinc-500 text-xs">
+              If <code>SNIPER_API_SECRET</code> is set on the server, paste it here for runner and setup actions
+              (stored in this browser session only).
+            </p>
+            <input
+              type="password"
+              value={apiSecret}
+              onChange={(e) => {
+                setApiSecret(e.target.value);
+                sessionStorage.setItem('sniper_api_secret', e.target.value);
+              }}
+              placeholder="Bearer token (optional locally)"
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm font-mono"
+            />
+          </div>
+        )}
+
+        {status && (
           <div className="rounded-xl border border-white/10 bg-zinc-900/50 p-5 space-y-4">
-            <div className="font-semibold text-zinc-200">Live runner (manual only)</div>
+            <div className="font-semibold text-zinc-200">Live runner</div>
             <p className="text-zinc-400 text-xs">
-              Does not auto-start on deploy. Start when you are ready; stop when you want it off.
+              When <code>SNIPER_ENABLE_REAL_EXECUTION=true</code>, the runner auto-starts on deploy and
+              restarts if it stops (unless you stop it manually here).
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <span className={runnerRunning ? 'text-emerald-400 font-medium' : 'text-zinc-500'}>
@@ -211,7 +273,7 @@ export default function RealExecutionPage() {
                   try {
                     const res = await fetch('/api/real/proxy', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: authHeaders(),
                       body: JSON.stringify({ url: proxyUrl.trim() }),
                     });
                     const data = (await res.json()) as { message?: string; error?: string };
@@ -266,7 +328,7 @@ export default function RealExecutionPage() {
                 try {
                   const res = await fetch('/api/real/cloudflare', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: authHeaders(),
                     body: JSON.stringify({
                       cfClearance: cfClearance.trim(),
                       userAgent: userAgent.trim(),
@@ -299,7 +361,7 @@ export default function RealExecutionPage() {
                 setTestOrderRunning(true);
                 setTestOrderMsg(null);
                 try {
-                  const res = await fetch('/api/real/test-order', { method: 'POST' });
+                  const res = await fetch('/api/real/test-order', { method: 'POST', headers: authHeaders() });
                   const data = (await res.json()) as { tradingOk?: boolean; hint?: string; error?: string };
                   setTestOrderMsg(data.hint ?? data.error ?? (data.tradingOk ? 'Trading OK' : 'Still blocked'));
                 } finally {
@@ -313,6 +375,96 @@ export default function RealExecutionPage() {
           {cfMsg && <p className="text-sm text-violet-100/90">{cfMsg}</p>}
           {testOrderMsg && <p className="text-sm text-zinc-300">{testOrderMsg}</p>}
         </div>
+
+        {ops && (
+          <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/20 p-5 space-y-4">
+            <div className="font-semibold text-emerald-300">Live ops</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div>
+                <div className="text-zinc-500">Runner lock</div>
+                <div className="font-mono text-zinc-200 truncate">{ops.runnerLock?.owner?.slice(0, 12) ?? 'none'}</div>
+              </div>
+              <div>
+                <div className="text-zinc-500">Kill switch</div>
+                <div className={ops.killSwitch.disabled ? 'text-red-400' : 'text-emerald-400'}>
+                  {ops.killSwitch.disabled ? 'OFF' : 'armed'}
+                </div>
+              </div>
+              <div>
+                <div className="text-zinc-500">Last cycle</div>
+                <div className="font-mono text-zinc-200">
+                  {ops.runner.lastRun
+                    ? `${Math.round((Date.now() - new Date(ops.runner.lastRun).getTime()) / 1000)}s ago`
+                    : '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-zinc-500">Trade stats</div>
+                <div className="font-mono text-zinc-200">
+                  {ops.tradeStats.map((s) => `${s.status}:${s.count}`).join(' · ') || '—'}
+                </div>
+              </div>
+            </div>
+
+            {ops.openPositions.length > 0 && (
+              <div>
+                <div className="text-zinc-500 text-xs mb-2">Open positions ({ops.openPositions.length})</div>
+                <div className="space-y-2">
+                  {ops.openPositions.map((p) => (
+                    <div key={p.marketExternalId} className="rounded-lg border border-white/5 bg-black/30 p-3 text-xs">
+                      <div className="font-medium text-zinc-200 truncate">{p.question}</div>
+                      <div className="font-mono text-zinc-400 mt-1">
+                        {p.netSize.toFixed(1)} @ {p.avgEntryPrice.toFixed(4)}
+                        {p.markPrice != null && ` → mark ${p.markPrice.toFixed(4)}`}
+                        {p.unrealizedPct != null && (
+                          <span className={p.unrealizedPct >= 0 ? ' text-emerald-400' : ' text-red-400'}>
+                            {' '}
+                            ({p.unrealizedPct >= 0 ? '+' : ''}
+                            {p.unrealizedPct.toFixed(1)}%)
+                          </span>
+                        )}
+                      </div>
+                      {p.onChainSize != null && Math.abs(p.onChainSize - p.netSize) > 1 && (
+                        <div className="text-amber-400 mt-1">Chain: {p.onChainSize.toFixed(2)} (ledger mismatch)</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {ops.pendingOrders.length > 0 && (
+              <div>
+                <div className="text-zinc-500 text-xs mb-2">Pending orders</div>
+                {ops.pendingOrders.map((t) => (
+                  <div key={t.id} className="font-mono text-[10px] text-zinc-500 mb-1">
+                    {t.side} {t.size}@{t.price} {t.marketExternalId.slice(0, 12)}… order=
+                    {t.txHash?.slice(0, 10) ?? '—'}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {ops.needsReview.length > 0 && (
+              <div className="rounded-lg border border-amber-600/40 bg-amber-950/30 p-3">
+                <div className="text-amber-300 text-xs font-medium mb-2">
+                  needs_review ({ops.needsReview.length}) — manual attention
+                </div>
+                {ops.needsReview.map((t) => (
+                  <div key={t.id} className="font-mono text-[10px] text-amber-200/80 mb-1">
+                    {t.side} {t.size}@{t.price} {t.marketExternalId.slice(0, 12)}…
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {Array.isArray(ops.clobOpenOrders) && ops.clobOpenOrders.length > 0 && (
+              <div className="text-xs text-zinc-500">
+                CLOB open orders: {ops.clobOpenOrders.length} (see Polymarket UI for details)
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="rounded-xl border border-white/10 bg-zinc-950/80 p-5">
           <div className="flex items-center justify-between mb-3">
@@ -363,7 +515,7 @@ export default function RealExecutionPage() {
                 onClick={async () => {
                   setLoading(true);
                   try {
-                    await fetch('/api/real/setup', { method: 'POST' });
+                    await fetch('/api/real/setup', { method: 'POST', headers: authHeaders() });
                     const res = await fetch('/api/real/status');
                     if (res.ok) setStatus((await res.json()) as RealStatusPayload);
                   } finally {

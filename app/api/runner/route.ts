@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
 import { db, paperTrades } from '@/lib/db';
 import { getRunnerExecutionMode } from '@/lib/runner/execution-mode';
@@ -55,6 +56,9 @@ async function runnerPayload(includePnl: boolean) {
 
 export async function POST(req: Request) {
   try {
+    const authErr = requireApiAuth(req);
+    if (authErr) return authErr;
+
     const { action } = await req.json();
 
     if (action === 'start') {
@@ -64,7 +68,7 @@ export async function POST(req: Request) {
     }
 
     if (action === 'stop') {
-      stopRunner();
+      stopRunner({ manual: true });
       return NextResponse.json({ status: 'stopped', ...(await runnerPayload(false)) });
     }
 
