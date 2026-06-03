@@ -1,6 +1,7 @@
 import {
   boolean,
   decimal,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -48,7 +49,11 @@ export const signals = pgTable('signals', {
   size: decimal('size', { precision: 18, scale: 4 }).notNull(),
   reason: text('reason').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // Performance/analytics queries scan signals by time window and by strategy.
+  createdAtIdx: index('signals_created_at_idx').on(t.createdAt),
+  strategyCreatedIdx: index('signals_strategy_created_idx').on(t.strategyId, t.createdAt),
+}));
 
 export const paperTrades = pgTable('paper_trades', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -62,7 +67,10 @@ export const paperTrades = pgTable('paper_trades', {
   status: varchar('status', { length: 20 }).notNull().default('filled'),
   filledAt: timestamp('filled_at', { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  filledAtIdx: index('paper_trades_filled_at_idx').on(t.filledAt),
+  signalIdx: index('paper_trades_signal_id_idx').on(t.signalId),
+}));
 
 // Separate table for real trades (never mixed with paper for audit clarity)
 export const realTrades = pgTable('real_trades', {
@@ -78,7 +86,10 @@ export const realTrades = pgTable('real_trades', {
   txHash: varchar('tx_hash', { length: 120 }), // for Polymarket on-chain
   filledAt: timestamp('filled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  createdAtIdx: index('real_trades_created_at_idx').on(t.createdAt),
+  signalIdx: index('real_trades_signal_id_idx').on(t.signalId),
+}));
 
 export const positions = pgTable('positions', {
   id: uuid('id').primaryKey().defaultRandom(),
