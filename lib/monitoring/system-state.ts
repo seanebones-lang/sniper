@@ -15,7 +15,7 @@
  */
 
 import { db, systemState, auditEvents } from '@/lib/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 export type SystemStateKey =
   | 'kill_switch'
@@ -23,6 +23,7 @@ export type SystemStateKey =
   | 'daily_loss'
   | 'execution_health_summary'
   | 'risk_snapshot'
+  | 'runner_lock'
   | 'polymarket_http_proxy'
   | 'polymarket_browser_session'
   | 'paper_budget_settings';
@@ -46,6 +47,26 @@ export interface DailyLossState {
 }
 
 const AUDIT_ACTOR = 'system-state';
+
+/** Throttle persistence-failure alerts so a DB outage doesn't spam Telegram. */
+let lastPersistFailureAlertAt = 0;
+const PERSIST_FAILURE_ALERT_INTERVAL_MS = 5 * 60 * 1000;
+
+async function alertPersistFailure(key: SystemStateKey, err: unknown) {
+  console.error(`[SystemState] FAILED to persist '${key}' — durable safety state may be stale`, err);
+  const now = Date.now();
+  if (now - lastPersistFailureAlertAt < PERSIST_FAILURE_ALERT_INTERVAL_MS) return;
+  lastPersistFailureAlertAt = now;
+  try {
+    const { sendCriticalAlert } = await import('@/lib/alerts/critical');
+    await sendCriticalAlert(
+      `Durable state write failed for '${key}'. Kill-switch / risk-mode / daily-loss may not survive a restart. Check the DB.`,
+      { key, error: err instanceof Error ? err.message : String(err) },
+    );
+  } catch {
+    // alerting is best-effort
+  }
+}
 
 async function logAudit(action: string, payload: Record<string, unknown>) {
   try {
@@ -90,8 +111,11 @@ export async function persistSystemState(
       value,
       reason: reason || 'state change',
     });
-  } catch {
-    // Best effort — in-memory cache in callers still works
+  } catch (err) {
+    // Best effort — in-memory cache in callers still works — but a failure to
+    // persist critical safety state is dangerous (it won't survive a restart),
+    // so surface it instead of swallowing silently.
+    void alertPersistFailure(key, err);
   }
 }
 
@@ -203,4 +227,61 @@ export async function persistRiskSnapshot(snapshot: RiskSnapshot, reason?: strin
 
 export async function loadRiskSnapshot(): Promise<RiskSnapshot | null> {
   return loadSystemState<RiskSnapshot>('risk_snapshot');
+}
+
+/**
+ * Single-runner lock (lease + heartbeat).
+ *
+ * Prevents two runner loops (Railway rolling-deploy overlap or a scaled replica)
+ * from trading the same DB simultaneously. The lease lives in `system_state` and
+ * is atomically acquired/refreshed: the ON CONFLICT update only succeeds when the
+ * caller already owns the lease or the existing lease's heartbeat is stale.
+ */
+const RUNNER_LOCK_KEY = 'runner_lock';
+
+/**
+ * Try to acquire (or refresh, if already owned) the runner lock.
+ * @param failOpen returned on DB error — true for paper (tolerate), false for
+ *   real money (never risk two live loops).
+ */
+export async function tryAcquireRunnerLock(
+  instanceId: string,
+  ttlMs = 60_000,
+  failOpen = false,
+): Promise<boolean> {
+  const now = Date.now();
+  const staleBefore = now - ttlMs;
+  try {
+    const result = await db.execute(sql`
+      INSERT INTO system_state (key, value, updated_at)
+      VALUES (
+        ${RUNNER_LOCK_KEY},
+        jsonb_build_object('owner', ${instanceId}::text, 'heartbeatAt', ${now}::bigint),
+        now()
+      )
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = now()
+        WHERE (system_state.value->>'owner') = ${instanceId}
+           OR COALESCE((system_state.value->>'heartbeatAt')::bigint, 0) < ${staleBefore}
+      RETURNING (value->>'owner') AS owner
+    `);
+    const rows = result as unknown as { length?: number; rowCount?: number };
+    if (typeof rows.length === 'number') return rows.length > 0;
+    if (typeof rows.rowCount === 'number') return rows.rowCount > 0;
+    return false;
+  } catch {
+    return failOpen;
+  }
+}
+
+/** Release the runner lock if (and only if) this instance owns it. */
+export async function releaseRunnerLock(instanceId: string): Promise<void> {
+  try {
+    await db.execute(sql`
+      DELETE FROM system_state
+      WHERE key = ${RUNNER_LOCK_KEY} AND (value->>'owner') = ${instanceId}
+    `);
+  } catch {
+    // best effort — a stale lease will expire via TTL anyway
+  }
 }

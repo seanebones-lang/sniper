@@ -40,6 +40,12 @@ let realExecutionGloballyDisabled = false; // hot cache
 export async function disableRealExecution(reason = 'Manual runtime disable') {
   realExecutionGloballyDisabled = true;
   await persistKillSwitchDisabled(reason, 'runtime');
+  try {
+    const { sendCriticalAlert } = await import('@/lib/alerts/critical');
+    await sendCriticalAlert(`Real-execution KILL SWITCH engaged: ${reason}`);
+  } catch {
+    // alerting is best-effort
+  }
 }
 
 export async function enableRealExecution(reason = 'Manual runtime re-enable') {
@@ -143,6 +149,8 @@ export interface RealOrderRequest {
   takeLiquidity?: boolean;
   /** Strategy max notional (USD) — used for micro live accounts. */
   maxNotionalUsd?: number;
+  /** DB signal id — links the real trade to its strategy for position/exit attribution. */
+  signalId?: string;
 }
 
 /**
@@ -152,6 +160,28 @@ export interface RealOrderRequest {
 export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: boolean; tradeId?: string; error?: string }> {
   if (!(await isRealExecutionAllowed())) {
     return { success: false, error: 'Real execution disabled (kill-switch or env flag)' };
+  }
+
+  // Idempotency: a signal is placed at most once. If a real trade already exists
+  // for this signal (pending/filled/in-review), do not submit a second order —
+  // protects against retries and any residual cross-instance race.
+  if (req.signalId) {
+    const existing = await db.query.realTrades.findFirst({
+      where: (t, { and, eq, inArray }) =>
+        and(
+          eq(t.signalId, req.signalId!),
+          inArray(t.status, ['pending', 'filled', 'needs_review']),
+        ),
+      columns: { id: true, status: true },
+    });
+    if (existing) {
+      await logAudit('real_order_skipped_duplicate_signal', {
+        signalId: req.signalId,
+        existingTradeId: existing.id,
+        existingStatus: existing.status,
+      });
+      return { success: false, error: `Duplicate order for signal (existing ${existing.status})` };
+    }
   }
 
   if (req.market.platform === 'polymarket') {
@@ -202,7 +232,16 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   const strategyCap = req.maxNotionalUsd ?? 1;
   const microCapUsd = Math.min(requestedUsd, strategyCap, bankrollUsd * 0.9);
 
-  if (microLive && microCapUsd >= minOrderUsd) {
+  if (req.isExit) {
+    // Exits must liquidate the full open position — never re-shrink an exit
+    // through Kelly/bankroll sizing (that would strand residual inventory).
+    finalSize = Math.max(0, Math.floor(req.size));
+    usdValue = req.price * finalSize;
+    if (finalSize <= 0) {
+      await logAudit('real_order_blocked_exit_zero_size', { ...req });
+      return { success: false, error: 'Exit size resolved to zero shares' };
+    }
+  } else if (microLive && microCapUsd >= minOrderUsd) {
     finalSize = usdCapToShares(microCapUsd, req.price, 1);
     usdValue = req.price * finalSize;
   } else {
@@ -261,6 +300,24 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: risk.reason };
   }
 
+  // Real exposure ceiling (async): blocks new entries that would breach the
+  // total/per-market USD caps based on actual live holdings. Exits are exempt.
+  if (!req.isExit) {
+    const exposureCheck = await riskEngine.checkRealExposure({
+      platform: req.market.platform,
+      marketExternalId: req.market.externalId,
+      side: req.side,
+      price: req.price,
+      size: finalSize,
+      usdValue,
+      isExit: req.isExit,
+    });
+    if (!exposureCheck.allowed) {
+      await logAudit('real_order_blocked_real_exposure', { ...req, reason: exposureCheck.reason });
+      return { success: false, error: exposureCheck.reason };
+    }
+  }
+
   if (req.market.platform === 'polymarket') {
     const { ensurePolymarketTradingReady } = await import(
       '@/lib/clients/polymarket-trading-setup'
@@ -298,6 +355,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   const [trade] = await db.insert(realTrades).values({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
+    signalId: req.signalId ?? null,
     side: req.side,
     price: req.price.toString(),
     size: finalSize.toString(),
@@ -333,12 +391,16 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     }
   );
 
-  if (req.takeLiquidity && req.side === 'BUY' && book?.asks?.length) {
+  // Exits must always cross to get out — a one-sided/missing book must never
+  // leave the decision at WAIT and strand a live position.
+  const isAggressiveExit = req.isExit === true && req.side === 'SELL';
+
+  if ((req.takeLiquidity && req.side === 'BUY' && book?.asks?.length) || isAggressiveExit) {
     decision = {
       type: 'TAKE_AGGRESSIVE',
       price: req.price,
       size: finalSize,
-      reason: 'Quick-flip entry — lift ask',
+      reason: isAggressiveExit ? 'Exit — cross to close position' : 'Quick-flip entry — lift ask',
     };
   }
 
@@ -371,23 +433,29 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     );
     const { isPolymarketGeoblockOrderError } = await import('@/lib/clients/polymarket-geoblock');
 
-    const result =
-      req.takeLiquidity && req.side === 'BUY'
-        ? await placePolymarketMarketOrder({
-            privateKey,
-            tokenId: req.market.externalId,
-            amountUsd: Math.min(usdValue, req.maxNotionalUsd ?? usdValue),
-            side: 'BUY',
-            orderType: 'FOK',
-          })
-        : await placePolymarketLimitOrder({
-            privateKey,
-            tokenId: req.market.externalId,
-            price: Math.max(0.01, Math.min(0.99, execPrice)),
-            size: finalSize,
-            side: req.side,
-            postOnly,
-          });
+    // Polymarket market orders: BUY `amount` = USD to spend; SELL `amount` =
+    // shares to sell. Entries use FOK (all-or-nothing); exits use FAK so we
+    // sell whatever fills immediately and cancel the rest (never get stuck).
+    const useMarketOrder = (req.takeLiquidity && req.side === 'BUY') || isAggressiveExit;
+    const result = useMarketOrder
+      ? await placePolymarketMarketOrder({
+          privateKey,
+          tokenId: req.market.externalId,
+          amountUsd:
+            req.side === 'BUY'
+              ? Math.min(usdValue, req.maxNotionalUsd ?? usdValue)
+              : finalSize,
+          side: req.side,
+          orderType: req.side === 'BUY' ? 'FOK' : 'FAK',
+        })
+      : await placePolymarketLimitOrder({
+          privateKey,
+          tokenId: req.market.externalId,
+          price: Math.max(0.01, Math.min(0.99, execPrice)),
+          size: finalSize,
+          side: req.side,
+          postOnly,
+        });
 
     if (result.success) {
       executionManager.recordOrderPosted(

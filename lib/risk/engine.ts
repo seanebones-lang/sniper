@@ -11,6 +11,7 @@ export interface RiskCheckResult {
 }
 
 import { persistSystemState } from '@/lib/monitoring/system-state';
+import { db } from '@/lib/db';
 
 export interface RiskContext {
   platform: string;
@@ -70,6 +71,20 @@ export function getCurrentDailyLoss(): number {
   return dailyLossTracked;
 }
 
+/**
+ * Restore daily-loss tracking from durable state on startup so the daily-loss
+ * circuit breaker is not silently zeroed by a redeploy mid-session.
+ */
+export function restoreDailyLoss(trackedUsd: number, lastResetAtIso?: string) {
+  if (Number.isFinite(trackedUsd) && trackedUsd > 0) {
+    dailyLossTracked = trackedUsd;
+  }
+  if (lastResetAtIso) {
+    const t = Date.parse(lastResetAtIso);
+    if (!Number.isNaN(t)) lastLossReset = t;
+  }
+}
+
 export function checkRisk(ctx: RiskContext, limits: Partial<RiskLimits> = {}): RiskCheckResult {
   const L = { ...DEFAULT_LIMITS, ...limits };
 
@@ -84,8 +99,85 @@ export function checkRisk(ctx: RiskContext, limits: Partial<RiskLimits> = {}): R
     return { allowed: false, reason: `Daily loss limit reached ($${currentDailyLoss.toFixed(2)} / $${L.dailyLossLimitUsd})` };
   }
 
-  // TODO Phase 4+: Add real exposure tracking from DB positions + realTrades
-  // For now this is a strong starting point
+  // Real exposure is enforced separately (async) via checkRealExposure — the
+  // sync gate above stays fast for the per-order hot path.
+  return { allowed: true };
+}
+
+export interface RealExposure {
+  totalUsd: number;
+  byMarket: Record<string, number>;
+  openCount: number;
+}
+
+/**
+ * Live exposure from the DB: the `positions` table (post-reconciliation truth)
+ * plus still-`pending` real trades not yet reflected there. This is the real-money
+ * analogue the per-trade sync gate could never see.
+ */
+export async function getRealExposure(): Promise<RealExposure> {
+  const byMarket: Record<string, number> = {};
+  let totalUsd = 0;
+  let openCount = 0;
+
+  try {
+    const pos = await db.query.positions.findMany({ limit: 1000 });
+    for (const p of pos) {
+      const size = Math.abs(parseFloat(p.sizeShares) || 0);
+      if (size <= 0.0001) continue;
+      const usd = size * (parseFloat(p.avgPrice) || 0);
+      const key = `${p.platform}:${p.marketId}`;
+      byMarket[key] = (byMarket[key] || 0) + usd;
+      totalUsd += usd;
+      openCount++;
+    }
+
+    const pending = await db.query.realTrades.findMany({
+      where: (t, { eq }) => eq(t.status, 'pending'),
+      limit: 1000,
+    });
+    for (const r of pending) {
+      const usd = Math.abs((parseFloat(r.size) || 0) * (parseFloat(r.price) || 0));
+      if (usd <= 0) continue;
+      const key = `${r.platform}:${r.marketExternalId}`;
+      byMarket[key] = (byMarket[key] || 0) + usd;
+      totalUsd += usd;
+    }
+  } catch {
+    // On a read error return what we have — the portfolio manager's own caps
+    // still apply, and the per-trade sync gate already ran.
+  }
+
+  return { totalUsd, byMarket, openCount };
+}
+
+/**
+ * Async real-exposure gate: enforces total + per-market USD ceilings against
+ * actual live holdings. Exits are never blocked here.
+ */
+export async function checkRealExposure(
+  ctx: RiskContext & { isExit?: boolean },
+  limits: Partial<RiskLimits> = {},
+): Promise<RiskCheckResult> {
+  if (ctx.isExit) return { allowed: true };
+  const L = { ...DEFAULT_LIMITS, ...limits };
+  const exposure = await getRealExposure();
+
+  if (exposure.totalUsd + ctx.usdValue > L.maxUsdTotalExposure) {
+    return {
+      allowed: false,
+      reason: `Real exposure $${exposure.totalUsd.toFixed(2)} + $${ctx.usdValue.toFixed(2)} exceeds total cap $${L.maxUsdTotalExposure}`,
+    };
+  }
+
+  const marketKey = `${ctx.platform}:${ctx.marketExternalId}`;
+  const marketExposure = exposure.byMarket[marketKey] || 0;
+  if (marketExposure + ctx.usdValue > L.maxUsdPerMarket) {
+    return {
+      allowed: false,
+      reason: `Market exposure $${marketExposure.toFixed(2)} + $${ctx.usdValue.toFixed(2)} exceeds per-market cap $${L.maxUsdPerMarket}`,
+    };
+  }
 
   return { allowed: true };
 }
@@ -95,4 +187,7 @@ export const riskEngine = {
   recordRealizedLoss,
   getCurrentDailyLoss,
   resetDailyLoss,
+  restoreDailyLoss,
+  getRealExposure,
+  checkRealExposure,
 };

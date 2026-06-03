@@ -31,6 +31,28 @@ export class RiskModeManager {
   }
 
   /**
+   * Restore a previously-persisted mode on startup (does NOT re-persist — we are
+   * loading what is already durable). Without this the runner always boots
+   * NORMAL after a redeploy and can oversize before fresh metrics rebuild.
+   */
+  restoreState(mode: RiskMode, reason: string, enteredAt?: Date) {
+    this.state = {
+      current: mode,
+      reason,
+      enteredAt: enteredAt ?? new Date(),
+      previousMode: this.state.current,
+    };
+  }
+
+  /** Escalate to at least the given mode (used to start cautious after a restart). */
+  escalateAtLeast(mode: RiskMode, reason: string) {
+    const rank: Record<RiskMode, number> = { NORMAL: 0, DEFENSIVE: 1, EMERGENCY: 2 };
+    if (rank[mode] > rank[this.state.current]) {
+      this._transition(mode, reason);
+    }
+  }
+
+  /**
    * Evaluate whether we should change risk mode based on current signals.
    */
   evaluate(

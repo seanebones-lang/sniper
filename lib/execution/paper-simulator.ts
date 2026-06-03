@@ -45,6 +45,10 @@ export interface SnipeRequest {
   bookImbalance?: number;
   /** Market regime label from snapshots */
   regime?: string;
+  /** Replay/hydration fills — update positions only, do NOT feed execution-health
+   *  metrics (otherwise a restart's replay distorts slippage/health and can
+   *  cause the runner to mis-size in the first cycles). */
+  skipExecutionTracking?: boolean;
 }
 
 const FEE_RATE = 0.0005;
@@ -61,6 +65,7 @@ export class PaperSimulator {
       market, side, price, size, reason, book = null,
       immediate = false, isExit = false, minFillProbability,
       bookImbalance = 0.05, regime = 'normal',
+      skipExecutionTracking = false,
     } = req;
 
     if (size <= 0 || price <= 0 || price >= 1) {
@@ -77,13 +82,13 @@ export class PaperSimulator {
           console.warn(`[PaperSimulator] No long position to sell on ${market.externalId}`);
           return null;
         }
-        return this._recordAggressiveFill(market, side, price, capped, reason);
+        return this._recordAggressiveFill(market, side, price, capped, reason, 'AGGRESSIVE', skipExecutionTracking);
       }
       if (side === 'SELL' && (!pos || pos.size <= 0)) {
         console.warn(`[PaperSimulator] SELL rejected — no open long on ${market.externalId}`);
         return null;
       }
-      return this._recordAggressiveFill(market, side, price, size, reason);
+      return this._recordAggressiveFill(market, side, price, size, reason, 'AGGRESSIVE', skipExecutionTracking);
     }
 
     // Get current execution decision
@@ -180,6 +185,7 @@ export class PaperSimulator {
     size: number,
     reason: string,
     executionType: 'PASSIVE' | 'AGGRESSIVE' = 'AGGRESSIVE',
+    skipExecutionTracking = false,
   ): PaperFill {
     const fee = size * price * FEE_RATE;
 
@@ -199,8 +205,10 @@ export class PaperSimulator {
     this.fills.push(fill);
     this._updatePosition(fill);
 
-    const orderId = executionManager.recordOrderPosted(market.externalId, side, price, size);
-    executionManager.recordFill(orderId, price, size);
+    if (!skipExecutionTracking) {
+      const orderId = executionManager.recordOrderPosted(market.externalId, side, price, size);
+      executionManager.recordFill(orderId, price, size);
+    }
 
     return fill;
   }

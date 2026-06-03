@@ -150,6 +150,7 @@ export async function hydratePaperSimulatorFromDb() {
       size: parseFloat(t.size),
       reason: 'hydrate from DB',
       immediate: true,
+      skipExecutionTracking: true,
     });
   }
 }

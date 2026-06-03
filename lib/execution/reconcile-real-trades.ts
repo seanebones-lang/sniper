@@ -26,9 +26,11 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
   const result: ReconciliationResult = { checked: 0, updated: 0, errors: 0 };
 
   try {
+    // Reconcile both still-open orders AND anything stuck in needs_review (it may
+    // now be resolvable on the exchange). Higher cap so a burst can fully drain.
     const pendingTrades = await db.query.realTrades.findMany({
-      where: (t, { eq }) => eq(t.status, 'pending'),
-      limit: 50,
+      where: (t, { inArray }) => inArray(t.status, ['pending', 'needs_review']),
+      limit: 200,
     });
 
     result.checked = pendingTrades.length;
@@ -332,12 +334,47 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
       });
     }
 
+    // Alert if real trades remain stuck in needs_review — these are unresolved
+    // real-money orders a human should look at.
+    try {
+      const stuck = await db.query.realTrades.findMany({
+        where: (t, { eq }) => eq(t.status, 'needs_review'),
+        columns: { id: true },
+        limit: 200,
+      });
+      if (stuck.length > 0) {
+        await alertNeedsReview(stuck.length);
+      }
+    } catch {
+      // best effort
+    }
+
   } catch (err) {
     result.errors++;
     console.error('[ReconcileRealTrades] Fatal error:', err);
   }
 
   return result;
+}
+
+/** Throttle needs_review alerts so a backlog doesn't spam Telegram every cycle. */
+let lastNeedsReviewAlertAt = 0;
+const NEEDS_REVIEW_ALERT_INTERVAL_MS = 15 * 60 * 1000;
+
+async function alertNeedsReview(count: number) {
+  console.warn(`[ReconcileRealTrades] ${count} real trade(s) need manual review`);
+  const now = Date.now();
+  if (now - lastNeedsReviewAlertAt < NEEDS_REVIEW_ALERT_INTERVAL_MS) return;
+  lastNeedsReviewAlertAt = now;
+  try {
+    const { sendCriticalAlert } = await import('@/lib/alerts/critical');
+    await sendCriticalAlert(
+      `${count} real trade(s) are stuck in needs_review and could not be auto-reconciled. Manual review required.`,
+      { count },
+    );
+  } catch {
+    // alerting is best-effort
+  }
 }
 
 /**
@@ -357,13 +394,26 @@ export async function recordRealFill(params: {
   });
   if (!trade) return;
 
-  // Update the trade record to filled
+  // Idempotency: never apply the same fill to the positions table twice. If a
+  // prior reconciliation already marked this trade filled, stop — re-applying
+  // the signed size would corrupt exposure and cost-basis accounting.
+  if (trade.status === 'filled') {
+    return;
+  }
+
+  // Accurate fee on the actually-filled notional (replaces the pre-trade estimate).
+  const FEE_RATE = 0.0005;
+  const filledFeeUsd = filledSize * filledPrice * FEE_RATE;
+
+  // Update the trade record to filled (size/price reflect the REAL fill — for a
+  // partial FAK fill that is the filled quantity, the remainder having cancelled).
   await db.update(realTrades)
     .set({
       status: 'filled',
       filledAt: new Date(),
       price: filledPrice.toString(),
       size: filledSize.toString(),
+      fee: filledFeeUsd.toString(),
       txHash: txHash || trade.txHash || undefined,
     })
     .where(eq(realTrades.id, tradeId));

@@ -1,8 +1,22 @@
 # Project Status
 
-**Last verified:** June 2, 2026 (paper P&L ledger, runner speed/accuracy pass, risk-unified sizing).
+**Last verified:** June 3, 2026 (live-trading safety pass: real-position exit lifecycle, single-runner lock, durable state restore, reconciliation/exposure hardening).
 
 This document is the **authoritative capability matrix** for reviewers. If README or other docs disagree with this file, **this file wins** until updated.
+
+## Live-trading safety pass (June 3, 2026)
+
+The real-money path was hardened so it is safe to soak with tiny capital. Changes:
+
+- **Real-position exit lifecycle (the unblocker):** real fills now attribute to a strategy (`real_trades.signalId` set on insert), `getRealOpenPositionsByStrategy()` aggregates them, and the runner feeds those into the exit engine for `paperOnly:false` strategies. Real BUYs now get take-profit / stop / max-hold SELLs (previously trapped forever).
+- **Marketable exits:** real SELL exits use a FAK market order (Polymarket `amount` = shares) and always cross — a one-sided/missing book can no longer strand a position.
+- **Dedup + idempotency:** per-market in-flight guard, cooldown on failed entries (not exits), and a `signalId` idempotency check stop the retry spam that produced 450+ rejected orders.
+- **Single-runner lock:** a `system_state` lease + heartbeat prevents two loops (deploy overlap / replica) from trading the same DB (fails closed when real execution is on).
+- **Durable state restore:** risk mode, daily-loss, drawdown high-water mark, and execution-health posture are now *restored* (not just logged) on startup; the drawdown breaker is recoverable rather than a one-way latch.
+- **Reconciliation/accounting:** idempotent `recordRealFill`, accurate fee on filled notional, `needs_review` draining + alerting, real exposure tracking in `riskEngine`.
+- **Hydration no longer pollutes execution-health metrics.**
+
+All active strategies remain `paperOnly:true`. Do not re-arm live until the paper edge is proven and a tiny-live soak passes (see the real-execution runbook).
 
 ## Summary
 
@@ -51,13 +65,17 @@ What reviewers can evaluate today with confidence:
 | Dynamic strategy allocator | **Works** | Weights by recent PnL + activity |
 | Polymarket live WebSocket (market detail) | **Works** | Detail page only |
 | Kalshi WebSocket client | **Works (detail page)** | `KalshiWSClient` on `/markets/kalshi/[id]` |
-| Real Polymarket limit orders | **Coded, gated** | `SNIPER_ENABLE_REAL_EXECUTION` + keys; not CI-tested |
+| Real Polymarket orders (entry + exit) | **Coded, gated** | `SNIPER_ENABLE_REAL_EXECUTION` + keys; entries FOK, exits FAK marketable; not CI-tested with live keys |
+| Real-position exit lifecycle | **Works** | `getRealOpenPositionsByStrategy` → exit engine emits real SELLs for `paperOnly:false` |
 | Real Kalshi execution | **Coded, gated** | `kalshi-trading.ts` + recon; requires Kalshi API keys |
+| Single-runner lock | **Works** | `system_state` lease + heartbeat; fails closed when real execution is on |
+| Durable safety-state restore | **Works** | risk mode, daily-loss, drawdown peak, execution-health restored on startup |
+| Real exposure tracking | **Works** | `riskEngine.getRealExposure` / `checkRealExposure` from `positions` + pending `real_trades` |
 | Cross-venue arbitrage | **Not implemented** | — |
-| `positions` DB table | **Partial** | Used for real fill tracking; paper uses `paper_trades` aggregation |
+| `positions` DB table | **Works** | Real fill tracking + exposure; paper uses `paper_trades` aggregation |
 | `/real` status page | **Placeholder** | Does not read server execution flag |
 | `/api/paper/pnl` | **Works** | Lightweight ledger + MTM snapshot |
-| CI (lint, build, unit, e2e) | **Works** | 57 unit tests; smoke not in CI |
+| CI (lint, build, unit, e2e) | **Works** | 93 unit tests; smoke not in CI |
 
 ---
 
@@ -69,9 +87,9 @@ These remain for calling the system **fully production-ready** as autonomous 24/
 
 Runner and reconciliation call `ensureMarketRecord()` before signal/trade inserts.
 
-### 2. In-memory state lost on restart
+### 2. In-memory state lost on restart — **largely mitigated (June 3, 2026)**
 
-Partially mitigated via `system_state` (kill switch, risk mode, risk snapshots, execution health). Still in-memory on restart: runner session counters, strategy variants, execution manager fill history, edge decay windows, temporary adjustments (until re-loaded from DB if persisted).
+Critical safety state is now **restored** on startup from `system_state`: kill switch, risk mode, daily-loss tracking, drawdown high-water mark, and execution-health posture (boots DEFENSIVE if last health was poor). A single-runner lease prevents duplicate loops after a deploy. Still in-memory on restart (non-safety-critical): runner session counters, strategy variants, execution-manager fill history, edge-decay windows, temporary adjustments.
 
 ### 3. Documented features with no implementation
 
@@ -109,7 +127,7 @@ Partially mitigated via `system_state` (kill switch, risk mode, risk snapshots, 
 
 | Layer | Count | Scope |
 |-------|-------|--------|
-| Unit (Vitest) | 57 tests / 15 files | orderbook, kalshi, quick-flip, ledger, sizing, paper-simulator, system-state, … |
+| Unit (Vitest) | 93 tests / 21 files | orderbook, kalshi, quick-flip, ledger, sizing, paper-simulator, system-state, real-positions, risk-engine, risk-mode, real buy→exit round-trip, … |
 | Smoke | 14 checks | `scripts/smoke-test.mjs` (not in CI) |
 | E2E (Playwright) | 14 tests / 5 specs | Navigation, markets, strategies, backtest, paper fill |
 | CI | lint + build + unit + e2e | `.github/workflows/ci.yml` |

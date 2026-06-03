@@ -15,6 +15,7 @@ import type { Market } from '@/lib/types';
 import type { StrategyConfig } from '@/lib/strategies/types';
 import { resolveStrategyConfig, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
+import { getRealOpenPositionsByStrategy } from '@/lib/execution/real-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
@@ -93,6 +94,15 @@ const status: RunnerStatus = {
 let interval: NodeJS.Timeout | null = null;
 let cycleTimeout: ReturnType<typeof setTimeout> | null = null;
 let cycleInFlight = false;
+
+/** Stable per-process id used for the single-runner DB lease. */
+const RUNNER_LOCK_TTL_MS = 60_000;
+type RunnerLockGlobal = typeof globalThis & { __sniperRunnerInstanceId?: string };
+const lg = globalThis as RunnerLockGlobal;
+if (!lg.__sniperRunnerInstanceId) {
+  lg.__sniperRunnerInstanceId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+}
+const RUNNER_INSTANCE_ID = lg.__sniperRunnerInstanceId;
 /** Last signal timestamp per strategy:market for cooldown enforcement */
 const lastSignalAtByKey = new Map<string, number>();
 
@@ -173,6 +183,31 @@ export async function startRunner(intervalMs = 15000) {
   syncStatusFromStore();
   if (status.running) return;
 
+  // Single-runner lock: never let two loops trade the same DB. Fail closed when
+  // real execution is enabled (a duplicate live loop is dangerous), fail open
+  // for paper so a transient DB blip doesn't halt research.
+  const realEnabledAtStart = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  try {
+    const { tryAcquireRunnerLock } = await import('@/lib/monitoring/system-state');
+    const acquired = await tryAcquireRunnerLock(
+      RUNNER_INSTANCE_ID,
+      RUNNER_LOCK_TTL_MS,
+      !realEnabledAtStart,
+    );
+    if (!acquired) {
+      console.warn(
+        `[Runner] Another instance holds the runner lock — not starting the loop on this instance (${RUNNER_INSTANCE_ID}).`,
+      );
+      return;
+    }
+  } catch (e) {
+    if (realEnabledAtStart) {
+      console.error('[Runner] Could not acquire runner lock and real execution is enabled — refusing to start.', e);
+      return;
+    }
+    console.warn('[Runner] Runner lock check failed (non-fatal in paper mode):', e);
+  }
+
   const { applyPaperBudgetToRiskManager } = await import('@/lib/paper/portfolio');
   await applyPaperBudgetToRiskManager();
   await hydratePaperSimulatorFromDb();
@@ -183,8 +218,11 @@ export async function startRunner(intervalMs = 15000) {
   console.log('[Runner] Starting 24/7 paper runner...');
 
   // === Durable Safety State Recovery (critical for real capital) ===
+  // We RESTORE (not just log) persisted posture so a redeploy mid-session does
+  // not silently reset the runner to a fresh, over-confident NORMAL state.
   try {
     const { loadCriticalSafetyState, loadSystemState, loadRiskSnapshot } = await import('@/lib/monitoring/system-state');
+    const { riskEngine } = await import('@/lib/risk/engine');
     const safety = await loadCriticalSafetyState();
 
     if (safety.killSwitch.disabled) {
@@ -193,24 +231,45 @@ export async function startRunner(intervalMs = 15000) {
       console.warn(`   Disabled at: ${safety.killSwitch.disabledAt}`);
     }
 
+    // Restore risk mode into the live manager (was previously log-only).
     if (safety.riskMode.current !== 'NORMAL') {
-      console.warn(`⚠️ [Runner] RISK MODE RECOVERED: ${safety.riskMode.current} — ${safety.riskMode.reason}`);
+      const enteredAt = (safety.riskMode as { enteredAt?: string }).enteredAt;
+      riskModeManager.restoreState(
+        safety.riskMode.current,
+        `Recovered after restart: ${safety.riskMode.reason}`,
+        enteredAt ? new Date(enteredAt) : undefined,
+      );
+      console.warn(`⚠️ [Runner] RISK MODE RESTORED: ${safety.riskMode.current} — ${safety.riskMode.reason}`);
     }
 
-    // Also surface last known execution health
+    // Restore daily-loss tracking so the breaker survives a redeploy.
+    if (safety.dailyLoss.trackedUsd > 0) {
+      riskEngine.restoreDailyLoss(safety.dailyLoss.trackedUsd, safety.dailyLoss.lastResetAt);
+      console.warn(`[Runner] Daily-loss restored: $${safety.dailyLoss.trackedUsd.toFixed(2)} tracked`);
+    }
+
+    // Restore execution-health posture: if the last known health was poor, start
+    // cautious (DEFENSIVE) until fresh fills rebuild the in-memory metrics, so we
+    // don't oversize in the first cycles after a restart.
     const execHealth = await loadSystemState<any>('execution_health_summary');
-    if (execHealth?.unhealthyMarketCount > 0) {
-      console.warn(`[Runner] Last known execution health had ${execHealth.unhealthyMarketCount} unhealthy markets (score ${(execHealth.systemHealthScore || 0).toFixed(2)})`);
+    if (execHealth && typeof execHealth.systemHealthScore === 'number' && execHealth.systemHealthScore < 0.55) {
+      riskModeManager.escalateAtLeast(
+        'DEFENSIVE',
+        `Recovered low execution health (${(execHealth.systemHealthScore * 100).toFixed(0)}%) — starting cautious`,
+      );
+      console.warn(`[Runner] Last execution health was low (${(execHealth.systemHealthScore * 100).toFixed(0)}%); starting in DEFENSIVE until metrics rebuild`);
     }
 
-    // Load and log the last rich risk snapshot (very valuable after restarts)
+    // Restore the drawdown high-water mark + posture from the last rich snapshot.
     const lastRisk = await loadRiskSnapshot();
     if (lastRisk) {
       console.log(`[Runner] Recovered risk snapshot from ${lastRisk.snapshotAt}: Exposure $${lastRisk.totalExposureUsd.toFixed(0)} | Mode: ${lastRisk.currentRiskMode} | Health: ${(lastRisk.systemHealthScore * 100).toFixed(1)}%`);
 
-      // Act on recovered bad state (important self-protection behavior)
+      portfolioRiskManager.restoreDrawdownState(lastRisk.currentBankroll, lastRisk.maxDrawdown);
+
       if (lastRisk.systemHealthScore < 0.55 || lastRisk.totalExposureUsd > 1200) {
         console.warn('⚠️ [Runner] STARTUP WARNING: Last known risk state was elevated. Starting with extra caution.');
+        riskModeManager.escalateAtLeast('DEFENSIVE', 'Recovered elevated risk posture');
         await logAudit('startup_elevated_risk_state', {
           snapshot: lastRisk,
           note: 'Runner is starting from a previously stressed risk posture',
@@ -253,6 +312,25 @@ export async function startRunner(intervalMs = 15000) {
   const scheduleNextCycle = async () => {
     if (!status.running) return;
     const cycleStart = Date.now();
+
+    // Refresh the lease each cycle; if we lost it (another instance took over
+    // after we went stale), stop so we never double-trade.
+    try {
+      const { tryAcquireRunnerLock } = await import('@/lib/monitoring/system-state');
+      const stillOwn = await tryAcquireRunnerLock(
+        RUNNER_INSTANCE_ID,
+        RUNNER_LOCK_TTL_MS,
+        process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true',
+      );
+      if (!stillOwn) {
+        console.warn('[Runner] Lost the runner lock to another instance — stopping this loop.');
+        stopRunner();
+        return;
+      }
+    } catch {
+      // transient — keep going; the next cycle will retry the refresh
+    }
+
     if (cycleInFlight) {
       console.warn('[Runner] Skipping cycle — prior run still in flight');
     } else {
@@ -291,6 +369,9 @@ export function stopRunner() {
   status.running = false;
   persistStatus();
   getRunnerBookHub().stop();
+  void import('@/lib/monitoring/system-state')
+    .then((m) => m.releaseRunnerLock(RUNNER_INSTANCE_ID))
+    .catch(() => {});
   console.log('[Runner] Stopped');
   alerts.runnerStopped();
 }
@@ -424,9 +505,30 @@ export async function runOnce() {
     }
   }
 
-  const openPositionsByStrategy = await getOpenPositionsByStrategy(
-    allowedStrategies.map((s) => s.id),
-  );
+  // Live strategies (paperOnly === false) must track their REAL inventory, not
+  // paper fills, so exits (take-profit / stop / max-hold) fire on real holdings.
+  const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  const realStrategyIds = realEnabled
+    ? allowedStrategies.filter((s) => s.paperOnly === false).map((s) => s.id)
+    : [];
+  const paperStrategyIds = allowedStrategies
+    .filter((s) => !realStrategyIds.includes(s.id))
+    .map((s) => s.id);
+
+  const openPositionsByStrategy = await getOpenPositionsByStrategy(paperStrategyIds);
+  if (realStrategyIds.length > 0) {
+    try {
+      const realPositions = await getRealOpenPositionsByStrategy(realStrategyIds);
+      for (const [strategyId, positions] of realPositions) {
+        openPositionsByStrategy.set(strategyId, positions);
+      }
+    } catch (e) {
+      console.warn('[Runner] Failed to load real open positions (non-fatal):', e);
+      for (const id of realStrategyIds) {
+        if (!openPositionsByStrategy.has(id)) openPositionsByStrategy.set(id, []);
+      }
+    }
+  }
 
   const evalKeys = new Set(
     evalMarketsToFetch.map((m) => `${m.platform}:${m.externalId}`),
@@ -673,9 +775,11 @@ export async function runOnce() {
       // spent. Fails open (Infinity) so a transient balance-read error never
       // silently halts live trading.
       let realCashRemaining = Number.POSITIVE_INFINITY;
-      const realBuyQueued =
+      const realSignalQueued =
         process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
-        queuedSignals.some((q) => !q.stratRow.paperOnly && q.signal.action === 'BUY');
+        queuedSignals.some((q) => !q.stratRow.paperOnly);
+      const realBuyQueued =
+        realSignalQueued && queuedSignals.some((q) => q.signal.action === 'BUY');
       if (realBuyQueued) {
         try {
           const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
@@ -687,6 +791,25 @@ export async function runOnce() {
             : 0;
         } catch {
           realCashRemaining = Number.POSITIVE_INFINITY;
+        }
+      }
+
+      // In-flight guard: never submit a second real order on a market that
+      // already has a pending order. Prevents duplicate BUYs (retry spam) and
+      // double SELLs while reconciliation is still confirming the prior order.
+      const pendingRealMarkets = new Set<string>();
+      if (realSignalQueued) {
+        try {
+          const pendingRows = await db.query.realTrades.findMany({
+            where: (t, { eq }) => eq(t.status, 'pending'),
+            columns: { platform: true, marketExternalId: true },
+            limit: 500,
+          });
+          for (const row of pendingRows) {
+            pendingRealMarkets.add(`${row.platform}:${row.marketExternalId}`);
+          }
+        } catch {
+          // Fail open — a read error must not block exits.
         }
       }
 
@@ -706,6 +829,18 @@ export async function runOnce() {
           process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !q.stratRow.paperOnly;
 
         if (isRealAllowed) {
+          const marketKey = `${q.market.platform}:${q.market.externalId}`;
+
+          // Skip if an order is already in flight on this market (dup guard).
+          if (pendingRealMarkets.has(marketKey)) {
+            void logAudit('runner_real_skipped_in_flight', {
+              strategy: q.stratRow.name,
+              market: q.market.externalId,
+              action: q.signal.action,
+            });
+            continue;
+          }
+
           // Skip BUYs we can't fund — keeps the CLOB from rejecting a flood of
           // over-budget orders. Exits (SELL) always proceed; they free cash.
           const estimatedUsd = q.signal.price * q.finalSize;
@@ -732,6 +867,7 @@ export async function runOnce() {
             takeLiquidity: q.isQuickFlip && q.signal.action === 'BUY',
             maxNotionalUsd: q.config.maxSizeUsd,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
+            signalId,
           });
 
           if (result.success) {
@@ -739,6 +875,7 @@ export async function runOnce() {
             if (q.signal.action === 'BUY') {
               realCashRemaining -= estimatedUsd;
             }
+            pendingRealMarkets.add(marketKey);
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
             console.log(
               `[Runner] REAL order posted ${q.market.externalId.slice(0, 12)}… ${q.signal.action} trade=${result.tradeId}`,
@@ -750,7 +887,13 @@ export async function runOnce() {
               price: q.signal.price,
               reason: q.signal.reason,
             });
-          } else if (isRealAllowed) {
+          } else {
+            // Cooldown failed entries so the runner doesn't re-fire the same
+            // rejected BUY every ~4s. Exits are exempt — they must keep retrying
+            // until the position is actually closed.
+            if (!q.isExitSignal) {
+              lastSignalAtByKey.set(q.cooldownKey, Date.now());
+            }
             console.warn(
               `[Runner] REAL order blocked ${q.market.externalId.slice(0, 12)}…: ${result.error ?? 'unknown'}`,
             );

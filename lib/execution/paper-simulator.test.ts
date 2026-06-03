@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { PaperSimulator } from '@/lib/execution/paper-simulator';
+import { executionManager } from '@/lib/execution/execution-manager';
 
 describe('PaperSimulator', () => {
   let sim: PaperSimulator;
@@ -53,5 +54,44 @@ describe('PaperSimulator', () => {
     expect(
       sim.snipe({ market, side: 'BUY', price: 1, size: 10, reason: 'bad', immediate: true }),
     ).toBeNull();
+  });
+
+  describe('hydration safety (skipExecutionTracking)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('replay fills update position but do NOT feed execution-health metrics', () => {
+      const posted = vi.spyOn(executionManager, 'recordOrderPosted');
+      const filled = vi.spyOn(executionManager, 'recordFill');
+
+      const fill = sim.snipe({
+        market,
+        side: 'BUY',
+        price: 0.25,
+        size: 50,
+        reason: 'hydrate from DB',
+        immediate: true,
+        skipExecutionTracking: true,
+      });
+
+      expect(fill).not.toBeNull();
+      expect(sim.getPositions()).toHaveLength(1);
+      expect(posted).not.toHaveBeenCalled();
+      expect(filled).not.toHaveBeenCalled();
+    });
+
+    it('normal fills DO feed execution-health metrics', () => {
+      const posted = vi.spyOn(executionManager, 'recordOrderPosted');
+
+      sim.snipe({
+        market,
+        side: 'BUY',
+        price: 0.25,
+        size: 50,
+        reason: 'live fill',
+        immediate: true,
+      });
+
+      expect(posted).toHaveBeenCalled();
+    });
   });
 });

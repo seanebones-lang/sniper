@@ -199,6 +199,44 @@ describe('PortfolioRiskManager', () => {
     expect(dd).toBeLessThan(0.16);
   });
 
+  it('drawdown rises during a loss and recovers as equity returns (not a one-way latch)', () => {
+    const m = new PortfolioRiskManager({}, 100);
+    const state = () => ({
+      totalExposureUsd: 0,
+      dailyPnl: 0,
+      maxDrawdown: 0,
+      openPositions: 0,
+      categoryExposures: {},
+    });
+
+    m.setCyclePortfolioState(state(), 100);
+    expect(m.getCurrentDrawdownPct()).toBeCloseTo(0);
+
+    // Equity falls to 80 → 20% drawdown from the 100 peak.
+    m.setCyclePortfolioState(state(), 80);
+    expect(m.getCurrentDrawdownPct()).toBeCloseTo(0.2);
+
+    // Equity recovers to 100 → drawdown releases back to 0.
+    m.setCyclePortfolioState(state(), 100);
+    expect(m.getCurrentDrawdownPct()).toBeCloseTo(0);
+  });
+
+  it('restoreDrawdownState lifts the high-water mark so a redeploy does not reset the breaker', () => {
+    const m = new PortfolioRiskManager({}, 100);
+    m.restoreDrawdownState(200, 0.1);
+
+    const state = {
+      totalExposureUsd: 0,
+      dailyPnl: 0,
+      maxDrawdown: 0,
+      openPositions: 0,
+      categoryExposures: {},
+    };
+    // Peak is now 200; equity 180 ⇒ 10% drawdown vs the restored peak.
+    m.setCyclePortfolioState(state, 180);
+    expect(m.getCurrentDrawdownPct()).toBeCloseTo(0.1);
+  });
+
   it('should return zero size when total exposure limit is reached', async () => {
     (riskManager as any).getCurrentPortfolioState = async () => ({
       totalExposureUsd: 2100, // over the 2000 limit

@@ -1,108 +1,129 @@
 # Real Execution Runbook
 
+> **Last updated:** June 3, 2026 (real-position exit lifecycle, single-runner lock, durable state restore, reconciliation/exposure hardening).
+
 ## Overview
-This document describes how to safely operate real money execution on Sniper.
 
-## Enabling Real Execution
-1. Set `SNIPER_ENABLE_REAL_EXECUTION=true` in your environment (Railway secrets, .env, etc).
-2. Ensure the strategy you want to run has `paperOnly: false`.
-3. The runner will only place real orders when **all** of the following are true:
-   - The env flag is set
-   - The strategy allows real trading
-   - Portfolio risk allows the size
-   - ExecutionManager does not recommend WAIT/CANCEL
+How to safely operate real-money execution on Sniper. As of the June 3, 2026 safety pass the real path has a working **exit lifecycle** (real BUYs are no longer trapped), a **single-runner lock**, **durable safety-state restore**, and hardened **reconciliation + exposure** tracking.
 
-## Emergency Kill Switch
-- Set `SNIPER_DISABLE_REAL_EXECUTION=true` in the environment for an immediate hard stop (highest priority, checked first).
-- Runtime disable via `disableRealExecution()` is now durable (persisted in `system_state`).
-- The runner recovers the kill switch state on startup and logs loudly if it was previously disabled.
-- Risk snapshots also capture the full posture (exposure + mode + health + maxDrawdown) at the time of any incident.
+**Current posture:** all strategies are `paperOnly: true`. Do **not** re-arm live until the [soak gate](#soak-gate-before-scaling-capital) passes.
 
-## Reconciliation
-- The runner periodically calls `reconcilePendingRealTrades()`.
-- Kalshi: Actively polls order status via `getOrder`/`getFills` and auto-reconciles confirmed fills using `recordRealFill`.
-- Polymarket: `getOrder` + trade fallback → `recordRealFill`; cancelled orders marked; balance liveness pings.
-- Durable risk snapshots and positions table are the source of truth for exposure after reconciliation.
-- Monitor "real_fill_reconciled", "kalshi_real_fill_confirmed_via_api", and "polymarket_order_no_longer_open" audit events.
+## How real orders flow
 
-## Monitoring & Alerts
-- Telegram alerts are sent for real orders when configured.
-- Check `/health` and the runner status for system health.
-- Watch for high adverse selection or low system health scores.
+1. Runner evaluates markets. For a `paperOnly:false` strategy it reads **real** open positions (`getRealOpenPositionsByStrategy`) into `openByMarket`.
+2. Exit engine runs first on open positions → emits SELL (take-profit / stop / max-hold). Otherwise the strategy may emit a BUY.
+3. `placeRealOrder` runs every gate (below), inserts a `pending` `real_trades` row with `signalId`, and submits:
+   - **Entry (take-liquidity):** Polymarket market **FOK**, `amount` = USD.
+   - **Entry (passive):** limit (post-only when ExecutionManager says so).
+   - **Exit:** forced `TAKE_AGGRESSIVE` → market **FAK**, `amount` = shares. Exits always cross; a missing book cannot strand a position.
+4. `reconcilePendingRealTrades()` (each cycle) polls order/fill status and calls `recordRealFill` → updates `positions`, marks the trade `filled`. The next cycle then sees the open/closed position correctly.
 
-## Best Practices
-- Start very small (e.g., max $25–50 per trade).
-- Use the real execution page confirmation flow.
-- Review all Grok recommendations carefully before applying variants that affect real trading.
-- Have a manual review process for any promoted variants that will run with real capital.
+## Gates (all must pass for a real order)
 
-## Known Limitations (as of June 2026)
-- Kalshi real execution is still partial (client skeleton exists, full flows need more work).
-- Position tracking is basic.
-- No automatic stop-loss or portfolio-level circuit breakers beyond the risk manager yet.
+- `SNIPER_ENABLE_REAL_EXECUTION=true` **and** `SNIPER_DISABLE_REAL_EXECUTION` not set.
+- Durable kill switch not engaged (`system_state.kill_switch`).
+- Strategy `paperOnly: false`.
+- **Single-runner lock** held by this instance.
+- Polymarket geoblock clear + trading ready (balance/approvals) for entries.
+- **Idempotency:** no existing `pending/filled/needs_review` `real_trades` row for the same `signalId`.
+- **In-flight guard:** no `pending` real order already on this market.
+- **Cash guard:** estimated USD ≤ live spendable balance (BUYs only).
+- Sync risk gate (`riskEngine.checkRisk`: per-trade size + daily-loss breaker).
+- Async real-exposure gate (`riskEngine.checkRealExposure`: total + per-market USD caps) — **entries only; exits exempt**.
+- Portfolio sizing (`calculateSafeSize`) allows the size — **exits liquidate the full position, never re-capped**.
+- ExecutionManager does not say WAIT/CANCEL (overridden to TAKE_AGGRESSIVE for exits).
 
-## When Something Goes Wrong
-1. Immediately set the disable env var.
-2. Review recent audit events and runner logs.
-3. Manually reconcile any stuck trades if needed.
-4. Post-mortem and decide whether to roll back variants or strategies.
+## Emergency kill switch
 
-## Daily Operations Checklist
-- [ ] Confirm `SNIPER_ENABLE_REAL_EXECUTION` desired state.
-- [ ] Check runner startup logs for recovered kill switch / risk mode / risk snapshot state.
-- [ ] Review `/health` (now includes lastRiskSnapshot and durable state).
-- [ ] Monitor for elevated maxDrawdown or high exposure in recovered snapshots.
-- [ ] Spot-check `realTrades` for pending/needs_review states.
-- [ ] Review recent "real_fill_reconciled" and platform-specific fill confirmation audits.
-- [ ] (Paper sacred) Never promote a variant to real without full replay + small size first.
+- **Hard stop (deployment):** set `SNIPER_DISABLE_REAL_EXECUTION=true` — highest priority, checked first in `isRealExecutionAllowed`.
+- **Runtime:** `disableRealExecution(reason)` — durable (persisted to `system_state`) and now sends a **critical Telegram alert**.
+- Recovered on startup; runner logs loudly if it was previously disabled.
+- Re-enable: clear the env var (and/or `enableRealExecution()`), then restart.
 
-## Verification Queries & Commands
-Use these to audit real execution health:
+## Single-runner lock
+
+- A `system_state` lease (`runner_lock`) + heartbeat ensures only one loop trades the DB.
+- **Fails closed** when real execution is enabled (refuses to start a second loop); fails open for paper.
+- Refreshed every cycle; if the lease is lost to another instance the loop stops itself.
+- Safe across Railway rolling deploys and accidental replica scaling.
+
+## Durable safety-state restore (on startup)
+
+Restored (not just logged) from `system_state`:
+
+- **Kill switch** — respected immediately.
+- **Risk mode** — re-applied; escalates to **at least DEFENSIVE** if the last execution-health summary was poor.
+- **Daily-loss** tracking — breaker survives a redeploy.
+- **Drawdown high-water mark** — breaker is recoverable, not reset by the deploy.
+
+## Reconciliation & accounting
+
+- Polls both `pending` **and** `needs_review` (cap 200/cycle) so a backlog can drain.
+- `recordRealFill` is **idempotent** (won't double-apply a fill to `positions`) and records an **accurate fee** on the filled notional. Partial FAK fills record the actually-filled quantity.
+- Any trades stuck in `needs_review` raise a **throttled critical alert** (every ≤15 min).
+- `positions` + durable risk snapshots are the source of truth for exposure after reconciliation.
+- Watch audit events: `real_fill_reconciled`, `polymarket_real_fill_confirmed_via_api`, `kalshi_real_fill_confirmed_via_api`, `real_order_skipped_duplicate_signal`, `runner_real_skipped_in_flight`, `real_order_blocked_real_exposure`.
+
+## Monitoring & alerts
+
+Telegram alerts fire for: real order submitted (entry + exit), `needs_review` backlog, kill-switch engaged, and durable-state **persist failures** (so you know if safety state isn't surviving restarts). Also check `/api/real/status`, `/api/health`, and runner status.
+
+## Soak gate (before scaling capital)
+
+Do **not** scale capital on an unproven edge — that is the real risk. Gate order:
+
+1. **Prove edge in paper.** Run an extended paper soak; confirm the strategy is net-positive **after fees + slippage** (`scripts/diagnose-paper-pnl.ts`, dashboard P&L, per-strategy attribution). If it's not green in paper, stop.
+2. **Tiny-live soak ($4–$50).** Flip one strategy to `paperOnly:false` with a small `maxSizeUsd`. Verify, end-to-end, real round trips:
+   - [ ] Real BUY fills and reconciles → appears in `positions`.
+   - [ ] Take-profit, stop-loss, and max-hold each produce a real SELL that fills (watch for `Exit — cross to close position`).
+   - [ ] No retry spam / duplicate orders (check `runner_real_skipped_in_flight`, `real_order_skipped_duplicate_signal`).
+   - [ ] Telegram alerts arrive for fills, exits, `needs_review`, and kill-switch.
+   - [ ] Restart the service mid-soak → confirm risk mode / daily-loss / drawdown / kill-switch restored and no second loop runs.
+3. **Scale in steps**, only after the above is clean. Raise per-strategy `maxSizeUsd` and portfolio caps gradually; keep alerts on.
+
+## When something goes wrong
+
+1. Set `SNIPER_DISABLE_REAL_EXECUTION=true` (or call `disableRealExecution`).
+2. Review recent audit events + runner logs.
+3. Reconcile/flatten any stuck trades (queries below); cross-check on-exchange balances.
+4. Post-mortem; decide whether to roll back strategies/variants.
+
+## Verification queries
 
 ```sql
--- Pending real trades (stuck candidates)
-SELECT id, platform, marketExternalId, side, status, createdAt, txHash
+-- Open / stuck real orders
+SELECT id, platform, market_external_id, side, status, signal_id, created_at, tx_hash
 FROM real_trades
-WHERE status = 'pending'
-ORDER BY createdAt DESC
+WHERE status IN ('pending', 'needs_review')
+ORDER BY created_at DESC
+LIMIT 50;
+
+-- Recent real fills + position snapshot
+SELECT rt.id, rt.platform, rt.market_external_id, rt.side, rt.status, rt.size, rt.price, rt.fee, rt.filled_at
+FROM real_trades rt
+WHERE rt.status = 'filled'
+ORDER BY rt.filled_at DESC
 LIMIT 20;
 
--- Recent real fills + positions snapshot
-SELECT rt.id, rt.platform, rt.marketExternalId, rt.status, rt.size, rt.price, p.sizeShares, p.avgPrice
-FROM real_trades rt
-LEFT JOIN positions p ON p.platform = rt.platform AND p.marketId = (
-  SELECT id FROM markets WHERE externalId = rt.marketExternalId LIMIT 1
-)
-WHERE rt.status = 'filled'
-ORDER BY rt.filledAt DESC
-LIMIT 10;
+-- Current real holdings (exposure truth)
+SELECT platform, market_id, side, size_shares, avg_price
+FROM positions
+WHERE ABS(CAST(size_shares AS double precision)) > 0.01;
 
--- Reconciliation activity
-SELECT action, payload, createdAt
+-- Reconciliation + safety activity
+SELECT actor, action, payload, created_at
 FROM audit_events
-WHERE actor = 'reconciliation' OR action LIKE 'kalshi_recon%'
-ORDER BY createdAt DESC
-LIMIT 30;
+WHERE actor IN ('reconciliation', 'real-executor', 'system-state')
+ORDER BY created_at DESC
+LIMIT 50;
+
+-- Single-runner lease (who holds it)
+SELECT value, updated_at FROM system_state WHERE key = 'runner_lock';
 ```
 
-In code / logs: look for `runner_signal_created` with real context, `real_fill_reconciled`, `kalshi_recon_balance_check`.
+## Known limitations
 
-## Position & Fill Audit Steps
-1. Run the queries above.
-2. Cross-check on-exchange balances (Kalshi dashboard / Polymarket portfolio) vs local `positions` + recent `real_trades`.
-3. For a specific fill: call `recordRealFill({tradeId, filledSize, filledPrice})` manually from a script or admin route if needed (idempotent best-effort).
-4. If drift detected: disable real, manual hedge or accept, then post-mortem.
-
-## Kill Switch & Emergency Procedures
-- **Hard stop (deployment)**: Set `SNIPER_DISABLE_REAL_EXECUTION=true` (highest priority, checked first in `isRealExecutionAllowed`).
-- **Runtime**: Call `disableRealExecution()` (e.g., from health endpoint or REPL in emergency).
-- **Persistent option (future)**: Store a `real_execution_enabled` flag in DB/settings; the in-memory + env are current implementation.
-- After kill switch: runner continues in paper mode for strategies that have `paperOnly=true` (safe default).
-- Re-enable: Remove env var + restart or clear the in-memory flag (add a `resetRealExecution()` helper if operating frequently).
-
-## Known Limitations (Updated June 2026)
-- Kalshi reconciliation is active (order + fills polling) but still needs stronger partial-fill and fee accuracy.
-- Polymarket reconciliation polls order status and user trades; confirm fills via `/api/real/status` + audit `polymarket_real_fill_confirmed_via_api`.
-- MaxDrawdown tracking + circuit breaker exists (peak bankroll based).
-- Durable risk snapshots (exposure, mode, health, maxDrawdown) are now persisted and recovered by the runner.
-- Position math is pragmatic. Live marks and advanced cost-basis tracking are future work.
+- Real path is **not CI-tested with live keys** (decision-level logic is unit-tested).
+- Kalshi real execution remains partial vs Polymarket.
+- Per-market exposure keys differ between `positions` (marketId) and pending `real_trades` (externalId); the exposure ceiling can over-count slightly (conservative — safe).
+- Daily P&L baseline uses cost basis for open positions (slight overnight skew on the daily-loss breaker).

@@ -66,9 +66,12 @@ export class PortfolioRiskManager {
     if (this.peakBankroll < equityUsd) {
       this.peakBankroll = equityUsd;
     }
+    // Current drawdown vs all-time peak. This is recoverable (rises as equity
+    // falls, falls as equity recovers) so the breaker engages during a real
+    // drawdown and releases afterward — not a one-way latch.
     const drawdown =
       this.peakBankroll > 0 ? (this.peakBankroll - equityUsd) / this.peakBankroll : 0;
-    this.currentDrawdownPct = Math.max(this.currentDrawdownPct, drawdown);
+    this.currentDrawdownPct = Math.max(0, drawdown);
     state.maxDrawdown = this.currentDrawdownPct;
 
     if (realizedPnLUsd != null) {
@@ -287,8 +290,31 @@ export class PortfolioRiskManager {
       Math.max(0.5, budget.paperBudgetUsd * 0.85),
     );
     this.currentBankroll = budget.paperBudgetUsd;
-    this.peakBankroll = budget.paperBudgetUsd;
+    // Peak persists across cycles so the drawdown breaker measures drawdown from
+    // the true equity high-water mark, not just the per-cycle budget. (Use
+    // resetDrawdown() to clear it for a genuinely new run.)
+    this.peakBankroll = Math.max(this.peakBankroll, budget.paperBudgetUsd);
+  }
+
+  /** Clear drawdown tracking for a brand-new run/session. */
+  resetDrawdown(startingBankroll?: number) {
+    if (startingBankroll != null && startingBankroll > 0) {
+      this.currentBankroll = startingBankroll;
+      this.peakBankroll = startingBankroll;
+    } else {
+      this.peakBankroll = this.currentBankroll;
+    }
     this.currentDrawdownPct = 0;
+  }
+
+  /** Restore drawdown high-water mark on startup so a redeploy doesn't reset the breaker. */
+  restoreDrawdownState(peakBankroll?: number, currentDrawdownPct?: number) {
+    if (peakBankroll != null && peakBankroll > 0) {
+      this.peakBankroll = Math.max(this.peakBankroll, peakBankroll);
+    }
+    if (currentDrawdownPct != null && currentDrawdownPct > this.currentDrawdownPct) {
+      this.currentDrawdownPct = currentDrawdownPct;
+    }
   }
 
   /** Live Polymarket micro account (~$7): use real CLOB cash, not paper $10k defaults. */
