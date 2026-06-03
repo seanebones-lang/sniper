@@ -89,7 +89,19 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: 'Real execution disabled (kill-switch or env flag)' };
   }
 
-  // === ADVANCED PORTFOLIO RISK MANAGEMENT ===
+  // === REAL-MONEY PER-TRADE CAP — start very small ===
+  // Hard USD ceiling on every real order. Defaults to $1 so live trading starts
+  // tiny; raise via SNIPER_MAX_REAL_USD_PER_TRADE once you've verified real fills.
+  const maxRealUsdPerTrade = Math.max(0, Number(process.env.SNIPER_MAX_REAL_USD_PER_TRADE ?? 1));
+  // Minimum fillable real order. Must stay strictly BELOW the cap: integer share
+  // rounding (floor(cap/price)) lands a $1 target a few cents under $1 at most
+  // prices, so a floor equal to the cap would reject nearly every order.
+  const minRealUsd = Math.min(0.5, maxRealUsdPerTrade);
+
+  // === ADVANCED PORTFOLIO RISK MANAGEMENT (circuit breakers) ===
+  // The order was already Kelly-sized by the runner; here calculateSafeSize acts
+  // as a circuit breaker — it returns allowedSize 0 with a reason when a limit
+  // (daily loss / exposure / drawdown / category) is tripped.
   const safeSizing = await portfolioRiskManager.calculateSafeSize({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
@@ -100,31 +112,34 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     currentPrice: req.price,
   });
 
-  if (safeSizing.allowedSize <= 5) {
-    await logAudit('real_order_blocked_portfolio_risk', { 
-      ...req, 
+  if (safeSizing.allowedSize <= 0) {
+    await logAudit('real_order_blocked_portfolio_risk', {
+      ...req,
       reason: safeSizing.reason,
-      suggestedSize: safeSizing.allowedSize 
+      suggestedSize: safeSizing.allowedSize
     });
     return { success: false, error: `Portfolio risk rejected: ${safeSizing.reason}` };
   }
 
-  // Use the risk-managed USD cap, convert to shares
+  // Use the risk-managed USD cap, then clamp to the per-trade ceiling, convert to shares
   const { usdCapToShares } = await import('@/lib/risk/sizing');
-  const cappedUsd = Math.min(req.price * req.size, safeSizing.allowedSize);
+  const cappedUsd = Math.min(req.price * req.size, safeSizing.allowedSize, maxRealUsdPerTrade);
   const finalSize = usdCapToShares(cappedUsd, req.price, 1);
   const usdValue = req.price * finalSize;
 
-  if (finalSize <= 0 || usdValue < 5) {
+  if (finalSize <= 0 || usdValue < minRealUsd) {
     await logAudit('real_order_blocked_portfolio_risk', {
       ...req,
       reason: 'Size below minimum after USD conversion',
       suggestedSize: safeSizing.allowedSize,
+      maxRealUsdPerTrade,
     });
     return { success: false, error: 'Portfolio risk rejected: size too small' };
   }
 
-  // 1. Legacy risk engine gate (still useful as second layer)
+  // 1. Legacy risk engine gate (still useful as second layer). Align its
+  // per-trade ceiling with the configured real-money cap so it doesn't reject
+  // orders the cap already allows.
   const risk = riskEngine.checkRisk({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
@@ -132,7 +147,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     price: req.price,
     size: finalSize,
     usdValue,
-  });
+  }, { maxUsdPerTrade: Math.max(maxRealUsdPerTrade, minRealUsd) });
 
   if (!risk.allowed) {
     await logAudit('real_order_blocked_risk', { ...req, reason: risk.reason });
