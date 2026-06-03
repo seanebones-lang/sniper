@@ -88,10 +88,57 @@ describe('PortfolioRiskManager', () => {
       currentPrice: 0.6,
     });
 
-    // In current implementation, size can be small due to conservative defaults.
-    // The important thing is that it doesn't hard-block on circuit breakers.
-    expect(result.allowedSize).toBeGreaterThanOrEqual(0);
+    // Regression: a realistic positive edge must produce a tradeable size.
+    // Previously the degenerate Kelly mapping returned 0 here, silently blocking
+    // every entry signal at the runner's `allowedSize < minAllowedUsd` guard.
+    expect(result.allowedSize).toBeGreaterThan(5);
     expect(typeof result.reason).toBe('string');
+  });
+
+  it('sizes monotonically with edge (regression for degenerate Kelly)', async () => {
+    (riskManager as any).getCurrentPortfolioState = async () => ({
+      totalExposureUsd: 0,
+      dailyPnl: 0,
+      maxDrawdown: 0,
+      openPositions: 0,
+      categoryExposures: {},
+    });
+
+    const common = {
+      platform: 'polymarket' as const,
+      marketExternalId: 'mono',
+      side: 'BUY' as const,
+      confidence: 0.7,
+      category: 'other',
+      currentPrice: 0.5,
+    };
+    const small = await riskManager.calculateSafeSize({ ...common, edge: 0.05 });
+    const big = await riskManager.calculateSafeSize({ ...common, edge: 0.2 });
+
+    expect(small.allowedSize).toBeGreaterThan(0);
+    expect(big.allowedSize).toBeGreaterThan(small.allowedSize);
+  });
+
+  it('zero edge still yields zero size', async () => {
+    (riskManager as any).getCurrentPortfolioState = async () => ({
+      totalExposureUsd: 0,
+      dailyPnl: 0,
+      maxDrawdown: 0,
+      openPositions: 0,
+      categoryExposures: {},
+    });
+
+    const result = await riskManager.calculateSafeSize({
+      platform: 'polymarket',
+      marketExternalId: 'no-edge',
+      side: 'BUY',
+      edge: 0,
+      confidence: 0.65,
+      category: 'other',
+      currentPrice: 0.5,
+    });
+
+    expect(result.allowedSize).toBe(0);
   });
 
   it('should respect category exposure limits', async () => {

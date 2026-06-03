@@ -197,10 +197,18 @@ export class PortfolioRiskManager {
       };
     }
 
-    // Kelly sizing (conservative)
-    const winProb = 0.5 + (params.edge / 2); // very rough mapping
-    const kelly = (winProb * (1 + params.edge) - 1) / params.edge;
-    const fractionalKelly = Math.max(0, kelly) * this.params.kellyFraction;
+    // Fractional-Kelly sizing (conservative). `edge` is the expected return
+    // fraction on the position; we stake proportionally to it.
+    //
+    // NOTE: the previous mapping (winProb = 0.5 + edge/2; kelly =
+    // (winProb*(1+edge)-1)/edge) was mathematically degenerate — it only turns
+    // positive for edge > ~0.41 (41%), which no real strategy emits (strategies
+    // emit edges of ~0.03–0.30). The result was allowedSize = 0 for every entry
+    // signal, silently blocking ALL entries (paper and real) at the runner's
+    // `allowedSize < minAllowedUsd` guard. Staking proportional to edge keeps
+    // sizing positive and monotonic; the hard portfolio caps below still bound it.
+    const safeEdge = Math.max(0, params.edge);
+    const fractionalKelly = safeEdge * this.params.kellyFraction;
 
     let kellyUsd = this.currentBankroll * fractionalKelly * params.confidence;
 

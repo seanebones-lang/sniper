@@ -125,6 +125,30 @@ export default function StrategiesPage() {
     load();
   }
 
+  async function toggleExecutionMode(id: string, name: string, paperOnly: boolean) {
+    // Going paper -> live places REAL orders with real money. Require explicit confirmation.
+    if (paperOnly) {
+      const ok = confirm(
+        `Switch "${name}" to LIVE (real-money) execution?\n\n` +
+          'Real orders will be placed when this strategy is active AND ' +
+          'SNIPER_ENABLE_REAL_EXECUTION=true is set server-side (plus valid platform keys).\n\n' +
+          'Use a dedicated low-balance wallet. Continue?',
+      );
+      if (!ok) return;
+    }
+    const res = await fetch(`/api/strategies/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paperOnly: !paperOnly }),
+    });
+    if (res.ok) {
+      toast.success(paperOnly ? `${name} set to LIVE execution` : `${name} set to PAPER execution`);
+    } else {
+      toast.error('Failed to change execution mode');
+    }
+    load();
+  }
+
   async function createStrategy() {
     const config: Record<string, string | number | boolean> = {
       maxSizeUsd: newStrat.maxSizeUsd,
@@ -603,9 +627,19 @@ export default function StrategiesPage() {
                     <span className={`px-2 py-0.5 rounded text-xs ${s.isActive ? 'bg-emerald-950 text-emerald-400' : 'bg-zinc-800 text-zinc-400'}`}>
                       {s.isActive ? 'ACTIVE' : 'PAUSED'}
                     </span>
-                    {s.paperOnly && <span className="ml-2 text-[10px] text-zinc-600">paper</span>}
+                    <span
+                      className={`ml-2 text-[10px] ${s.paperOnly ? 'text-zinc-600' : 'text-amber-400 font-semibold'}`}
+                    >
+                      {s.paperOnly ? 'paper' : 'LIVE'}
+                    </span>
                   </td>
-                  <td className="py-3 px-4 text-right">
+                  <td className="py-3 px-4 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => toggleExecutionMode(s.id, s.name, s.paperOnly)}
+                      className="text-xs underline hover:text-white mr-3 text-zinc-400"
+                    >
+                      {s.paperOnly ? 'Go live' : 'Go paper'}
+                    </button>
                     <button onClick={() => toggleStrategy(s.id, s.isActive)} className="text-xs underline hover:text-white">
                       {s.isActive ? 'Pause' : 'Activate'}
                     </button>

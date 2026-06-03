@@ -795,6 +795,7 @@ export async function runOnce() {
             price: q.signal.price,
             size: q.finalSize,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
+            book: q.book ?? null,
           });
 
           if (result.success) {
