@@ -59,8 +59,43 @@ export default function RealExecutionPage() {
   const [cfMsg, setCfMsg] = useState<string | null>(null);
   const [testOrderMsg, setTestOrderMsg] = useState<string | null>(null);
   const [testOrderRunning, setTestOrderRunning] = useState(false);
+  const [runnerRunning, setRunnerRunning] = useState<boolean | null>(null);
+  const [runnerBusy, setRunnerBusy] = useState(false);
 
   const canEnable = typed.trim().toUpperCase() === 'I ACCEPT FULL RISK AND RESPONSIBILITY';
+
+  async function loadRunner() {
+    try {
+      const res = await fetch('/api/runner');
+      if (res.ok) {
+        const d = (await res.json()) as { running: boolean; executionMode?: string };
+        setRunnerRunning(d.running);
+      }
+    } catch {
+      setRunnerRunning(null);
+    }
+  }
+
+  async function controlRunner(action: 'start' | 'stop') {
+    if (action === 'start' && !confirm('Start the LIVE runner? Real orders will be placed when signals fire.')) {
+      return;
+    }
+    setRunnerBusy(true);
+    try {
+      const res = await fetch('/api/runner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Runner action failed');
+      setRunnerRunning(json.running ?? action === 'start');
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Runner action failed');
+    } finally {
+      setRunnerBusy(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -78,7 +113,11 @@ export default function RealExecutionPage() {
       }
     };
     void load();
-    const id = setInterval(() => void load(), 15_000);
+    void loadRunner();
+    const id = setInterval(() => {
+      void load();
+      void loadRunner();
+    }, 15_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -110,6 +149,35 @@ export default function RealExecutionPage() {
             <li>This tool does <span className="font-bold">not</span> guarantee profits.</li>
           </ul>
         </div>
+
+        {status && (
+          <div className="rounded-xl border border-white/10 bg-zinc-900/50 p-5 space-y-4">
+            <div className="font-semibold text-zinc-200">Live runner (manual only)</div>
+            <p className="text-zinc-400 text-xs">
+              Does not auto-start on deploy. Start when you are ready; stop when you want it off.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className={runnerRunning ? 'text-emerald-400 font-medium' : 'text-zinc-500'}>
+                {runnerRunning == null ? '…' : runnerRunning ? 'RUNNING' : 'STOPPED'}
+              </span>
+              <button
+                type="button"
+                disabled={runnerBusy}
+                onClick={() => void controlRunner(runnerRunning ? 'stop' : 'start')}
+                className={`rounded-full px-4 py-2 text-sm font-medium border disabled:opacity-50 ${
+                  runnerRunning
+                    ? 'border-red-500 text-red-400'
+                    : 'border-emerald-500 text-emerald-400'
+                }`}
+              >
+                {runnerBusy ? '…' : runnerRunning ? 'Stop live runner' : 'Start live runner'}
+              </button>
+              <Link href="/strategies" className="text-xs text-zinc-500 underline hover:text-white">
+                Strategy must be LIVE mode →
+              </Link>
+            </div>
+          </div>
+        )}
 
         {status?.geoblock?.blocked && (
           <div className="rounded-xl border border-amber-600/50 bg-amber-950/40 p-5 space-y-3">

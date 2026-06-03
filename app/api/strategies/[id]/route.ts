@@ -20,7 +20,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   // Allow flipping a strategy between paper and real execution. This is the
   // second half of the real-execution gate in lib/runner/engine.ts; without it
   // a strategy can never leave paperOnly=true and real orders never fire.
-  if (typeof body.paperOnly === 'boolean') updates.paperOnly = body.paperOnly;
+  if (typeof body.paperOnly === 'boolean') {
+    updates.paperOnly = body.paperOnly;
+    // Going live: never leave the loop running from a prior session — user must start explicitly.
+    if (body.paperOnly === false) {
+      const { stopRunner } = await import('@/lib/runner/engine');
+      stopRunner();
+    }
+  }
 
   if (body.config && typeof body.config === 'object') {
     const merged = { ...(existing.config as Record<string, unknown>), ...(body.config as Record<string, unknown>) };

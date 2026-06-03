@@ -146,7 +146,11 @@ export default function StrategiesPage() {
       body: JSON.stringify({ paperOnly: !paperOnly }),
     });
     if (res.ok) {
-      toast.success(paperOnly ? `${name} set to LIVE execution` : `${name} set to PAPER execution`);
+      toast.success(
+        paperOnly
+          ? `${name} set to LIVE — runner stopped. Start it manually when ready.`
+          : `${name} set to PAPER execution`,
+      );
     } else {
       toast.error('Failed to change execution mode');
     }
@@ -308,6 +312,7 @@ export default function StrategiesPage() {
           <li><strong className="text-zinc-300">Create</strong> a strategy below and pick a rule type</li>
           <li><strong className="text-zinc-300">Activate</strong> it in the table (starts paused)</li>
           <li><strong className="text-zinc-300">Start the runner</strong> — scans markets every few seconds; fills are <strong className="text-zinc-300">paper</strong> or <strong className="text-red-400">live</strong> per strategy Mode</li>
+          <li className="text-red-300/90"><strong className="text-red-300">Live mode:</strong> runner never auto-starts on deploy — only when you press Start, and only stops when you press Stop</li>
         </ol>
       </div>
 

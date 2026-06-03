@@ -66,7 +66,7 @@ Synced from `.env.local` via `scripts/railway-sync-env.ts`. Required for live:
 - `POLYMARKET_API_*` or runtime derive
 - `RELAYER_API_KEY`, `RELAYER_API_KEY_ADDRESS`
 - `DATABASE_URL` → `${{Postgres.DATABASE_PUBLIC_URL}}`
-- `SNIPER_AUTO_START_RUNNER=true`
+- `SNIPER_AUTO_START_RUNNER=false` when live — runner is manual start/stop only (code also blocks auto-start when `SNIPER_ENABLE_REAL_EXECUTION=true`)
 - `POLYMARKET_HTTP_PROXY` — **required on Railway until egress is non-US**
 
 Do **not** set `SNIPER_SKIP_GEOBLOCK_CHECK` in production.
