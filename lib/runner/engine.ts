@@ -16,6 +16,7 @@ import type { StrategyConfig } from '@/lib/strategies/types';
 import { resolveStrategyConfigForType, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { persistPaperFill } from '@/lib/paper/record-fill';
+import { countRunnerSessionStats } from '@/lib/runner/session-counters';
 import { getRealOpenPositionsByStrategy } from '@/lib/execution/real-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
@@ -180,6 +181,14 @@ export function resetRunnerSessionCounters() {
   persistStatus();
 }
 
+/** Align in-memory counters with DB for the current paper run window. */
+async function syncRunnerSessionCountersFromDb() {
+  const { signals: sigCount, fills: fillCount } = await countRunnerSessionStats();
+  status.signalsGenerated = sigCount;
+  status.fillsExecuted = fillCount;
+  persistStatus();
+}
+
 export async function startRunner(intervalMs = 15000) {
   syncStatusFromStore();
   if (status.running) return;
@@ -212,6 +221,7 @@ export async function startRunner(intervalMs = 15000) {
   const { applyPaperBudgetToRiskManager } = await import('@/lib/paper/portfolio');
   await applyPaperBudgetToRiskManager();
   await hydratePaperSimulatorFromDb();
+  await syncRunnerSessionCountersFromDb();
 
   status.running = true;
   persistStatus();
@@ -946,8 +956,10 @@ export async function runOnce() {
   }
 
   status.lastRun = new Date().toISOString();
-  status.signalsGenerated += signalsThisRun;
-  status.fillsExecuted += fillsThisRun;
+  if (signalsThisRun === 0 && marketsEvaluatedThisCycle > 0 && !skipReason) {
+    skipReason = `No entries matched price/spread/depth filters (${marketsEvaluatedThisCycle} markets checked)`;
+  }
+  await syncRunnerSessionCountersFromDb();
   status.lastCycle = {
     at: status.lastRun,
     marketPoolSize: markets.length,

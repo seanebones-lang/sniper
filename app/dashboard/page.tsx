@@ -185,15 +185,25 @@ export default function Dashboard() {
         <LiveEquityCard status={liveStatus} loading={loading && !liveStatus} />
       )}
 
-      {runner?.executionMode !== 'live' && (
-        <PaperPnlIndicator
-          pnl={portfolio?.pnl ?? null}
-          loading={!portfolio && !portfolioError}
-          error={portfolioError}
-          variant="hero"
-          className="mb-6"
-        />
+      {portfolio?.live?.armed && runner?.executionMode !== 'live' && (
+        <div className="card border-red-500/30 bg-red-950/15 mb-6 text-sm">
+          <div className="text-red-300 font-medium mb-1">Live Polymarket wallet (real money)</div>
+          <div className="font-mono text-xl text-white">
+            {portfolio.live.polymarketUsdcBalance != null
+              ? `$${portfolio.live.polymarketUsdcBalance.toFixed(2)}`
+              : '—'}
+            <span className="text-xs text-zinc-500 ml-2">CLOB cash · separate from paper simulation below</span>
+          </div>
+        </div>
       )}
+
+      <PaperPnlIndicator
+        pnl={portfolio?.pnl ?? null}
+        loading={!portfolio && !portfolioError}
+        error={portfolioError}
+        variant="hero"
+        className="mb-6"
+      />
 
       <div className="mb-8">
         <LivePaperPortfolio pollMs={0} externalData={portfolio} />
@@ -229,10 +239,18 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card">
-          <div className="text-xs text-zinc-500 mb-1">Paper Fills (3d)</div>
+          <div className="text-xs text-zinc-500 mb-1">Paper bankroll</div>
           <div className="text-lg font-semibold font-mono">
-            {loading ? '…' : (health?.recentPerformance?.totalPaperFills ?? 0)}
+            {loading ? '…' : `$${(portfolio?.budget.paperBudgetUsd ?? 0).toLocaleString()}`}
           </div>
+          <div className="text-[10px] text-zinc-600 mt-1">Simulation budget · same source as Zen &amp; /paper</div>
+        </div>
+        <div className="card">
+          <div className="text-xs text-zinc-500 mb-1">Paper fills (this run)</div>
+          <div className="text-lg font-semibold font-mono">
+            {loading ? '…' : (portfolio?.pnl?.fillsInRun ?? portfolio?.runSession?.fillsInRun ?? 0)}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-1">From paper_trades DB · not in-memory counters</div>
         </div>
         <div className="card">
           <div className="text-xs text-zinc-500 mb-1">Execution Health</div>

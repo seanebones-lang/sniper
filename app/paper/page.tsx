@@ -286,6 +286,19 @@ export default function PaperPortfolioPage() {
 
       {data && (
         <>
+          <div className="card border-emerald-500/30 bg-emerald-950/15 mb-6">
+            <div className="text-xs text-zinc-500 uppercase tracking-wide mb-1">Paper simulation bankroll</div>
+            <div className="text-3xl font-mono font-semibold text-emerald-300">
+              ${data.budget.paperBudgetUsd.toLocaleString()}
+            </div>
+            <p className="text-xs text-zinc-500 mt-2">
+              Total equity ${data.budget.totalEquityUsd.toFixed(2)} · max exposure ${data.budget.maxExposureUsd.toLocaleString()}
+              {data.budget.paperBudgetUsd < 100 && (
+                <span className="text-amber-400"> · This looks like a micro-test budget — use &quot;Reset defaults&quot; below for $10k paper simulation.</span>
+              )}
+            </p>
+          </div>
+
           {/* Runner status */}
           <div className={`card mb-6 ${stale ? 'border-amber-500/40' : ''}`}>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
@@ -306,12 +319,8 @@ export default function PaperPortfolioPage() {
                 </span>
               </div>
               <div>
-                <span className="text-zinc-500">Session signals / fills </span>
-                <span className="font-mono">{runner?.signalsGenerated} / {runner?.fillsExecuted}</span>
-              </div>
-              <div>
-                <span className="text-zinc-500">DB fills (today / all) </span>
-                <span className="font-mono">{runner?.dbPaperFillsToday} / {runner?.dbPaperFillsTotal}</span>
+                <span className="text-zinc-500">Session signals / DB fills </span>
+                <span className="font-mono">{runner?.signalsGenerated} / {runner?.dbPaperFillsTotal}</span>
               </div>
             </div>
             {!runner?.running && (runner?.activeStrategies ?? 0) > 0 && (
@@ -373,9 +382,24 @@ export default function PaperPortfolioPage() {
               >
                 {savingBudget ? 'Saving…' : 'Save budget'}
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBudgetForm({
+                    paperBudgetUsd: 10000,
+                    maxExposureUsd: 2000,
+                    maxDailyLossUsd: 150,
+                  });
+                }}
+                className="ml-3 rounded-full border border-white/20 px-5 py-2 text-sm hover:bg-white/5"
+              >
+                Reset defaults ($10k)
+              </button>
               <p className="text-xs text-zinc-500 mt-3">
-                Caps paper simulation sizing (saved to database). Live Polymarket orders use your real ~$7
-                wallet, not this number.
+                Caps paper simulation sizing (saved to database).
+                {data.live?.armed && data.live.polymarketUsdcBalance != null && (
+                  <> Live Polymarket wallet is ${data.live.polymarketUsdcBalance.toFixed(2)} — separate from this paper bankroll.</>
+                )}
               </p>
             </div>
 

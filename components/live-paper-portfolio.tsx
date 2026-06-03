@@ -159,7 +159,13 @@ export function LivePaperPortfolio({
       {data && (
         <>
           {/* Portfolio summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5 text-sm">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-5 text-sm">
+            <div>
+              <div className="text-xs text-zinc-500 mb-0.5">Paper bankroll</div>
+              <div className="font-mono font-semibold text-lg text-zinc-100">
+                ${data.budget.paperBudgetUsd.toLocaleString()}
+              </div>
+            </div>
             <div>
               <div className="text-xs text-zinc-500 mb-0.5">Net P&amp;L</div>
               <div className={`font-mono font-semibold text-lg ${data.budget.netPnlUsd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -292,7 +298,10 @@ export function LivePaperPortfolio({
 
           {data.runner.running && (
             <p className="text-xs text-zinc-500 mt-4">
-              Runner active · session {data.runner.signalsGenerated} signals / {data.runner.fillsExecuted} fills
+              Runner active · this run {data.runner.dbPaperFillsTotal} fills in DB
+              {data.runSession?.startedAt && (
+                <> · since {new Date(data.runSession.startedAt).toLocaleTimeString()}</>
+              )}
               {data.runner.lastRun && (
                 <> · last cycle {new Date(data.runner.lastRun).toLocaleTimeString()}</>
               )}

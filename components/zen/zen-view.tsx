@@ -533,29 +533,28 @@ function StatOrb({
 export function ZenView() {
   const { data, error } = useZenData(4000);
 
-  const equity = data?.liveEquityUsd ?? 1000;
+  const loading = !data && !error;
+  const equity = data?.liveEquityUsd ?? 0;
   const netPnl = data?.netPnlUsd ?? 0;
-  const starting = data?.startingBudgetUsd ?? 1000;
+  const starting = data?.startingBudgetUsd ?? 0;
   const positive = netPnl >= 0;
   const pct = starting > 0 ? (netPnl / starting) * 100 : 0;
 
-  const animEquity = useAnimatedValue(equity, 0.06);
-  const animPnl = useAnimatedValue(netPnl, 0.07);
-  const animPct = useAnimatedValue(pct, 0.07);
+  const animEquity = useAnimatedValue(data ? equity : 0, 0.06);
+  const animPnl = useAnimatedValue(data ? netPnl : 0, 0.07);
+  const animPct = useAnimatedValue(data ? pct : 0, 0.07);
 
-  // Stable timestamp for the placeholder point shown before data loads. Captured
-  // once on mount so we don't call Date.now() during render
-  // (react-hooks: "Cannot call impure function during render").
-  const [fallbackT] = useState(() => Date.now());
 
-  const points = data?.points ?? [{ t: fallbackT, equity: starting, pnl: 0 }];
+  const points = data?.points ?? [];
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-[#030305] text-zinc-100 select-none">
       <AmbientField positive={positive} />
-      <div className="absolute inset-0 opacity-90">
-        <EquityRiver points={points} startingBudget={starting} positive={positive} />
-      </div>
+      {points.length >= 2 && (
+        <div className="absolute inset-0 opacity-90">
+          <EquityRiver points={points} startingBudget={starting} positive={positive} />
+        </div>
+      )}
       <GrowthArc pct={animPct} positive={positive} />
       <MomentumBars points={points} positive={positive} />
       <PulseRing positive={positive} />
@@ -573,10 +572,14 @@ export function ZenView() {
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center px-6 pb-24">
+          {loading && (
+            <p className="text-sm text-zinc-500 mb-8 font-mono animate-pulse">Loading paper equity…</p>
+          )}
           {error && !data && (
             <p className="text-sm text-red-400/80 mb-8 font-mono">{error}</p>
           )}
 
+          {data && (
           <div className="text-center mb-2">
             <div className="text-xs uppercase tracking-[0.4em] text-zinc-500 mb-4 zen-fade-in">
               total equity
@@ -601,6 +604,7 @@ export function ZenView() {
               </span>
             </div>
           </div>
+          )}
         </main>
 
         <footer className="relative px-6 pb-10">
