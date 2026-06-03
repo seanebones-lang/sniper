@@ -13,7 +13,7 @@ describe('normalizeStrategyConfigForType', () => {
     });
     expect(normalized.tradingGoal).toBe('quick-flip');
     expect(normalized.tradingStyle).toBe('aggressive');
-    expect(normalized.minEntryPrice).toBe(0.1);
+    expect(normalized.minEntryPrice).toBe(0.001);
     expect(normalized.liveMarketsOnly).toBe(true);
   });
 
@@ -25,7 +25,7 @@ describe('normalizeStrategyConfigForType', () => {
     });
     expect(resolved.tradingGoal).toBe('quick-flip');
     expect(resolved.aggressiveEntryFills).toBe(true);
-    expect(resolved.minEntryPrice).toBe(0.1);
+    expect(resolved.minEntryPrice).toBe(0.001);
     expect(resolved.targetProfitMultiple).toBe(2.5);
   });
 
