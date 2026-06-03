@@ -10,12 +10,15 @@ interface CurvePoint {
 }
 
 interface ZenData {
+  mode: 'paper' | 'live' | 'mixed';
+  isLive: boolean;
   startingBudgetUsd: number;
   liveEquityUsd: number;
   netPnlUsd: number;
   realizedPnLUsd: number;
   unrealizedPnLUsd: number;
   fillCount: number;
+  clobCashUsd?: number | null;
   points: CurvePoint[];
 }
 
@@ -45,7 +48,7 @@ function useZenData(pollMs = 4000) {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/paper/equity-curve', { cache: 'no-store' });
+      const res = await fetch('/api/zen/equity-curve', { cache: 'no-store' });
       if (!res.ok) throw new Error(await res.text());
       const json = (await res.json()) as ZenData;
       setData(json);
@@ -534,6 +537,7 @@ export function ZenView() {
   const { data, error } = useZenData(4000);
 
   const loading = !data && !error;
+  const isLive = data?.isLive === true;
   const equity = data?.liveEquityUsd ?? 0;
   const netPnl = data?.netPnlUsd ?? 0;
   const starting = data?.startingBudgetUsd ?? 0;
@@ -544,11 +548,19 @@ export function ZenView() {
   const animPnl = useAnimatedValue(data ? netPnl : 0, 0.07);
   const animPct = useAnimatedValue(data ? pct : 0, 0.07);
 
-
   const points = data?.points ?? [];
+  const modeLabel = isLive
+    ? data?.mode === 'mixed'
+      ? 'live + paper'
+      : 'live equity'
+    : 'paper equity';
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#030305] text-zinc-100 select-none">
+    <div
+      className={`fixed inset-0 z-50 overflow-hidden text-zinc-100 select-none ${
+        isLive ? 'bg-[#0a0304]' : 'bg-[#030305]'
+      }`}
+    >
       <AmbientField positive={positive} />
       {points.length >= 2 && (
         <div className="absolute inset-0 opacity-90">
@@ -567,13 +579,22 @@ export function ZenView() {
           >
             ← exit zen
           </Link>
-          <div className="text-[11px] uppercase tracking-[0.35em] text-zinc-600">paper equity</div>
+          <div
+            className={`text-[11px] uppercase tracking-[0.35em] ${
+              isLive ? 'text-red-400/90 font-medium' : 'text-zinc-600'
+            }`}
+          >
+            {isLive && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse mr-2 align-middle" />
+            )}
+            {modeLabel}
+          </div>
           <div className="w-16" />
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center px-6 pb-24">
           {loading && (
-            <p className="text-sm text-zinc-500 mb-8 font-mono animate-pulse">Loading paper equity…</p>
+            <p className="text-sm text-zinc-500 mb-8 font-mono animate-pulse">Loading equity…</p>
           )}
           {error && !data && (
             <p className="text-sm text-red-400/80 mb-8 font-mono">{error}</p>
@@ -582,11 +603,17 @@ export function ZenView() {
           {data && (
           <div className="text-center mb-2">
             <div className="text-xs uppercase tracking-[0.4em] text-zinc-500 mb-4 zen-fade-in">
-              total equity
+              {isLive ? 'polymarket equity' : 'total equity'}
             </div>
             <div
               className={`font-mono font-light tabular-nums tracking-tight zen-hero-number ${
-                positive ? 'text-emerald-300' : 'text-red-300'
+                isLive
+                  ? positive
+                    ? 'text-emerald-300'
+                    : 'text-red-300'
+                  : positive
+                    ? 'text-emerald-300'
+                    : 'text-red-300'
               }`}
             >
               ${formatUsd(animEquity)}
@@ -608,7 +635,13 @@ export function ZenView() {
         </main>
 
         <footer className="relative px-6 pb-10">
-          <div className="mx-auto max-w-3xl grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+          <div
+            className={`mx-auto max-w-3xl grid gap-3 sm:gap-4 ${
+              isLive && data?.clobCashUsd != null
+                ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+                : 'grid-cols-2 sm:grid-cols-4'
+            }`}
+          >
             <StatOrb
               label="Realized"
               value={formatSignedUsd(data?.realizedPnLUsd ?? 0)}
@@ -621,21 +654,31 @@ export function ZenView() {
               positive={(data?.unrealizedPnLUsd ?? 0) >= 0}
               delay="120ms"
             />
+            {isLive && data?.clobCashUsd != null && (
+              <StatOrb
+                label="CLOB cash"
+                value={`$${formatUsd(data.clobCashUsd)}`}
+                sub="spendable USDC"
+                delay="240ms"
+              />
+            )}
             <StatOrb
-              label="Starting"
-              value={`$${formatUsd(starting, 0)}`}
-              sub="paper budget"
+              label={isLive ? 'Session start' : 'Starting'}
+              value={`$${formatUsd(starting, isLive ? 2 : 0)}`}
+              sub={isLive ? 'inferred deposit' : 'paper budget'}
               delay="240ms"
             />
             <StatOrb
               label="Fills"
               value={(data?.fillCount ?? 0).toLocaleString()}
-              sub="this run"
+              sub={isLive ? 'real trades' : 'this run'}
               delay="360ms"
             />
           </div>
           <p className="text-center text-[10px] text-zinc-700 mt-6 tracking-wide">
-            Live mark-to-market · updates every few seconds
+            {isLive
+              ? 'Real Polymarket wallet + open positions · updates every few seconds'
+              : 'Paper mark-to-market · updates every few seconds'}
           </p>
         </footer>
       </div>

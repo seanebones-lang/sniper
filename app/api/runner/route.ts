@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
-import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
-import { db, paperTrades, strategies } from '@/lib/db';
-import { eq } from 'drizzle-orm';
+import { db, paperTrades } from '@/lib/db';
+import { getRunnerExecutionMode } from '@/lib/runner/execution-mode';
 import { gte, count, and } from 'drizzle-orm';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 import { getPaperPortfolio } from '@/lib/paper/portfolio';
@@ -29,18 +28,6 @@ async function cheapRunnerCounts() {
     dbPaperFillsToday: todayCountRow[0]?.count ?? 0,
     activeStrategies: stratRows.filter((s) => s.isActive).length,
   };
-}
-
-async function getRunnerExecutionMode(): Promise<'paper' | 'live' | 'mixed'> {
-  const active = await db.query.strategies.findMany({
-    where: eq(strategies.isActive, true),
-    columns: { paperOnly: true },
-  });
-  const realAllowed = await isRealExecutionAllowed();
-  const liveCount = active.filter((s) => !s.paperOnly).length;
-  if (!realAllowed || liveCount === 0) return 'paper';
-  if (liveCount >= active.length) return 'live';
-  return 'mixed';
 }
 
 async function runnerPayload(includePnl: boolean) {
