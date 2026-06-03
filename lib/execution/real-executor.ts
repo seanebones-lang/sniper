@@ -13,7 +13,7 @@ import { db, realTrades, positions, auditEvents } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
-import type { Market } from '@/lib/types';
+import type { Market, OrderBook } from '@/lib/types';
 import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
 import { getKalshiTradingClient } from '@/lib/clients/kalshi-trading';
 import { executionManager } from './execution-manager';
@@ -74,6 +74,10 @@ export interface RealOrderRequest {
   price: number;
   size: number;
   reason: string;
+  /** Live order book for the market. Required for a sensible execution decision —
+   *  without it the execution manager returns WAIT ("insufficient book depth")
+   *  and the order is cancelled. */
+  book?: OrderBook | null;
 }
 
 /**
@@ -156,7 +160,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   // In a real implementation we would pass the live book here
   const decision = executionManager.decideExecution(
     { action: req.side, price: req.price, size: finalSize, reason: req.reason },
-    null, // book would come from live data
+    req.book ?? null, // live book from the runner; null → execution manager WAITs
     {
       regime: 'normal', // should come from recent features
       recentImbalance: 0.1,
