@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, AlertTriangle, RefreshCw } from 'lucide-react';
+import { jsonAuthHeaders, getStoredApiSecret } from '@/lib/client/api-secret';
 
 interface RealStatusPayload {
   allowed: boolean;
@@ -83,19 +84,6 @@ export default function RealExecutionPage() {
   const [runnerRunning, setRunnerRunning] = useState<boolean | null>(null);
   const [runnerBusy, setRunnerBusy] = useState(false);
   const [ops, setOps] = useState<LiveOpsSnapshot | null>(null);
-  const [apiSecret, setApiSecret] = useState('');
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = sessionStorage.getItem('sniper_api_secret');
-    if (stored) setApiSecret(stored);
-  }, []);
-
-  function authHeaders(): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiSecret.trim()) h.Authorization = `Bearer ${apiSecret.trim()}`;
-    return h;
-  }
 
   const canEnable = typed.trim().toUpperCase() === 'I ACCEPT FULL RISK AND RESPONSIBILITY';
 
@@ -119,7 +107,7 @@ export default function RealExecutionPage() {
     try {
       const res = await fetch('/api/runner', {
         method: 'POST',
-        headers: authHeaders(),
+        headers: jsonAuthHeaders(),
         body: JSON.stringify({ action }),
       });
       const json = await res.json().catch(() => ({}));
@@ -193,21 +181,15 @@ export default function RealExecutionPage() {
 
         {status && (
           <div className="rounded-xl border border-white/10 bg-zinc-900/50 p-5 space-y-3">
-            <div className="font-semibold text-zinc-200 text-sm">API secret (production)</div>
+            <div className="font-semibold text-zinc-200 text-sm">API secret</div>
             <p className="text-zinc-500 text-xs">
-              If <code>SNIPER_API_SECRET</code> is set on the server, paste it here for runner and setup actions
-              (stored in this browser session only).
+              {getStoredApiSecret()
+                ? 'Bearer token configured in this session (Settings → API secret).'
+                : 'If SNIPER_API_SECRET is set on the server, configure it under Settings before using runner/setup actions.'}
             </p>
-            <input
-              type="password"
-              value={apiSecret}
-              onChange={(e) => {
-                setApiSecret(e.target.value);
-                sessionStorage.setItem('sniper_api_secret', e.target.value);
-              }}
-              placeholder="Bearer token (optional locally)"
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm font-mono"
-            />
+            <Link href="/settings" className="text-xs text-violet-400 underline hover:text-white">
+              Open Settings →
+            </Link>
           </div>
         )}
 
@@ -273,7 +255,7 @@ export default function RealExecutionPage() {
                   try {
                     const res = await fetch('/api/real/proxy', {
                       method: 'POST',
-                      headers: authHeaders(),
+                      headers: jsonAuthHeaders(),
                       body: JSON.stringify({ url: proxyUrl.trim() }),
                     });
                     const data = (await res.json()) as { message?: string; error?: string };
@@ -328,7 +310,7 @@ export default function RealExecutionPage() {
                 try {
                   const res = await fetch('/api/real/cloudflare', {
                     method: 'POST',
-                    headers: authHeaders(),
+                    headers: jsonAuthHeaders(),
                     body: JSON.stringify({
                       cfClearance: cfClearance.trim(),
                       userAgent: userAgent.trim(),
@@ -361,7 +343,7 @@ export default function RealExecutionPage() {
                 setTestOrderRunning(true);
                 setTestOrderMsg(null);
                 try {
-                  const res = await fetch('/api/real/test-order', { method: 'POST', headers: authHeaders() });
+                  const res = await fetch('/api/real/test-order', { method: 'POST', headers: jsonAuthHeaders() });
                   const data = (await res.json()) as { tradingOk?: boolean; hint?: string; error?: string };
                   setTestOrderMsg(data.hint ?? data.error ?? (data.tradingOk ? 'Trading OK' : 'Still blocked'));
                 } finally {
@@ -515,7 +497,7 @@ export default function RealExecutionPage() {
                 onClick={async () => {
                   setLoading(true);
                   try {
-                    await fetch('/api/real/setup', { method: 'POST', headers: authHeaders() });
+                    await fetch('/api/real/setup', { method: 'POST', headers: jsonAuthHeaders() });
                     const res = await fetch('/api/real/status');
                     if (res.ok) setStatus((await res.json()) as RealStatusPayload);
                   } finally {

@@ -13,6 +13,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { jsonAuthHeaders } from '@/lib/client/api-secret';
 import { PaperPnlIndicator } from '@/components/paper-pnl-indicator';
 
 interface PortfolioData {
@@ -158,7 +159,7 @@ export default function PaperPortfolioPage() {
   async function controlRunner(action: 'start' | 'stop') {
     const res = await fetch('/api/runner', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({ action }),
     });
     const json = await res.json().catch(() => ({}));

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, Play, Square, Plus, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { availableStrategies } from '@/lib/strategies';
+import { jsonAuthHeaders } from '@/lib/client/api-secret';
 import {
   TRADING_STYLE_OPTIONS,
   TRADING_GOAL_OPTIONS,
@@ -123,7 +124,7 @@ export default function StrategiesPage() {
   async function toggleStrategy(id: string, isActive: boolean) {
     await fetch(`/api/strategies/${id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({ isActive: !isActive }),
     });
     load();
@@ -142,7 +143,7 @@ export default function StrategiesPage() {
     }
     const res = await fetch(`/api/strategies/${id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({ paperOnly: !paperOnly }),
     });
     if (res.ok) {
@@ -183,7 +184,7 @@ export default function StrategiesPage() {
 
     await fetch('/api/strategies', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({
         name: newStrat.name,
         type: newStrat.type,
@@ -222,7 +223,7 @@ export default function StrategiesPage() {
   async function controlRunner(action: 'start' | 'stop') {
     const res = await fetch('/api/runner', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({ action }),
     });
     const json = await res.json().catch(() => ({}));
