@@ -23,10 +23,21 @@ export async function getStrategyPerformance(days = 7) {
   const runStart = await getPaperRunStartedAt();
   const paperSince = runStart && runStart > since ? runStart : since;
 
+  // Only pull the columns this function actually reads — full signal/trade rows
+  // over a multi-day window are large and dominate the runtime of this query.
   const [recentSignals, recentPaper, recentReal, stratRows] = await Promise.all([
-    db.query.signals.findMany({ where: gte(signals.createdAt, since) }),
-    db.query.paperTrades.findMany({ where: gte(paperTrades.filledAt, paperSince) }),
-    db.query.realTrades.findMany({ where: gte(realTrades.createdAt, since) }),
+    db.query.signals.findMany({
+      where: gte(signals.createdAt, since),
+      columns: { strategyId: true },
+    }),
+    db.query.paperTrades.findMany({
+      where: gte(paperTrades.filledAt, paperSince),
+      columns: { signalId: true, size: true, price: true },
+    }),
+    db.query.realTrades.findMany({
+      where: gte(realTrades.createdAt, since),
+      columns: { id: true },
+    }),
     db.query.strategies.findMany(),
   ]);
 

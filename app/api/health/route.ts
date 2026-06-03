@@ -12,12 +12,14 @@ import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { getRunnerStatus } from '@/lib/runner/engine';
 const DEPLOY_MARKER = 'chunk-fix-resilient-health-v1';
 
-// Dashboard analytics are expensive; cache briefly so rapid dashboard polls
-// don't re-run them, and cap each computation with a hard timeout so a slow DB
-// never hangs the endpoint.
-const HEALTH_CACHE_TTL_MS = 5_000;
-const HEALTH_TIMEOUT_MS = 6_000;
+// Dashboard analytics are expensive, so this endpoint is stale-while-revalidate:
+// a cached payload younger than FRESH_MS is served immediately; an older one is
+// served while a background recompute runs; with no cache yet we await the first
+// compute up to FIRST_COMPUTE_TIMEOUT_MS and otherwise return 200 + degraded.
+const FRESH_MS = 30_000;
+const FIRST_COMPUTE_TIMEOUT_MS = 20_000;
 let healthCache: { at: number; payload: Record<string, unknown> } | null = null;
+let inflight: Promise<Record<string, unknown>> | null = null;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -27,32 +29,50 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
+function refresh(base: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!inflight) {
+    inflight = computeHealth(base)
+      .then((payload) => {
+        healthCache = { at: Date.now(), payload };
+        return payload;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+  }
+  return inflight;
+}
+
 export async function GET() {
-  // Deploy healthcheck must stay green as long as the process is alive. Heavy
-  // analytics below can fail (e.g. transient DB) without taking the service
-  // down, so everything is wrapped — a partial failure returns 200 + degraded.
   const base = {
     ok: true,
     deployMarker: DEPLOY_MARKER,
     timestamp: new Date().toISOString(),
   };
 
-  if (healthCache && Date.now() - healthCache.at < HEALTH_CACHE_TTL_MS) {
+  const age = healthCache ? Date.now() - healthCache.at : Infinity;
+
+  if (healthCache && age < FRESH_MS) {
     return NextResponse.json({ ...healthCache.payload, cached: true });
   }
 
-  return withTimeout(computeHealth(base), HEALTH_TIMEOUT_MS, 'health analytics')
-    .then((payload) => {
-      healthCache = { at: Date.now(), payload };
-      return NextResponse.json(payload);
-    })
-    .catch((err) =>
-      NextResponse.json({
-        ...base,
-        degraded: true,
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    );
+  if (healthCache) {
+    // Stale: revalidate in the background, serve the last good payload now.
+    void refresh(base).catch(() => {});
+    return NextResponse.json({ ...healthCache.payload, stale: true });
+  }
+
+  // No cache yet — wait for the first compute, but never hang the endpoint.
+  try {
+    const payload = await withTimeout(refresh(base), FIRST_COMPUTE_TIMEOUT_MS, 'health analytics');
+    return NextResponse.json(payload);
+  } catch (err) {
+    return NextResponse.json({
+      ...base,
+      degraded: true,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function computeHealth(base: Record<string, unknown>): Promise<Record<string, unknown>> {
