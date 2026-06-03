@@ -10,7 +10,18 @@ import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/tem
 import { loadRiskSnapshot, loadSystemState } from '@/lib/monitoring/system-state';
 import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { getRunnerStatus } from '@/lib/runner/engine';
+const DEPLOY_MARKER = 'chunk-fix-resilient-health-v1';
+
 export async function GET() {
+  // Deploy healthcheck must stay green as long as the process is alive. Heavy
+  // analytics below can fail (e.g. transient DB) without taking the service
+  // down, so everything is wrapped — a partial failure returns 200 + degraded.
+  const base = {
+    ok: true,
+    deployMarker: DEPLOY_MARKER,
+    timestamp: new Date().toISOString(),
+  };
+  try {
   const performance = await getStrategyPerformance(3);
   const runnerStatus = getRunnerStatus();
   const recentAudits = await db.query.auditEvents.findMany({
@@ -106,5 +117,12 @@ export async function GET() {
     })),
   };
 
-  return NextResponse.json(health);
+  return NextResponse.json({ ...base, ...health });
+  } catch (err) {
+    return NextResponse.json({
+      ...base,
+      degraded: true,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
