@@ -696,7 +696,6 @@ export async function runOnce() {
             takeLiquidity: q.isQuickFlip && q.signal.action === 'BUY',
             maxNotionalUsd: q.config.maxSizeUsd,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
-            book: q.book ?? null,
           });
 
           if (result.success) {

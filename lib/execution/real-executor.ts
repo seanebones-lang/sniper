@@ -243,9 +243,10 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     }
   }
 
-  // 1. Legacy risk engine gate (still useful as second layer). Align its
-  // per-trade ceiling with the configured real-money cap so it doesn't reject
-  // orders the cap already allows.
+  // 1. Legacy risk engine gate (still useful as second layer for daily-loss /
+  // exposure breakers). Align its per-trade ceiling with the size we just
+  // approved above so it doesn't reject an order the bankroll-aware sizing
+  // already allowed (the real ceiling is enforced by minOrderUsd + strategy cap).
   const risk = riskEngine.checkRisk({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
@@ -253,7 +254,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     price: req.price,
     size: finalSize,
     usdValue,
-  }, { maxUsdPerTrade: Math.max(maxRealUsdPerTrade, minRealUsd) });
+  }, { maxUsdPerTrade: Math.max(usdValue, minOrderUsd) });
 
   if (!risk.allowed) {
     await logAudit('real_order_blocked_risk', { ...req, reason: risk.reason });
