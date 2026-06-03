@@ -12,6 +12,21 @@ import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { getRunnerStatus } from '@/lib/runner/engine';
 const DEPLOY_MARKER = 'chunk-fix-resilient-health-v1';
 
+// Dashboard analytics are expensive; cache briefly so rapid dashboard polls
+// don't re-run them, and cap each computation with a hard timeout so a slow DB
+// never hangs the endpoint.
+const HEALTH_CACHE_TTL_MS = 5_000;
+const HEALTH_TIMEOUT_MS = 6_000;
+let healthCache: { at: number; payload: Record<string, unknown> } | null = null;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 export async function GET() {
   // Deploy healthcheck must stay green as long as the process is alive. Heavy
   // analytics below can fail (e.g. transient DB) without taking the service
@@ -21,7 +36,26 @@ export async function GET() {
     deployMarker: DEPLOY_MARKER,
     timestamp: new Date().toISOString(),
   };
-  try {
+
+  if (healthCache && Date.now() - healthCache.at < HEALTH_CACHE_TTL_MS) {
+    return NextResponse.json({ ...healthCache.payload, cached: true });
+  }
+
+  return withTimeout(computeHealth(base), HEALTH_TIMEOUT_MS, 'health analytics')
+    .then((payload) => {
+      healthCache = { at: Date.now(), payload };
+      return NextResponse.json(payload);
+    })
+    .catch((err) =>
+      NextResponse.json({
+        ...base,
+        degraded: true,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+}
+
+async function computeHealth(base: Record<string, unknown>): Promise<Record<string, unknown>> {
   const performance = await getStrategyPerformance(3);
   const runnerStatus = getRunnerStatus();
   const recentAudits = await db.query.auditEvents.findMany({
@@ -117,12 +151,5 @@ export async function GET() {
     })),
   };
 
-  return NextResponse.json({ ...base, ...health });
-  } catch (err) {
-    return NextResponse.json({
-      ...base,
-      degraded: true,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  return { ...base, ...health };
 }

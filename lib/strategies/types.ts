@@ -17,6 +17,9 @@ export interface StrategyConfig {
   targetProfitMultiple?: number;
   /** Quick-flip: sell when position USD value reaches this (overrides multiple if set) */
   targetExitValueUsd?: number;
+  /** Quick-flip: lowest ask price we'll buy. Blocks dead longshots (e.g. 0.1¢
+   *  outcomes that almost always settle to zero and have no real exit). */
+  minEntryPrice?: number;
   /** When true, only trade markets flagged as fast-moving / live */
   liveMarketsOnly?: boolean;
 

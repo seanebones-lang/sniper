@@ -52,7 +52,7 @@ describe('LiveQuickFlip', () => {
     expect(signal?.price).toBe(0.12);
   });
 
-  it('enters with ask-only book (no bids)', () => {
+  it('rejects ask-only books (no bid = no exit for a flip)', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Valorant: Team A vs Team B'),
@@ -61,7 +61,7 @@ describe('LiveQuickFlip', () => {
       },
       config,
     );
-    expect(signal?.action).toBe('BUY');
+    expect(signal).toBeNull();
   });
 
   it('rejects entries above the 2.5× price cap', () => {
@@ -75,6 +75,52 @@ describe('LiveQuickFlip', () => {
     );
     expect(signal).toBeNull();
     expect(maxQuickFlipEntryPrice(2.5)).toBeCloseTo(0.396, 2);
+  });
+
+  it('rejects dead longshots below the minimum entry price (0.1¢)', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('Counter-Strike: Team A vs Team B'),
+        book: book(0.001, 0.0005, 1000, 1000),
+        currentPrice: 0.001,
+      },
+      config,
+    );
+    expect(signal).toBeNull();
+  });
+
+  it('still enters genuinely cheap-but-alive asks at/above the floor', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('NBA: Team A vs Team B live'),
+        book: book(0.06, 0.05, 200, 50),
+        currentPrice: 0.055,
+      },
+      config,
+    );
+    expect(signal?.action).toBe('BUY');
+  });
+
+  it('respects a custom minEntryPrice override', () => {
+    const strict = resolveStrategyConfig({
+      maxSizeUsd: 1,
+      targetProfitPct: 150,
+      cooldownSeconds: 15,
+      tradingGoal: 'quick-flip',
+      tradingStyle: 'aggressive',
+      targetProfitMultiple: 2.5,
+      liveMarketsOnly: true,
+      minEntryPrice: 0.15,
+    });
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('NBA: Team A vs Team B live'),
+        book: book(0.12, 0.11, 200, 50),
+        currentPrice: 0.115,
+      },
+      strict,
+    );
+    expect(signal).toBeNull();
   });
 
   it('rejects markets resolving after 3 hours', () => {

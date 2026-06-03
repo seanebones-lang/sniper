@@ -142,6 +142,16 @@ export function getTradingClient(privateKey: string): ClobClient {
 }
 
 /** CLOB L2 endpoints require creds on the client; createOrDeriveApiKey only returns them. */
+/**
+ * L2 creds are only usable if key, secret, and passphrase are all present.
+ * A key with an empty secret makes buildPolyHmacSignature throw
+ * "secret is empty" on every order POST, so incomplete creds must never be
+ * cached or applied.
+ */
+function credsComplete(creds?: ApiKeyCreds | null): creds is ApiKeyCreds {
+  return Boolean(creds?.key && creds?.secret && creds?.passphrase);
+}
+
 export async function ensurePolymarketApiCreds(client: ClobClient): Promise<void> {
   const { resolvePolymarketProxyUrl } = await import('@/lib/clients/polymarket-http-proxy');
   const proxyUrl = await resolvePolymarketProxyUrl();
@@ -150,14 +160,16 @@ export async function ensurePolymarketApiCreds(client: ClobClient): Promise<void
   // Keys created from a US IP are rejected on order POST even when egress is proxied to IE.
   // Always derive L2 creds through the current egress (proxy) when a proxy is configured.
   if (proxyUrl) {
-    if (proxyDerivedCreds?.key) {
+    if (credsComplete(proxyDerivedCreds)) {
       typed.creds = proxyDerivedCreds;
       return;
     }
+    proxyDerivedCreds = null;
+
     const nonce = Date.now();
     try {
       const created = await client.createApiKey(nonce);
-      if (created?.key) {
+      if (credsComplete(created)) {
         proxyDerivedCreds = created;
         typed.creds = created;
         console.log('[Polymarket] Fresh L2 API key created via proxy egress');
@@ -169,12 +181,18 @@ export async function ensurePolymarketApiCreds(client: ClobClient): Promise<void
         getErrorMessage(err),
       );
     }
-    proxyDerivedCreds = await client.deriveApiKey(nonce);
-    typed.creds = proxyDerivedCreds;
+    const derived = await client.deriveApiKey(nonce);
+    if (!credsComplete(derived)) {
+      throw new Error(
+        '[Polymarket] deriveApiKey via proxy returned incomplete creds (empty key/secret/passphrase)',
+      );
+    }
+    proxyDerivedCreds = derived;
+    typed.creds = derived;
     return;
   }
 
-  if (typed.creds?.key && typed.creds.secret && typed.creds.passphrase) return;
+  if (credsComplete(typed.creds)) return;
 
   const key = process.env.POLYMARKET_API_KEY?.trim();
   const secret = process.env.POLYMARKET_API_SECRET?.trim();
@@ -185,6 +203,11 @@ export async function ensurePolymarketApiCreds(client: ClobClient): Promise<void
   }
 
   const creds = await client.createOrDeriveApiKey();
+  if (!credsComplete(creds)) {
+    throw new Error(
+      '[Polymarket] createOrDeriveApiKey returned incomplete creds (empty key/secret/passphrase)',
+    );
+  }
   typed.creds = creds;
 }
 

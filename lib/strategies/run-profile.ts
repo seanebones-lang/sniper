@@ -11,6 +11,7 @@ export interface ResolvedStrategyConfig extends StrategyConfig {
   allowScaleIn: boolean;
   targetProfitMultiple: number;
   targetExitValueUsd: number;
+  minEntryPrice: number;
   liveMarketsOnly: boolean;
   /** Passive fill probability floor for paper execution (0–1) */
   minFillProbability: number;
@@ -47,6 +48,7 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
     targetProfitPct: 150,
     targetProfitMultiple: 2.5,
     targetExitValueUsd: 2.5,
+    minEntryPrice: 0.05,
     stopLossPct: 12,
     maxHoldSeconds: 90,
     allowScaleIn: false,
@@ -117,6 +119,7 @@ export function resolveStrategyConfig(raw: StrategyConfig): ResolvedStrategyConf
       raw.targetExitValueUsd ??
       goalDefaults.targetExitValueUsd ??
       baseMaxSize * (goalDefaults.targetProfitMultiple ?? 0),
+    minEntryPrice: raw.minEntryPrice ?? goalDefaults.minEntryPrice ?? 0,
     liveMarketsOnly: raw.liveMarketsOnly ?? goalDefaults.liveMarketsOnly ?? false,
   };
 }

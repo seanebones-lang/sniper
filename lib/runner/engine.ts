@@ -667,6 +667,29 @@ export async function runOnce() {
         )
         .returning({ id: signals.id });
 
+      // Cash-aware guard: read real spendable balance once per cycle so we stop
+      // submitting BUYs the CLOB would reject for insufficient funds. Without
+      // this the runner fires hundreds of rejected orders once the bankroll is
+      // spent. Fails open (Infinity) so a transient balance-read error never
+      // silently halts live trading.
+      let realCashRemaining = Number.POSITIVE_INFINITY;
+      const realBuyQueued =
+        process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
+        queuedSignals.some((q) => !q.stratRow.paperOnly && q.signal.action === 'BUY');
+      if (realBuyQueued) {
+        try {
+          const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
+            '@/lib/clients/polymarket-trading'
+          );
+          const pk = getPolymarketPrivateKey();
+          realCashRemaining = pk
+            ? (await getPolymarketUsdcBalance(pk, { syncFirst: false })) ?? 0
+            : 0;
+        } catch {
+          realCashRemaining = Number.POSITIVE_INFINITY;
+        }
+      }
+
       for (let i = 0; i < queuedSignals.length; i++) {
         const q = queuedSignals[i];
         const signalId = inserted[i]?.id;
@@ -683,6 +706,19 @@ export async function runOnce() {
           process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !q.stratRow.paperOnly;
 
         if (isRealAllowed) {
+          // Skip BUYs we can't fund — keeps the CLOB from rejecting a flood of
+          // over-budget orders. Exits (SELL) always proceed; they free cash.
+          const estimatedUsd = q.signal.price * q.finalSize;
+          if (q.signal.action === 'BUY' && estimatedUsd > realCashRemaining + 1e-9) {
+            void logAudit('runner_real_skipped_no_cash', {
+              strategy: q.stratRow.name,
+              market: q.market.externalId,
+              estimatedUsd,
+              realCashRemaining,
+            });
+            continue;
+          }
+
           const { placeRealOrder } = await import('@/lib/execution/real-executor');
           const result = await placeRealOrder({
             market: q.market,
@@ -700,6 +736,9 @@ export async function runOnce() {
 
           if (result.success) {
             fillsThisRun++;
+            if (q.signal.action === 'BUY') {
+              realCashRemaining -= estimatedUsd;
+            }
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
             console.log(
               `[Runner] REAL order posted ${q.market.externalId.slice(0, 12)}… ${q.signal.action} trade=${result.tradeId}`,
