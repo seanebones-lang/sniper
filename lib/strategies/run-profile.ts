@@ -154,8 +154,8 @@ export function resolveStrategyConfigForType(
   type: string,
   raw: StrategyConfig,
 ): ResolvedStrategyConfig {
-  const normalized = normalizeStrategyConfig(type, raw as Record<string, unknown>);
-  return resolveStrategyConfig(normalized as StrategyConfig);
+  const normalized = normalizeStrategyConfig(type, raw as unknown as Record<string, unknown>);
+  return resolveStrategyConfig(normalized as unknown as StrategyConfig);
 }
 
 export function shouldUseImmediateFill(
