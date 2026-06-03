@@ -26,7 +26,8 @@ describe('normalizeStrategyConfigForType', () => {
     expect(resolved.tradingGoal).toBe('quick-flip');
     expect(resolved.aggressiveEntryFills).toBe(true);
     expect(resolved.minEntryPrice).toBe(0.001);
-    expect(resolved.targetProfitMultiple).toBe(2.5);
+    expect(resolved.targetProfitMultiple).toBe(1.5);
+    expect(resolved.stopLossPct).toBe(30);
   });
 
   it('does not alter non-quick-flip strategy types', () => {

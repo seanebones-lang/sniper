@@ -4,6 +4,7 @@
  */
 
 import type { Market } from '../types';
+import { QUICK_FLIP_MAX_ENTRY_MULTIPLE } from '../strategies/run-profile';
 
 export type FastMovingKind =
   | 'sports-live'
@@ -207,8 +208,8 @@ export function rankFastMovingMarkets(markets: Market[]): Market[] {
   });
 }
 
-/** Highest entry price that still allows a full target multiple before the 0.99 cap. */
-export function maxQuickFlipEntryPrice(mult = 2.5): number {
+/** Highest entry price that still allows room toward the 2× upper quick-flip band. */
+export function maxQuickFlipEntryPrice(mult = QUICK_FLIP_MAX_ENTRY_MULTIPLE): number {
   return 0.99 / mult;
 }
 

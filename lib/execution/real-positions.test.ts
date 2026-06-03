@@ -74,8 +74,7 @@ describe('real buy -> exit round-trip (the unblocker)', () => {
     tradingStyle: 'aggressive',
   });
 
-  it('a real fill becomes an open position that fires a take-profit SELL at 2.5x', () => {
-    // 1. Real BUY fill is aggregated into an open position (what the runner now reads).
+  it('a real fill becomes an open position that fires a take-profit SELL at 1.5×', () => {
     const [position] = aggregateRealPositions(
       [row('BUY', 10, 0.1, '2026-01-01T00:00:00Z')],
       's1',
@@ -83,12 +82,11 @@ describe('real buy -> exit round-trip (the unblocker)', () => {
     expect(position.netSize).toBeCloseTo(10);
     expect(position.avgEntryPrice).toBeCloseTo(0.1);
 
-    // 2. The exit engine now sees that position and emits a SELL once price 2.5x's.
     const exit = evaluateExitSignal(
       position,
-      0.25,
+      0.15,
       0.01,
-      0.25,
+      0.15,
       config,
       Date.parse('2026-01-01T00:00:30Z'),
     );

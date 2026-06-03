@@ -42,14 +42,20 @@ const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
   },
 };
 
+/** Take-profit multiple for quick-flip exits (1.5× — lower bound of 1.5–2× band). */
+export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.5;
+
+/** Max entry price uses upper band (2×) so entries leave room to run toward 2×. */
+export const QUICK_FLIP_MAX_ENTRY_MULTIPLE = 2;
+
 const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
   'quick-flip': {
     maxSizeUsd: 1,
-    targetProfitPct: 150,
-    targetProfitMultiple: 2.5,
-    targetExitValueUsd: 2.5,
+    targetProfitPct: 50,
+    targetProfitMultiple: QUICK_FLIP_TAKE_PROFIT_MULTIPLE,
+    targetExitValueUsd: 1.5,
     minEntryPrice: 0.001,
-    stopLossPct: 12,
+    stopLossPct: 30,
     maxHoldSeconds: 300,
     allowScaleIn: false,
     cooldownSeconds: 15,
@@ -85,7 +91,7 @@ export const TRADING_STYLE_OPTIONS: Array<{ id: TradingStyle; label: string; des
 ];
 
 export const TRADING_GOAL_OPTIONS: Array<{ id: TradingGoal; label: string; description: string }> = [
-  { id: 'quick-flip', label: 'Quick flips', description: '$1 in, sell at 2.5× on markets resolving within 3 hours only.' },
+  { id: 'quick-flip', label: 'Quick flips', description: '$1 in, sell at 1.5× (up to 2× entry room); stop -30%; pre-resolution safety.' },
   { id: 'spread-capture', label: 'Spread capture', description: 'Enter on wide spreads, exit when spread narrows or target hit.' },
   { id: 'dip-buy', label: 'Buy the dip', description: 'Enter on cheap prices, hold for larger bounce.' },
   { id: 'swing', label: 'Swing', description: 'Fewer trades, wider profit targets, longer holds.' },
@@ -138,10 +144,10 @@ export function normalizeStrategyConfig(
     next.tradingStyle = 'aggressive';
     next.liveMarketsOnly = true;
     next.maxSizeUsd = next.maxSizeUsd ?? 1;
-    next.targetProfitMultiple = next.targetProfitMultiple ?? 2.5;
-    next.targetExitValueUsd = next.targetExitValueUsd ?? 2.5;
-    next.targetProfitPct = next.targetProfitPct ?? 150;
-    next.stopLossPct = next.stopLossPct ?? 12;
+    next.targetProfitMultiple = QUICK_FLIP_TAKE_PROFIT_MULTIPLE;
+    next.targetExitValueUsd = 1.5;
+    next.targetProfitPct = 50;
+    next.stopLossPct = 30;
     next.maxHoldSeconds = next.maxHoldSeconds ?? 300;
     next.cooldownSeconds = next.cooldownSeconds ?? 15;
     next.minEntryPrice = 0.001;

@@ -84,7 +84,7 @@ describe('LiveQuickFlip', () => {
     expect(signal).toBeNull();
   });
 
-  it('rejects entries above the 2.5× price cap', () => {
+  it('rejects entries above the 2× entry cap', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Bitcoin Up or Down - short window'),
@@ -94,7 +94,7 @@ describe('LiveQuickFlip', () => {
       config,
     );
     expect(signal).toBeNull();
-    expect(maxQuickFlipEntryPrice(2.5)).toBeCloseTo(0.396, 2);
+    expect(maxQuickFlipEntryPrice()).toBeCloseTo(0.495, 2);
   });
 
   it('rejects asks below the minimum entry price floor', () => {

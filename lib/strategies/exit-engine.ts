@@ -1,5 +1,6 @@
 import type { StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
+import { hoursUntilResolution } from '../markets/fast-moving';
 
 export interface StrategyOpenPosition {
   platform: string;
@@ -10,8 +11,20 @@ export interface StrategyOpenPosition {
   strategyId: string;
 }
 
+/** Hard floor — exit before total wipeout on illiquid tails. */
+export const QUICK_FLIP_CATASTROPHIC_STOP_PCT = 80;
+
+/** Exit losing positions this many minutes before market resolution. */
+export const QUICK_FLIP_RESOLUTION_EXIT_MINUTES = 30;
+
 function positionValueUsd(position: StrategyOpenPosition, currentPrice: number): number {
   return position.netSize * currentPrice;
+}
+
+function resolveProfitMultiple(config: ResolvedStrategyConfig): number {
+  if (config.targetProfitMultiple > 0) return config.targetProfitMultiple;
+  if (config.tradingGoal === 'quick-flip') return 1.5;
+  return 0;
 }
 
 /**
@@ -25,6 +38,8 @@ export function evaluateExitSignal(
   config: ResolvedStrategyConfig,
   /** For replay — defaults to Date.now() */
   nowMs: number = Date.now(),
+  /** Market resolution time — enables pre-expiry safety exit for quick-flip */
+  marketEndDate?: string | Date | null,
 ): StrategySignal | null {
   if (position.netSize <= 0.01 || !currentPrice || currentPrice <= 0) {
     return null;
@@ -38,23 +53,19 @@ export function evaluateExitSignal(
   const target = config.targetProfitPct;
   const stop = config.stopLossPct;
   const maxHold = config.maxHoldSeconds;
+  const isQuickFlip = config.tradingGoal === 'quick-flip';
 
-  const mult =
-    config.targetProfitMultiple > 0
-      ? config.targetProfitMultiple
-      : config.tradingGoal === 'quick-flip'
-        ? 2.5
-        : 0;
+  const mult = resolveProfitMultiple(config);
 
   const exitValueTarget =
     config.targetExitValueUsd > 0
       ? config.targetExitValueUsd
-      : config.tradingGoal === 'quick-flip' && mult > 0
+      : isQuickFlip && mult > 0
         ? config.maxSizeUsd * mult
         : 0;
 
-  // Quick-flip: instant exit at price multiple (e.g. 2.5× → $1 becomes ~$2.50)
-  if (mult > 0) {
+  // Quick-flip: take profit at price multiple (default 1.5×)
+  if (isQuickFlip && mult > 0) {
     const targetPrice = Math.min(0.99, entry * mult);
     if (currentPrice >= targetPrice) {
       return {
@@ -68,8 +79,8 @@ export function evaluateExitSignal(
     }
   }
 
-  // Quick-flip: exit when position USD value reaches target (e.g. $2.50)
-  if (exitValueTarget > 0 && valueUsd >= exitValueTarget) {
+  // Quick-flip: exit when position USD value reaches target (e.g. $1.50 on $1 stake)
+  if (isQuickFlip && exitValueTarget > 0 && valueUsd >= exitValueTarget) {
     return {
       action: 'SELL',
       price: currentPrice,
@@ -81,7 +92,7 @@ export function evaluateExitSignal(
   }
 
   // Take profit (percentage — used by non-quick-flip goals)
-  if (config.tradingGoal !== 'quick-flip' && profitPct >= target) {
+  if (!isQuickFlip && profitPct >= target) {
     return {
       action: 'SELL',
       price: currentPrice,
@@ -92,7 +103,18 @@ export function evaluateExitSignal(
     };
   }
 
-  // Stop loss
+  // Quick-flip: catastrophic stop before worthless expiry
+  if (isQuickFlip && profitPct <= -QUICK_FLIP_CATASTROPHIC_STOP_PCT) {
+    return {
+      action: 'SELL',
+      price: currentPrice,
+      size: Math.floor(position.netSize),
+      reason: `Catastrophic stop ${profitPct.toFixed(2)}% (limit -${QUICK_FLIP_CATASTROPHIC_STOP_PCT}%)`,
+      confidence: 0.92,
+    };
+  }
+
+  // Stop loss (quick-flip default 30% — hold through noise, cut before half gone)
   if (profitPct <= -stop) {
     return {
       action: 'SELL',
@@ -103,8 +125,29 @@ export function evaluateExitSignal(
     };
   }
 
-  // Quick-flip / spread-capture: exit if held too long with any green
-  if (holdSeconds >= maxHold) {
+  // Quick-flip: don't ride losers into resolution — exit if red within 30 min of end
+  if (isQuickFlip && marketEndDate && profitPct < 0) {
+    const hoursLeft = hoursUntilResolution(
+      { endDate: marketEndDate } as import('../types').Market,
+      nowMs,
+    );
+    if (
+      hoursLeft != null &&
+      hoursLeft >= 0 &&
+      hoursLeft <= QUICK_FLIP_RESOLUTION_EXIT_MINUTES / 60
+    ) {
+      return {
+        action: 'SELL',
+        price: currentPrice,
+        size: Math.floor(position.netSize),
+        reason: `Pre-resolution exit ${profitPct.toFixed(2)}% (${(hoursLeft * 60).toFixed(0)}m to close)`,
+        confidence: 0.75,
+      };
+    }
+  }
+
+  // Non-quick-flip: time-based exits
+  if (!isQuickFlip && holdSeconds >= maxHold) {
     if (profitPct > 0.05) {
       return {
         action: 'SELL',
@@ -113,29 +156,6 @@ export function evaluateExitSignal(
         reason: `Max hold ${Math.round(maxHold)}s — lock +${profitPct.toFixed(2)}%`,
         confidence: 0.7,
       };
-    }
-    // Quick-flip: don't dump small drawdowns at first max-hold — wait for stop
-    // or a hard timeout (3× max hold). Forced 90s loss-cuts were bleeding paper.
-    if (config.tradingGoal === 'quick-flip') {
-      if (profitPct <= -stop) {
-        return {
-          action: 'SELL',
-          price: currentPrice,
-          size: Math.floor(position.netSize),
-          reason: `Stop loss ${profitPct.toFixed(2)}% (limit -${stop}%)`,
-          confidence: 0.9,
-        };
-      }
-      if (holdSeconds >= maxHold * 3) {
-        return {
-          action: 'SELL',
-          price: currentPrice,
-          size: Math.floor(position.netSize),
-          reason: `Hard timeout ${Math.round(maxHold * 3)}s — exit at ${profitPct.toFixed(2)}%`,
-          confidence: 0.55,
-        };
-      }
-      return null;
     }
     if (config.tradingStyle === 'aggressive') {
       return {

@@ -1,18 +1,19 @@
 import type { Strategy, StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
+import { QUICK_FLIP_MAX_ENTRY_MULTIPLE } from './run-profile';
 import { assessFastMovingMarket, isQuickFlipCandidate } from '../markets/fast-moving';
 
 function asResolved(config: Parameters<Strategy['evaluate']>[1]): ResolvedStrategyConfig {
   return config as ResolvedStrategyConfig;
 }
 
-/** Highest ask that still allows a full target multiple before the 0.99 cap. */
-export function maxQuickFlipEntryPrice(mult = 2.5): number {
+/** Highest ask that still allows room to run toward the 2× upper band before the 0.99 cap. */
+export function maxQuickFlipEntryPrice(mult = QUICK_FLIP_MAX_ENTRY_MULTIPLE): number {
   return 0.99 / mult;
 }
 
 /**
- * Live quick-flip scalper: $1 in, sell the instant price hits 2.5× (≈$2.50 out).
+ * Live quick-flip scalper: $1 in, sell at 1.5× (entries sized for up to 2× room).
  * Only enters markets that resolve within 3 hours (exchange endDate required).
  *
  * Aggressive mode lifts cheap asks (including 0.1¢ esports) even on one-sided
@@ -47,8 +48,8 @@ export const LiveQuickFlip: Strategy = {
     }
 
     const stakeUsd = config.maxSizeUsd ?? 1;
-    const mult = config.targetProfitMultiple ?? 2.5;
-    const maxEntry = maxQuickFlipEntryPrice(mult);
+    const exitMult = config.targetProfitMultiple ?? 1.5;
+    const maxEntry = maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE);
 
     if (ask > maxEntry) {
       return null;
@@ -87,14 +88,14 @@ export const LiveQuickFlip: Strategy = {
     }
 
     const assessment = assessFastMovingMarket(market);
-    const targetPrice = Math.min(0.99, ask * mult);
-    const targetValue = stakeUsd * mult;
+    const targetPrice = Math.min(0.99, ask * exitMult);
+    const targetValue = stakeUsd * exitMult;
 
     return {
       action: 'BUY',
       price: ask,
       size: sharesNeeded,
-      reason: `Quick flip ${assessment.kind}: $${stakeUsd.toFixed(2)} @ ${ask.toFixed(3)} → target ${targetPrice.toFixed(3)} (${mult}× ≈ $${targetValue.toFixed(2)})`,
+      reason: `Quick flip ${assessment.kind}: $${stakeUsd.toFixed(2)} @ ${ask.toFixed(3)} → target ${targetPrice.toFixed(3)} (${exitMult}× ≈ $${targetValue.toFixed(2)})`,
       confidence: Math.min(
         0.92,
         0.62 + (maxEntry - ask) / maxEntry * 0.2 + assessment.score / 250,

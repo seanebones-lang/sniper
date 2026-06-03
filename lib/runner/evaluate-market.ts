@@ -117,6 +117,8 @@ export async function evaluateMarketForStrategy(
       book?.spread,
       book?.mid ?? currentPrice,
       config,
+      Date.now(),
+      market.endDate,
     );
     isExitSignal = signal?.action === 'SELL';
   }

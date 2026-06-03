@@ -1,15 +1,13 @@
 import { db, realTrades, signals } from '@/lib/db';
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, isNotNull, ne } from 'drizzle-orm';
 import type { StrategyOpenPosition } from '@/lib/strategies/exit-engine';
 
 /**
- * Open REAL positions per strategy, derived from filled `real_trades` joined to
- * `signals` (for strategy attribution). This is the live-money analogue of
- * `getOpenPositionsByStrategy` (paper) and is what wires real fills into the
- * runner's exit loop so take-profit / stop-loss / max-hold actually fire.
+ * Open REAL positions per strategy, derived from exchange-confirmed or
+ * attributable `real_trades` joined to `signals`.
  *
- * Requires `real_trades.signalId` to be set on insert (see real-executor).
- * Legacy rows without a signalId cannot be attributed and are ignored here.
+ * Includes `filled`, `needs_review`, and `pending` BUYs with a real order id
+ * so the exit loop can manage live holdings while reconciliation catches up.
  */
 
 /** Only consider recent real trades — open positions for short-hold strategies are never old. */
@@ -111,8 +109,16 @@ export async function getRealOpenPositionsByStrategy(
     .where(
       and(
         inArray(signals.strategyId, strategyIds),
-        eq(realTrades.status, 'filled'),
         gte(realTrades.createdAt, since),
+        or(
+          inArray(realTrades.status, ['filled', 'needs_review']),
+          and(
+            eq(realTrades.status, 'pending'),
+            eq(realTrades.side, 'BUY'),
+            isNotNull(realTrades.txHash),
+            ne(realTrades.txHash, 'submitted'),
+          ),
+        ),
       ),
     )
     .orderBy(realTrades.createdAt);

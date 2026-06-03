@@ -814,16 +814,19 @@ export async function runOnce() {
       // In-flight guard: never submit a second real order on a market that
       // already has a pending order. Prevents duplicate BUYs (retry spam) and
       // double SELLs while reconciliation is still confirming the prior order.
-      const pendingRealMarkets = new Set<string>();
+      const pendingBuyMarkets = new Set<string>();
+      const pendingSellMarkets = new Set<string>();
       if (realSignalQueued) {
         try {
           const pendingRows = await db.query.realTrades.findMany({
             where: (t, { eq }) => eq(t.status, 'pending'),
-            columns: { platform: true, marketExternalId: true },
+            columns: { platform: true, marketExternalId: true, side: true },
             limit: 500,
           });
           for (const row of pendingRows) {
-            pendingRealMarkets.add(`${row.platform}:${row.marketExternalId}`);
+            const key = `${row.platform}:${row.marketExternalId}`;
+            if (row.side === 'SELL') pendingSellMarkets.add(key);
+            else pendingBuyMarkets.add(key);
           }
         } catch {
           // Fail open — a read error must not block exits.
@@ -848,8 +851,16 @@ export async function runOnce() {
         if (isRealAllowed) {
           const marketKey = `${q.market.platform}:${q.market.externalId}`;
 
-          // Skip if an order is already in flight on this market (dup guard).
-          if (pendingRealMarkets.has(marketKey)) {
+          // Skip duplicate orders of the same side while one is still pending.
+          if (q.signal.action === 'BUY' && pendingBuyMarkets.has(marketKey)) {
+            void logAudit('runner_real_skipped_in_flight', {
+              strategy: q.stratRow.name,
+              market: q.market.externalId,
+              action: q.signal.action,
+            });
+            continue;
+          }
+          if (q.signal.action === 'SELL' && pendingSellMarkets.has(marketKey)) {
             void logAudit('runner_real_skipped_in_flight', {
               strategy: q.stratRow.name,
               market: q.market.externalId,
@@ -892,7 +903,7 @@ export async function runOnce() {
             if (q.signal.action === 'BUY') {
               realCashRemaining -= estimatedUsd;
             }
-            pendingRealMarkets.add(marketKey);
+            pendingBuyMarkets.add(marketKey);
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
             console.log(
               `[Runner] REAL order posted ${q.market.externalId.slice(0, 12)}… ${q.signal.action} trade=${result.tradeId}`,
