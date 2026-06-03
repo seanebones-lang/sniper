@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, strategies } from '@/lib/db';
+import { normalizeStrategyConfig } from '@/lib/strategies/run-profile';
 
 export async function GET() {
   const rows = await db.query.strategies.findMany({
@@ -10,11 +11,12 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const config = (body.config ?? {}) as Record<string, unknown>;
+  const type = String(body.type ?? 'spread-scalper');
+  const config = normalizeStrategyConfig(type, (body.config ?? {}) as Record<string, unknown>);
 
   const [newStrat] = await db.insert(strategies).values({
     name: body.name,
-    type: body.type,
+    type,
     config,
     paperOnly: body.paperOnly ?? true,
     isActive: false,

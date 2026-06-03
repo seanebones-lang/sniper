@@ -6,15 +6,16 @@
  * If adding significantly more (e.g. full WS strategies), consider splitting into RiskOrchestrator + EvaluationLoop.
  */
 
-import { db, signals, paperTrades, auditEvents, strategies } from '@/lib/db';
+import { db, signals, auditEvents, strategies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { getAllMarkets, getMarketsForQuickFlip } from '@/lib/markets';
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
 import type { StrategyConfig } from '@/lib/strategies/types';
-import { resolveStrategyConfig, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
+import { resolveStrategyConfigForType, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
+import { persistPaperFill } from '@/lib/paper/record-fill';
 import { getRealOpenPositionsByStrategy } from '@/lib/execution/real-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
@@ -154,7 +155,7 @@ export async function getRunnerIntervalMs(): Promise<number> {
 
   let value = 12000;
   for (const strat of activeStrategies) {
-    const config = resolveStrategyConfig(strat.config as unknown as StrategyConfig);
+    const config = resolveStrategyConfigForType(strat.type, strat.config as unknown as StrategyConfig);
     if (config.tradingGoal === 'quick-flip' || strat.type === 'live-quick-flip') {
       value = 4000;
       break;
@@ -403,7 +404,7 @@ export async function runOnce() {
   }
 
   const hasQuickFlipStrategy = activeStrategies.some((s) => {
-    const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
+    const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
     return cfg.tradingGoal === 'quick-flip' || s.type === 'live-quick-flip' || cfg.liveMarketsOnly;
   });
 
@@ -489,7 +490,7 @@ export async function runOnce() {
   const marketByKey = new Map(markets.map((m) => [`${m.platform}:${m.externalId}`, m]));
 
   for (const stratRow of allowedStrategies) {
-    const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
+    const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
     const isQuickFlipStrat =
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
     const stratLimit = isQuickFlipStrat ? 40 : marketEvaluationLimit;
@@ -629,7 +630,7 @@ export async function runOnce() {
   }
 
   const activeProfiles: ActiveStrategyProfile[] = activeStrategies.map((s) => {
-    const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
+    const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
     return {
       id: s.id,
       name: s.name,
@@ -657,7 +658,7 @@ export async function runOnce() {
     const strategyImpl = getStrategy(stratRow.type);
     if (!strategyImpl) continue;
 
-    const config = resolveStrategyConfig(stratRow.config as unknown as StrategyConfig);
+    const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
     const openPositions = openPositionsByStrategy.get(stratRow.id) ?? [];
     const openByMarket = new Map(
       openPositions.map((p) => [`${p.platform}:${p.marketExternalId}`, p]),
@@ -927,15 +928,14 @@ export async function runOnce() {
             fillsThisRun++;
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
 
-            void db.insert(paperTrades).values({
-              platform: q.market.platform,
-              marketExternalId: q.market.externalId,
-              signalId: signalId ?? null,
+            await persistPaperFill({
+              platform: fill.platform,
+              marketExternalId: fill.marketExternalId,
+              signalId,
               side: fill.side,
-              price: fill.price.toString(),
-              size: fill.size.toString(),
-              fee: fill.fee.toString(),
-              status: 'filled',
+              price: fill.price,
+              size: fill.size,
+              fee: fill.fee,
             });
 
             alerts.paperFill(fill);

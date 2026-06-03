@@ -53,9 +53,9 @@ export async function POST(req: Request) {
       platform: fill.platform,
       marketExternalId: fill.marketExternalId,
       side: fill.side,
-      price: fill.price.toString(),
-      size: fill.size.toString(),
-      fee: fill.fee.toString(),
+      price: fill.price.toFixed(4),
+      size: fill.size.toFixed(4),
+      fee: fill.fee.toFixed(4),
       status: 'filled',
     }).returning();
 

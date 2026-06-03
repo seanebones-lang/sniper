@@ -392,7 +392,16 @@ export default function StrategiesPage() {
               <select
                 className={inputClass}
                 value={newStrat.type}
-                onChange={e => setNewStrat({ ...newStrat, type: e.target.value })}
+                onChange={(e) => {
+                  const type = e.target.value;
+                  setNewStrat({
+                    ...newStrat,
+                    type,
+                    ...(type === 'live-quick-flip'
+                      ? { tradingGoal: 'quick-flip' as const, tradingStyle: 'aggressive' as const }
+                      : {}),
+                  });
+                }}
               >
                 {availableStrategies.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
@@ -421,6 +430,7 @@ export default function StrategiesPage() {
                 <select
                   className={inputClass}
                   value={newStrat.tradingStyle}
+                  disabled={newStrat.type === 'live-quick-flip'}
                   onChange={e => setNewStrat({
                     ...newStrat,
                     tradingStyle: e.target.value as typeof newStrat.tradingStyle,
@@ -431,7 +441,9 @@ export default function StrategiesPage() {
                   ))}
                 </select>
                 <p className="mt-1 text-xs text-zinc-500">
-                  {TRADING_STYLE_OPTIONS.find((o) => o.id === newStrat.tradingStyle)?.description}
+                  {newStrat.type === 'live-quick-flip'
+                    ? 'Locked to aggressive for live quick-flip (immediate entries + exits).'
+                    : TRADING_STYLE_OPTIONS.find((o) => o.id === newStrat.tradingStyle)?.description}
                 </p>
               </Field>
 
@@ -442,6 +454,7 @@ export default function StrategiesPage() {
                 <select
                   className={inputClass}
                   value={newStrat.tradingGoal}
+                  disabled={newStrat.type === 'live-quick-flip'}
                   onChange={e => setNewStrat({
                     ...newStrat,
                     tradingGoal: e.target.value as typeof newStrat.tradingGoal,
@@ -452,7 +465,9 @@ export default function StrategiesPage() {
                   ))}
                 </select>
                 <p className="mt-1 text-xs text-zinc-500">
-                  {TRADING_GOAL_OPTIONS.find((o) => o.id === newStrat.tradingGoal)?.description}
+                  {newStrat.type === 'live-quick-flip'
+                    ? 'Locked to quick-flip (2.5× exit on markets resolving within 3h).'
+                    : TRADING_GOAL_OPTIONS.find((o) => o.id === newStrat.tradingGoal)?.description}
                 </p>
               </Field>
 

@@ -124,6 +124,40 @@ export function resolveStrategyConfig(raw: StrategyConfig): ResolvedStrategyConf
   };
 }
 
+/**
+ * Normalize stored config before save. `live-quick-flip` must always run as
+ * quick-flip/aggressive regardless of what the UI accidentally stored.
+ */
+export function normalizeStrategyConfig(
+  type: string,
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...config };
+  if (type === 'live-quick-flip') {
+    next.tradingGoal = 'quick-flip';
+    next.tradingStyle = 'aggressive';
+    next.liveMarketsOnly = true;
+    next.maxSizeUsd = next.maxSizeUsd ?? 1;
+    next.targetProfitMultiple = next.targetProfitMultiple ?? 2.5;
+    next.targetExitValueUsd = next.targetExitValueUsd ?? 2.5;
+    next.targetProfitPct = next.targetProfitPct ?? 150;
+    next.stopLossPct = next.stopLossPct ?? 12;
+    next.maxHoldSeconds = next.maxHoldSeconds ?? 90;
+    next.cooldownSeconds = next.cooldownSeconds ?? 15;
+    next.minEntryPrice = next.minEntryPrice ?? 0.05;
+  }
+  return next;
+}
+
+/** Resolve config for a strategy row, applying type-specific normalization first. */
+export function resolveStrategyConfigForType(
+  type: string,
+  raw: StrategyConfig,
+): ResolvedStrategyConfig {
+  const normalized = normalizeStrategyConfig(type, raw as Record<string, unknown>);
+  return resolveStrategyConfig(normalized as StrategyConfig);
+}
+
 export function shouldUseImmediateFill(
   config: ResolvedStrategyConfig,
   action: 'BUY' | 'SELL',
