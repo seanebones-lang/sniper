@@ -76,6 +76,13 @@ interface PortfolioData {
     fillsInRun: number;
   };
   pnl?: import('@/lib/paper/portfolio').PaperPnlSnapshot;
+  live?: {
+    armed: boolean;
+    polymarketUsdcBalance: number | null;
+    polymarketReady: boolean;
+    geoblockBlocked: boolean;
+    note: string;
+  };
 }
 
 export default function PaperPortfolioPage() {
@@ -182,12 +189,16 @@ export default function PaperPortfolioPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(budgetForm),
       });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json();
-        toast.error(err.error || 'Failed to save budget');
+        toast.error(
+          typeof json.error === 'string'
+            ? json.error
+            : JSON.stringify(json.error ?? json) || 'Failed to save budget',
+        );
         return;
       }
-      toast.success('Paper budget saved');
+      toast.success(json.note ? 'Budget saved' : 'Paper budget saved');
       void load();
     } finally {
       setSavingBudget(false);
@@ -252,6 +263,27 @@ export default function PaperPortfolioPage() {
 
       {loading && !data && <div className="text-zinc-500 text-sm">Loading portfolio…</div>}
 
+      {data?.live?.armed && (
+        <div className="card border-red-500/40 bg-red-950/25 mb-6">
+          <div className="text-red-300 font-semibold mb-1">Live Polymarket (real money)</div>
+          <p className="text-xs text-zinc-500 mb-2">{data.live.note}</p>
+          <div className="text-3xl font-mono text-white">
+            {data.live.polymarketUsdcBalance != null
+              ? `$${data.live.polymarketUsdcBalance.toFixed(2)}`
+              : '—'}
+            <span className="text-sm text-zinc-500 ml-2">CLOB cash</span>
+          </div>
+          <p className={`text-xs mt-2 ${data.live.polymarketReady ? 'text-emerald-400' : 'text-amber-400'}`}>
+            Trading path: {data.live.polymarketReady ? 'ready' : 'not ready'}
+            {data.live.geoblockBlocked ? ' · geoblock — set proxy on /real' : ''}
+          </p>
+          <p className="text-xs text-zinc-600 mt-2">
+            Paper bankroll settings below do <strong className="text-zinc-400">not</strong> control live order size
+            (~$1/trade from strategy). Use them only for paper simulation.
+          </p>
+        </div>
+      )}
+
       {data && (
         <>
           {/* Runner status */}
@@ -312,9 +344,13 @@ export default function PaperPortfolioPage() {
               </div>
               <div className="grid sm:grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="text-xs text-zinc-500 block mb-1">Paper bankroll (USD)</label>
+                  <label className="text-xs text-zinc-500 block mb-1">
+                    Paper bankroll (USD){data.live?.armed ? ' — simulation only' : ''}
+                  </label>
                   <input
                     type="number"
+                    min={1}
+                    step={1}
                     value={budgetForm.paperBudgetUsd}
                     onChange={(e) => setBudgetForm({ ...budgetForm, paperBudgetUsd: Number(e.target.value) })}
                     className="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono"
@@ -338,7 +374,8 @@ export default function PaperPortfolioPage() {
                 {savingBudget ? 'Saving…' : 'Save budget'}
               </button>
               <p className="text-xs text-zinc-500 mt-3">
-                Used by the risk engine to cap position sizes. Stored in <code className="text-zinc-400">data/user-settings.json</code>.
+                Caps paper simulation sizing (saved to database). Live Polymarket orders use your real ~$7
+                wallet, not this number.
               </p>
             </div>
 

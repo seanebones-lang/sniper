@@ -1,15 +1,91 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, AlertTriangle, RefreshCw } from 'lucide-react';
+
+interface RealStatusPayload {
+  allowed: boolean;
+  envEnabled: boolean;
+  killSwitchEnv: boolean;
+  hasPolymarketKey: boolean;
+  pendingRealTrades: number;
+  blockers: string[];
+  activeStrategies: number;
+  realCapableStrategies: Array<{ id: string; name: string }>;
+  polymarketReady: boolean;
+  polymarketUsdcBalance?: number | null;
+  relayerCredentials?: string;
+  tradingSetup?: {
+    ready: boolean;
+    balanceUsd: number | null;
+    relayerMode: string;
+    message?: string;
+  } | null;
+  geoblock?: {
+    blocked: boolean;
+    country?: string;
+    region?: string;
+    ip?: string;
+    error?: string;
+    skipped?: boolean;
+  };
+  recentPending: Array<{
+    id: string;
+    platform: string;
+    marketExternalId: string;
+    side: string;
+    status: string;
+    createdAt: string;
+    txHash: string | null;
+  }>;
+}
 
 export default function RealExecutionPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [typed, setTyped] = useState('');
-  const realEnabled = process.env.NEXT_PUBLIC_REAL_EXECUTION_ENABLED === 'true'; // placeholder
+  const [status, setStatus] = useState<RealStatusPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [proxyUrl, setProxyUrl] = useState('');
+  const [proxyMsg, setProxyMsg] = useState<string | null>(null);
+  const [proxySaving, setProxySaving] = useState(false);
+  const [cfClearance, setCfClearance] = useState('');
+  const [userAgent, setUserAgent] = useState(
+    typeof navigator !== 'undefined'
+      ? navigator.userAgent
+      : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  );
+  const [cfSaving, setCfSaving] = useState(false);
+  const [cfMsg, setCfMsg] = useState<string | null>(null);
+  const [testOrderMsg, setTestOrderMsg] = useState<string | null>(null);
+  const [testOrderRunning, setTestOrderRunning] = useState(false);
 
   const canEnable = typed.trim().toUpperCase() === 'I ACCEPT FULL RISK AND RESPONSIBILITY';
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch('/api/real/status');
+        if (!res.ok) throw new Error('status fetch failed');
+        const data = (await res.json()) as RealStatusPayload;
+        if (!cancelled) setStatus(data);
+      } catch {
+        if (!cancelled) setStatus(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const liveReady = status?.polymarketReady === true;
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-10">
@@ -26,27 +102,241 @@ export default function RealExecutionPage() {
         <div className="rounded-xl border border-red-900 bg-red-950/60 p-6">
           <div className="font-semibold text-red-400 text-lg mb-3">THIS IS REAL CAPITAL AT RISK</div>
           <ul className="list-disc pl-5 space-y-2 text-red-300/90">
-            <li>Enabling real execution means the runner can place actual orders on <strong>Polymarket</strong> using your keys. Kalshi real execution is not implemented.</li>
+            <li>
+              Live Polymarket orders use your wallet via <code>POLYMARKET_PRIVATE_KEY</code> and the CLOB API.
+            </li>
             <li>You can lose 100% of the capital allocated to this system.</li>
             <li>Bugs, API changes, bad strategies, or market moves can all cause permanent loss.</li>
-            <li>This tool does <span className="font-bold">not</span> guarantee profits. Most automated traders lose money.</li>
+            <li>This tool does <span className="font-bold">not</span> guarantee profits.</li>
           </ul>
         </div>
 
-        <div>
-          <div className="font-medium mb-2">Current Status</div>
-          <div className={realEnabled ? 'text-red-400' : 'text-emerald-400'}>
-            Real execution is currently <strong>{realEnabled ? 'ENABLED' : 'DISABLED'}</strong> in this deployment.
+        {status?.geoblock?.blocked && (
+          <div className="rounded-xl border border-amber-600/50 bg-amber-950/40 p-5 space-y-3">
+            <div className="font-semibold text-amber-200 text-base">Why you have no trades yet</div>
+            <p className="text-zinc-300">
+              Polymarket blocks order placement from the US (and your server shows{' '}
+              <strong>{status.geoblock.country ?? 'restricted'}</strong>). Your wallet (~$
+              {status.polymarketUsdcBalance?.toFixed(2) ?? '?'}) is fine — only the server location is wrong.
+            </p>
+            <p className="text-zinc-400 text-xs">
+              Paste an HTTP proxy in an allowed country (e.g. Sweden, Spain, Ireland). Format:{' '}
+              <code className="text-zinc-300">http://user:pass@host:port</code> from a provider like Webshare or
+              IPRoyal (~$2–5/mo).
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="password"
+                autoComplete="off"
+                placeholder="http://user:pass@proxy-host:port"
+                value={proxyUrl}
+                onChange={(e) => setProxyUrl(e.target.value)}
+                className="flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                disabled={proxySaving || !proxyUrl.trim()}
+                className="rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 px-4 py-2 text-sm font-medium text-black"
+                onClick={async () => {
+                  setProxySaving(true);
+                  setProxyMsg(null);
+                  try {
+                    const res = await fetch('/api/real/proxy', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ url: proxyUrl.trim() }),
+                    });
+                    const data = (await res.json()) as { message?: string; error?: string };
+                    setProxyMsg(data.message ?? data.error ?? (res.ok ? 'Saved' : 'Failed'));
+                    const st = await fetch('/api/real/status');
+                    if (st.ok) setStatus((await st.json()) as RealStatusPayload);
+                  } finally {
+                    setProxySaving(false);
+                  }
+                }}
+              >
+                {proxySaving ? 'Testing…' : 'Save & test'}
+              </button>
+            </div>
+            {proxyMsg && <p className="text-sm text-amber-100/90">{proxyMsg}</p>}
           </div>
-          <div className="text-xs text-zinc-500 mt-1">
-            Server flag: <code>SNIPER_ENABLE_REAL_EXECUTION=true</code> in environment (Railway secrets, <code>.env.local</code>).
-            This page does not read that flag yet — check your deployment config directly.
+        )}
+
+        <div className="rounded-xl border border-violet-600/40 bg-violet-950/30 p-5 space-y-3">
+          <div className="font-semibold text-violet-200">Cloudflare clearance (required for many proxies)</div>
+          <p className="text-zinc-400 text-xs leading-relaxed">
+            If orders still show &quot;Trading restricted&quot; while geoblock says IE/OK, Polymarket&apos;s WAF is
+            blocking the bot. Open{' '}
+            <a href="https://polymarket.com" className="text-violet-300 underline" target="_blank" rel="noreferrer">
+              polymarket.com
+            </a>{' '}
+            in Chrome (same network as your proxy), solve any challenge, then DevTools → Application → Cookies →
+            copy <code className="text-zinc-300">cf_clearance</code> and your User-Agent from Network headers.
+          </p>
+          <input
+            type="password"
+            placeholder="cf_clearance cookie value"
+            value={cfClearance}
+            onChange={(e) => setCfClearance(e.target.value)}
+            className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm font-mono"
+          />
+          <input
+            type="text"
+            placeholder="User-Agent (auto-filled with this browser)"
+            value={userAgent}
+            onChange={(e) => setUserAgent(e.target.value)}
+            className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs font-mono"
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={cfSaving || !cfClearance.trim() || !userAgent.trim()}
+              className="rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-4 py-2 text-sm font-medium"
+              onClick={async () => {
+                setCfSaving(true);
+                setCfMsg(null);
+                try {
+                  const res = await fetch('/api/real/cloudflare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      cfClearance: cfClearance.trim(),
+                      userAgent: userAgent.trim(),
+                      testOrder: true,
+                    }),
+                  });
+                  const data = (await res.json()) as {
+                    message?: string;
+                    error?: string;
+                    orderTest?: { success?: boolean; error?: string };
+                  };
+                  const ot = data.orderTest;
+                  setCfMsg(
+                    data.message ??
+                      data.error ??
+                      (ot?.success ? 'Test order accepted by CLOB' : ot?.error ?? 'Saved'),
+                  );
+                } finally {
+                  setCfSaving(false);
+                }
+              }}
+            >
+              {cfSaving ? 'Saving…' : 'Save & test order'}
+            </button>
+            <button
+              type="button"
+              disabled={testOrderRunning}
+              className="rounded-lg border border-white/20 px-4 py-2 text-sm hover:bg-white/5"
+              onClick={async () => {
+                setTestOrderRunning(true);
+                setTestOrderMsg(null);
+                try {
+                  const res = await fetch('/api/real/test-order', { method: 'POST' });
+                  const data = (await res.json()) as { tradingOk?: boolean; hint?: string; error?: string };
+                  setTestOrderMsg(data.hint ?? data.error ?? (data.tradingOk ? 'Trading OK' : 'Still blocked'));
+                } finally {
+                  setTestOrderRunning(false);
+                }
+              }}
+            >
+              {testOrderRunning ? 'Testing…' : 'Full test (limit + market)'}
+            </button>
           </div>
+          {cfMsg && <p className="text-sm text-violet-100/90">{cfMsg}</p>}
+          {testOrderMsg && <p className="text-sm text-zinc-300">{testOrderMsg}</p>}
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-zinc-950/80 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-medium">Live Polymarket Status</div>
+            <RefreshCw className={`h-4 w-4 text-zinc-500 ${loading ? 'animate-spin' : ''}`} />
+          </div>
+          {loading && !status ? (
+            <div className="text-zinc-500">Loading server status…</div>
+          ) : status ? (
+            <div className="space-y-3 text-xs">
+              <div className={liveReady ? 'text-emerald-400' : 'text-amber-400'}>
+                Polymarket live path:{' '}
+                <strong>{liveReady ? 'READY (runner may place real orders)' : 'NOT READY'}</strong>
+              </div>
+              <ul className="space-y-1 text-zinc-400">
+                <li>Env enable: {status.envEnabled ? 'yes' : 'no'} (<code>SNIPER_ENABLE_REAL_EXECUTION</code>)</li>
+                <li>Kill switch env: {status.killSwitchEnv ? 'ON (blocked)' : 'off'}</li>
+                <li>Runtime allowed: {status.allowed ? 'yes' : 'no'}</li>
+                <li>Wallet key configured: {status.hasPolymarketKey ? 'yes' : 'no'}</li>
+                <li>
+                  Real-capable strategies: {status.realCapableStrategies.length} / {status.activeStrategies}{' '}
+                  active
+                </li>
+                <li>Pending real trades: {status.pendingRealTrades}</li>
+                {status.polymarketUsdcBalance != null && (
+                  <li>CLOB collateral: ${status.polymarketUsdcBalance.toFixed(2)}</li>
+                )}
+                {status.relayerCredentials && (
+                  <li>Relayer auth: {status.relayerCredentials}</li>
+                )}
+                {status.tradingSetup?.message && (
+                  <li className="text-amber-300/90">Setup: {status.tradingSetup.message}</li>
+                )}
+                {status.geoblock && (
+                  <li className={status.geoblock.blocked ? 'text-red-400' : 'text-emerald-400/90'}>
+                    Geoblock:{' '}
+                    {status.geoblock.blocked
+                      ? `blocked (${[status.geoblock.region, status.geoblock.country].filter(Boolean).join(', ') || 'restricted'}) — use eu-west-1 host`
+                      : status.geoblock.skipped
+                        ? 'check skipped'
+                        : 'OK for this server IP'}
+                  </li>
+                )}
+              </ul>
+              <button
+                type="button"
+                className="mt-2 text-xs text-zinc-400 hover:text-white underline"
+                onClick={async () => {
+                  setLoading(true);
+                  try {
+                    await fetch('/api/real/setup', { method: 'POST' });
+                    const res = await fetch('/api/real/status');
+                    if (res.ok) setStatus((await res.json()) as RealStatusPayload);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                Run auto-setup (sync balance + gasless approvals)
+              </button>
+              {status.blockers.length > 0 && (
+                <div>
+                  <div className="text-zinc-500 mb-1">Blockers:</div>
+                  <ul className="list-disc pl-4 text-amber-300/90">
+                    {status.blockers.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                    {status.realCapableStrategies.length === 0 && status.envEnabled && (
+                      <li>Set <code>paperOnly: false</code> on at least one active strategy (DB/API)</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              {status.recentPending.length > 0 && (
+                <div className="pt-2 border-t border-white/5">
+                  <div className="text-zinc-500 mb-2">Recent pending orders</div>
+                  {status.recentPending.map((t) => (
+                    <div key={t.id} className="font-mono text-[10px] text-zinc-500 mb-1">
+                      {t.platform} {t.side} {t.marketExternalId.slice(0, 12)}… order={t.txHash?.slice(0, 10) ?? '—'}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-red-400">Could not load status from server.</div>
+          )}
         </div>
 
         <div className="pt-4 border-t border-white/10">
           <div className="font-medium mb-3 text-red-400">Explicit Confirmation Required</div>
-          <p className="mb-3">If you still want to proceed with real execution capability, type the following phrase exactly:</p>
+          <p className="mb-3">Type the following phrase exactly to acknowledge risk in this session:</p>
           <div className="font-mono bg-zinc-950 border border-white/10 p-3 mb-4 text-red-300">
             I ACCEPT FULL RISK AND RESPONSIBILITY
           </div>
@@ -64,22 +354,24 @@ export default function RealExecutionPage() {
             onClick={() => setConfirmed(true)}
             className="w-full rounded-full bg-red-600 disabled:bg-zinc-800 py-3 font-medium text-sm disabled:text-zinc-500"
           >
-            {canEnable ? 'I UNDERSTAND AND WANT TO ENABLE REAL EXECUTION PATHS' : 'Type the exact phrase above to continue'}
+            {canEnable ? 'I UNDERSTAND THE RISKS' : 'Type the exact phrase above to continue'}
           </button>
         </div>
 
         {confirmed && (
           <div className="rounded-xl border border-red-900 bg-black p-5 text-red-400 text-sm">
-            Real execution paths are now conceptually unlocked in this session. 
-            The actual runner will still only use real orders when both the env flag is set AND a strategy has <code>paperOnly: false</code>.
-            <br /><br />
-            Proceed with extreme caution. Start with the smallest possible sizes.
+            Session acknowledgment recorded. Real orders still require server env + a non-paper strategy.
+            {liveReady ? (
+              <span className="block mt-2 text-emerald-400">
+                Server reports Polymarket live execution is armed. Use minimal sizes.
+              </span>
+            ) : (
+              <span className="block mt-2 text-amber-400">
+                Server reports Polymarket is not fully armed yet — resolve blockers above first.
+              </span>
+            )}
           </div>
         )}
-      </div>
-
-      <div className="mt-10 text-[10px] text-zinc-500">
-        This page exists because Phase 4 of the original plan requires heavy, explicit warnings before any real capital path is active.
       </div>
     </div>
   );

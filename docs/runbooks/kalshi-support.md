@@ -2,7 +2,7 @@
 
 ## Current State (June 2026)
 - Market discovery and order books: Functional via public REST.
-- WebSocket: Client exists and is wired into the market detail UI for live updates.
+- WebSocket: Authenticated client (`lib/ws/kalshi.ts`) — market detail UI + runner `BookHub` (`orderbook_delta` channel). Requires `KALSHI_ACCESS_KEY` + `KALSHI_RSA_PRIVATE_KEY` in env (same signing as REST v2 handshake).
 - Authenticated trading: Full client with login, getBalance, placeOrder, getOrder, getOrders, and getFills.
 - Real execution: Hardening — active order status polling and fill reconciliation in the runner. Auto-calls recordRealFill on confirmed fills. Balance pings + fills discovery.
 
@@ -42,8 +42,15 @@
 - Very old unconfirmed trades are marked `needs_review`.
 - Always use `ensureMarket` before any direct position writes.
 
+## Runner WebSocket (BookHub)
+- Set `KALSHI_ACCESS_KEY` and `KALSHI_RSA_PRIVATE_KEY` in `.env.local` (uncomment / fill — commented keys are ignored).
+- Restart dev server after changing env so `RunnerBookHub` picks up credentials.
+- Health/runner payload: `lastCycle.bookFetch.kalshiConnected` should be `true` when connected.
+- Probe: `npx tsx scripts/probe-kalshi-ws.ts [TICKER]` — prints first orderbook snapshot.
+- Without keys, Kalshi books still load via REST backfill only.
+
 ## Future Work (Prioritized)
 - Stronger partial fill, fee, and position marking accuracy in reconciliation.
 - Better Polymarket reconciliation parity.
-- Integration of Kalshi WebSocket data into the runner and strategies.
+- `update_subscription` add/remove markets without full reconnect; align REST login with v2 access headers.
 - Proactive alerting for stuck real trades or kill-switch events.

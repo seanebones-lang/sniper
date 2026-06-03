@@ -9,6 +9,7 @@
 import { db } from '@/lib/db';
 import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { categorizeMarket, getCategoryLimits } from './categorizer';
+import { minRealOrderUsd } from './sizing';
 
 export interface PortfolioState {
   totalExposureUsd: number;
@@ -217,11 +218,31 @@ export class PortfolioRiskManager {
     kellyUsd *= concentrationPenalty * this.params.correlationPenalty;
 
     // Final hard caps
-    const finalSize = Math.min(
+    let finalSize = Math.min(
       kellyUsd,
       this.params.maxSingleMarketExposureUsd,
       this.params.maxTotalExposureUsd - state.totalExposureUsd
     );
+
+    // Micro bankrolls: Kelly can be below exchange minimum even with a valid signal.
+    const minUsd = minRealOrderUsd(this.currentBankroll);
+    const microAccount = this.currentBankroll <= 25;
+    const edgeScore = params.edge * params.confidence;
+    const edgeOk = microAccount ? edgeScore >= 0.01 : edgeScore >= 0.08;
+    if (
+      !params.isExit &&
+      finalSize < minUsd &&
+      state.totalExposureUsd < this.params.maxTotalExposureUsd &&
+      catExposure < catLimit &&
+      edgeOk
+    ) {
+      const headroom = this.params.maxTotalExposureUsd - state.totalExposureUsd;
+      finalSize = Math.min(
+        this.params.maxSingleMarketExposureUsd,
+        headroom,
+        Math.max(finalSize, minUsd),
+      );
+    }
 
     return {
       allowedSize: Math.max(0, finalSize),
@@ -261,10 +282,31 @@ export class PortfolioRiskManager {
   applyBudgetSettings(budget: PaperBudgetSettings) {
     this.params.maxTotalExposureUsd = budget.maxExposureUsd;
     this.params.maxDailyLossUsd = budget.maxDailyLossUsd;
+    this.params.maxSingleMarketExposureUsd = Math.min(
+      250,
+      Math.max(0.5, budget.paperBudgetUsd * 0.85),
+    );
     this.currentBankroll = budget.paperBudgetUsd;
-    if (this.peakBankroll < this.currentBankroll) {
-      this.peakBankroll = this.currentBankroll;
+    this.peakBankroll = budget.paperBudgetUsd;
+    this.currentDrawdownPct = 0;
+  }
+
+  /** Live Polymarket micro account (~$7): use real CLOB cash, not paper $10k defaults. */
+  applyMicroRealBudget(balanceUsd: number) {
+    const b = Math.max(0.5, balanceUsd);
+    this.currentBankroll = b;
+    if (this.peakBankroll < b) this.peakBankroll = b;
+    this.params.maxTotalExposureUsd = Math.max(1, b * 0.95);
+    this.params.maxSingleMarketExposureUsd = Math.max(0.5, Math.min(2, b * 0.85));
+    this.params.maxDailyLossUsd = Math.max(1, b * 0.5);
+    for (const k of Object.keys(this.params.maxCategoryExposureUsd)) {
+      this.params.maxCategoryExposureUsd[k as keyof typeof this.params.maxCategoryExposureUsd] =
+        Math.max(1, b * 0.5);
     }
+  }
+
+  getCurrentBankroll(): number {
+    return this.currentBankroll;
   }
 }
 

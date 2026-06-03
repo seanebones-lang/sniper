@@ -8,6 +8,8 @@ import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { fetchKalshiOrderBook } from '@/lib/clients/kalshi';
 import { PolymarketWSClient, parsePolymarketWSBook, type PolymarketWSMessage } from '@/lib/ws/polymarket';
 import { KalshiWSClient, parseKalshiWSBook, type KalshiWSMessage } from '@/lib/ws/kalshi';
+import { KalshiWSOrderbookState } from '@/lib/ws/kalshi-orderbook-state';
+import { getKalshiCredentialsOptional } from '@/lib/clients/kalshi-auth';
 import { bookKey, type BookKey } from '@/lib/runner/book-cache';
 
 type BookSource = 'ws' | 'rest';
@@ -41,8 +43,11 @@ export class RunnerBookHub {
   private books = new Map<BookKey, BookEntry>();
   private polyIds: string[] = [];
   private kalshiTickers: string[] = [];
+  private lastPolyWatchKey = '';
+  private lastKalshiWatchKey = '';
   private polyClient: PolymarketWSClient | null = null;
   private kalshiClient: KalshiWSClient | null = null;
+  private kalshiOrderbookState = new KalshiWSOrderbookState();
   private started = false;
   private lastStats: BookHubFetchStats = {
     wsHits: 0,
@@ -67,6 +72,8 @@ export class RunnerBookHub {
     });
 
     this.kalshiClient = new KalshiWSClient({
+      channels: ['orderbook_delta'],
+      credentials: getKalshiCredentialsOptional(),
       onMessage: (msg: KalshiWSMessage) => this.onKalshiMessage(msg),
       onOpen: () => {
         this.lastStats.kalshiConnected = true;
@@ -123,7 +130,21 @@ export class RunnerBookHub {
   }
 
   private onKalshiMessage(msg: KalshiWSMessage) {
-    const ticker = String(msg.market_ticker ?? msg.ticker ?? '');
+    const type = String(msg.type ?? '');
+    if (type === 'orderbook_snapshot' || type === 'orderbook_delta') {
+      const book = this.kalshiOrderbookState.process(msg);
+      if (book) {
+        this.setBook('kalshi', book.marketExternalId, book, 'ws');
+      }
+      return;
+    }
+
+    const ticker = String(
+      (msg.msg as KalshiWSMessage | undefined)?.market_ticker ??
+        msg.market_ticker ??
+        msg.ticker ??
+        '',
+    );
     if (!ticker) return;
     const book = parseKalshiWSBook(msg, ticker);
     if (book) {
@@ -152,7 +173,11 @@ export class RunnerBookHub {
 
     if (!this.started || !this.polyClient || !this.kalshiClient) return;
 
+    const polyWatchKey = [...this.polyIds].sort().join('\0');
+    const polyWatchUnchanged = polyWatchKey === this.lastPolyWatchKey;
+
     if (this.polyIds.length === 0) {
+      this.lastPolyWatchKey = '';
       this.polyClient.disconnect();
       this.polyClient = new PolymarketWSClient({
         onMessage: (msg) => this.onPolymarketMessage(msg),
@@ -163,15 +188,30 @@ export class RunnerBookHub {
           this.lastStats.polyConnected = false;
         },
       });
-    } else if (this.lastStats.polyConnected) {
+    } else if (polyWatchUnchanged && this.polyClient.isConnecting()) {
+      // Same watchlist; socket already up or connecting — do not tear down.
+    } else if (polyWatchUnchanged && this.polyClient.isOpen()) {
+      this.lastStats.polyConnected = true;
+    } else if (polyWatchUnchanged) {
+      this.polyClient.connect(this.polyIds);
+    } else if (this.polyClient.isOpen()) {
+      this.lastPolyWatchKey = polyWatchKey;
       this.polyClient.updateSubscriptions(this.polyIds);
+      this.lastStats.polyConnected = true;
     } else {
+      this.lastPolyWatchKey = polyWatchKey;
       this.polyClient.connect(this.polyIds);
     }
 
+    const kalshiWatchKey = [...this.kalshiTickers].sort().join('\0');
+    const kalshiWatchUnchanged = kalshiWatchKey === this.lastKalshiWatchKey;
+
     if (this.kalshiTickers.length === 0) {
+      this.lastKalshiWatchKey = '';
       this.kalshiClient.disconnect();
       this.kalshiClient = new KalshiWSClient({
+        channels: ['orderbook_delta'],
+        credentials: getKalshiCredentialsOptional(),
         onMessage: (msg) => this.onKalshiMessage(msg),
         onOpen: () => {
           this.lastStats.kalshiConnected = true;
@@ -180,10 +220,16 @@ export class RunnerBookHub {
           this.lastStats.kalshiConnected = false;
         },
       });
-    } else if (this.lastStats.kalshiConnected) {
-      this.kalshiClient.updateSubscriptions(this.kalshiTickers);
+      this.kalshiOrderbookState.clear();
+    } else if (kalshiWatchUnchanged && this.lastStats.kalshiConnected) {
+      // unchanged watchlist — keep existing socket
     } else {
-      this.kalshiClient.connect(this.kalshiTickers);
+      this.lastKalshiWatchKey = kalshiWatchKey;
+      if (this.lastStats.kalshiConnected) {
+        this.kalshiClient.updateSubscriptions(this.kalshiTickers);
+      } else {
+        this.kalshiClient.connect(this.kalshiTickers);
+      }
     }
   }
 

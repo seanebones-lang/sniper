@@ -10,21 +10,6 @@ import { getActiveAdjustments, getAdjustmentSummary } from '@/lib/monitoring/tem
 import { loadRiskSnapshot, loadSystemState } from '@/lib/monitoring/system-state';
 import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
 import { getRunnerStatus } from '@/lib/runner/engine';
-import { alerts } from '@/lib/alerts/telegram';
-
-/**
- * Basic critical alert for real money events.
- * Logs + sends Telegram if configured.
- */
-export async function sendCriticalAlert(message: string, payload?: unknown) {
-  console.error(`[CRITICAL ALERT] ${message}`, payload || '');
-  try {
-    await alerts.error(message);
-  } catch {
-    console.warn(`[CRITICAL ALERT] ${message}`);
-  }
-}
-
 export async function GET() {
   const performance = await getStrategyPerformance(3);
   const runnerStatus = getRunnerStatus();

@@ -9,12 +9,12 @@
  * This is intentionally minimal and heavily logged.
  */
 
-import { db, realTrades, positions, auditEvents } from '@/lib/db';
+import { db, realTrades, auditEvents } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { riskEngine } from '@/lib/risk/engine';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import type { Market, OrderBook } from '@/lib/types';
-import { placePolymarketLimitOrder } from '@/lib/clients/polymarket';
+import { getPolymarketPrivateKey } from '@/lib/clients/polymarket-trading';
 import { getKalshiTradingClient } from '@/lib/clients/kalshi-trading';
 import { executionManager } from './execution-manager';
 import { categorizeMarket } from '@/lib/risk/categorizer';
@@ -25,7 +25,10 @@ import {
 } from '@/lib/monitoring/system-state';
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
-const POLYMARKET_PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
+
+/** After CLOB 403 geoblock, pause new attempts to avoid log/DB spam until session/proxy is fixed. */
+let clobGeoblockBackoffUntil = 0;
+let lastGeoblockHintAt = 0;
 
 // Kill switch support (now durable for 24/7 real capital safety)
 // Priority (highest first):
@@ -68,16 +71,78 @@ export async function isRealExecutionAllowed(): Promise<boolean> {
   return REAL_ENABLED;
 }
 
+export interface RealExecutionStatus {
+  allowed: boolean;
+  envEnabled: boolean;
+  killSwitchEnv: boolean;
+  hasPolymarketKey: boolean;
+  pendingRealTrades: number;
+  blockers: string[];
+  geoblock?: import('@/lib/clients/polymarket-geoblock').PolymarketGeoblockResult;
+}
+
+export async function getRealExecutionStatus(): Promise<RealExecutionStatus> {
+  const allowed = await isRealExecutionAllowed();
+  const blockers: string[] = [];
+
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') {
+    blockers.push('SNIPER_ENABLE_REAL_EXECUTION is not true');
+  }
+  if (process.env.SNIPER_DISABLE_REAL_EXECUTION === 'true') {
+    blockers.push('SNIPER_DISABLE_REAL_EXECUTION is true');
+  }
+  if (!getPolymarketPrivateKey()) {
+    blockers.push('POLYMARKET_PRIVATE_KEY is not set');
+  }
+  if (!allowed && process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+    blockers.push('Kill switch or durable disable is active');
+  }
+
+  const { checkPolymarketGeoblock, formatGeoblockMessage } = await import(
+    '@/lib/clients/polymarket-geoblock'
+  );
+  const geoblock = await checkPolymarketGeoblock({ ignoreSkip: true });
+  if (geoblock.blocked) {
+    blockers.push(formatGeoblockMessage(geoblock));
+  } else if (geoblock.skipped) {
+    blockers.push(formatGeoblockMessage(geoblock));
+  }
+
+  const pending = await db.query.realTrades.findMany({
+    where: (t, { eq }) => eq(t.status, 'pending'),
+    columns: { id: true },
+    limit: 100,
+  });
+
+  return {
+    allowed,
+    envEnabled: process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true',
+    killSwitchEnv: process.env.SNIPER_DISABLE_REAL_EXECUTION === 'true',
+    hasPolymarketKey: !!getPolymarketPrivateKey(),
+    pendingRealTrades: pending.length,
+    blockers,
+    geoblock,
+  };
+}
+
 export interface RealOrderRequest {
   market: Market;
   side: 'BUY' | 'SELL';
   price: number;
   size: number;
   reason: string;
+  /** From strategy signal — must match runner sizing (placeholder edge blocks all micro orders). */
+  edge?: number;
+  confidence?: number;
+  isExit?: boolean;
   /** Live order book for the market. Required for a sensible execution decision —
    *  without it the execution manager returns WAIT ("insufficient book depth")
    *  and the order is cancelled. */
   book?: OrderBook | null;
+  /** Lift the ask/bid now (quick-flip entries). */
+  takeLiquidity?: boolean;
+  /** Strategy max notional (USD) — used for micro live accounts. */
+  maxNotionalUsd?: number;
 }
 
 /**
@@ -89,52 +154,93 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: 'Real execution disabled (kill-switch or env flag)' };
   }
 
-  // === REAL-MONEY PER-TRADE CAP — start very small ===
-  // Hard USD ceiling on every real order. Defaults to $1 so live trading starts
-  // tiny; raise via SNIPER_MAX_REAL_USD_PER_TRADE once you've verified real fills.
-  const maxRealUsdPerTrade = Math.max(0, Number(process.env.SNIPER_MAX_REAL_USD_PER_TRADE ?? 1));
-  // Minimum fillable real order. Must stay strictly BELOW the cap: integer share
-  // rounding (floor(cap/price)) lands a $1 target a few cents under $1 at most
-  // prices, so a floor equal to the cap would reject nearly every order.
-  const minRealUsd = Math.min(0.5, maxRealUsdPerTrade);
+  if (req.market.platform === 'polymarket') {
+    if (Date.now() < clobGeoblockBackoffUntil) {
+      return {
+        success: false,
+        error:
+          'CLOB rejected orders (region/WAF). Open /real → paste cf_clearance + User-Agent, or use a residential EU proxy.',
+      };
+    }
 
-  // === ADVANCED PORTFOLIO RISK MANAGEMENT (circuit breakers) ===
-  // The order was already Kelly-sized by the runner; here calculateSafeSize acts
-  // as a circuit breaker — it returns allowedSize 0 with a reason when a limit
-  // (daily loss / exposure / drawdown / category) is tripped.
-  const safeSizing = await portfolioRiskManager.calculateSafeSize({
-    platform: req.market.platform,
-    marketExternalId: req.market.externalId,
-    side: req.side,
-    edge: 0.03,                    // placeholder - in real system this would come from the strategy
-    confidence: 0.7,
-    category: categorizeMarket(req.market.question || '', req.market.platform, req.market.externalId).category,
-    currentPrice: req.price,
-  });
+    const { checkPolymarketGeoblock, formatGeoblockMessage } = await import(
+      '@/lib/clients/polymarket-geoblock'
+    );
+    const geo = await checkPolymarketGeoblock({ ignoreSkip: true });
+    if (geo.blocked) {
+      await logAudit('real_order_blocked_geoblock', { ...geo });
+      return { success: false, error: formatGeoblockMessage(geo) };
+    }
 
-  if (safeSizing.allowedSize <= 0) {
-    await logAudit('real_order_blocked_portfolio_risk', {
-      ...req,
-      reason: safeSizing.reason,
-      suggestedSize: safeSizing.allowedSize
-    });
-    return { success: false, error: `Portfolio risk rejected: ${safeSizing.reason}` };
+    const pk = getPolymarketPrivateKey();
+    if (pk) {
+      const { getPolymarketUsdcBalance } = await import('@/lib/clients/polymarket-trading');
+      const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
+      const balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
+      if (balanceUsd != null && balanceUsd > 0) {
+        portfolioRiskManager.applyMicroRealBudget(balanceUsd);
+        const realRisk = await loadRealRiskSnapshot(balanceUsd);
+        portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
+      }
+    }
   }
 
-  // Use the risk-managed USD cap, then clamp to the per-trade ceiling, convert to shares
-  const { usdCapToShares } = await import('@/lib/risk/sizing');
-  const cappedUsd = Math.min(req.price * req.size, safeSizing.allowedSize, maxRealUsdPerTrade);
-  const finalSize = usdCapToShares(cappedUsd, req.price, 1);
-  const usdValue = req.price * finalSize;
+  const { usdCapToShares, minRealOrderUsd } = await import('@/lib/risk/sizing');
+  const bankrollUsd = portfolioRiskManager.getCurrentBankroll();
+  const minOrderUsd = minRealOrderUsd(bankrollUsd);
+  const requestedUsd = req.price * req.size;
 
-  if (finalSize <= 0 || usdValue < minRealUsd) {
-    await logAudit('real_order_blocked_portfolio_risk', {
-      ...req,
-      reason: 'Size below minimum after USD conversion',
-      suggestedSize: safeSizing.allowedSize,
-      maxRealUsdPerTrade,
+  let finalSize: number;
+  let usdValue: number;
+
+  // Micro live (~$7): trust strategy cap ($1) instead of paper-era Kelly ($5 min).
+  const microLive =
+    !req.isExit &&
+    bankrollUsd > 0 &&
+    bankrollUsd <= 25 &&
+    req.market.platform === 'polymarket';
+  const strategyCap = req.maxNotionalUsd ?? 1;
+  const microCapUsd = Math.min(requestedUsd, strategyCap, bankrollUsd * 0.9);
+
+  if (microLive && microCapUsd >= minOrderUsd) {
+    finalSize = usdCapToShares(microCapUsd, req.price, 1);
+    usdValue = req.price * finalSize;
+  } else {
+    const safeSizing = await portfolioRiskManager.calculateSafeSize({
+      platform: req.market.platform,
+      marketExternalId: req.market.externalId,
+      side: req.side,
+      edge: req.edge ?? 0.03,
+      confidence: req.confidence ?? 0.7,
+      category: categorizeMarket(req.market.question || '', req.market.platform, req.market.externalId).category,
+      currentPrice: req.price,
+      isExit: req.isExit,
     });
-    return { success: false, error: 'Portfolio risk rejected: size too small' };
+
+    if (safeSizing.allowedSize < minOrderUsd) {
+      await logAudit('real_order_blocked_portfolio_risk', {
+        ...req,
+        reason: safeSizing.reason,
+        suggestedSize: safeSizing.allowedSize,
+        bankrollUsd,
+      });
+      return { success: false, error: `Portfolio risk rejected: ${safeSizing.reason}` };
+    }
+
+    const cappedUsd = Math.min(requestedUsd, safeSizing.allowedSize);
+    const targetUsd = Math.max(cappedUsd, Math.min(requestedUsd, minOrderUsd));
+    finalSize = usdCapToShares(targetUsd, req.price, 1);
+    usdValue = req.price * finalSize;
+
+    if (finalSize <= 0 || usdValue < minOrderUsd * 0.99) {
+      await logAudit('real_order_blocked_portfolio_risk', {
+        ...req,
+        reason: 'Size below minimum after USD conversion',
+        suggestedSize: safeSizing.allowedSize,
+        bankrollUsd,
+      });
+      return { success: false, error: 'Portfolio risk rejected: size too small' };
+    }
   }
 
   // 1. Legacy risk engine gate (still useful as second layer). Align its
@@ -154,13 +260,46 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     return { success: false, error: risk.reason };
   }
 
+  if (req.market.platform === 'polymarket') {
+    const { ensurePolymarketTradingReady } = await import(
+      '@/lib/clients/polymarket-trading-setup'
+    );
+    const setup = await ensurePolymarketTradingReady();
+    if (!setup.ready && req.side === 'BUY') {
+      await logAudit('real_order_blocked_trading_not_ready', {
+        ...setup,
+        requiredUsd: usdValue,
+        market: req.market.externalId,
+      });
+      return {
+        success: false,
+        error: setup.message ?? 'Polymarket trading not ready (balance/approvals)',
+      };
+    }
+    if (
+      req.side === 'BUY' &&
+      setup.balanceUsd != null &&
+      setup.balanceUsd < usdValue * 0.95
+    ) {
+      await logAudit('real_order_blocked_insufficient_balance', {
+        balanceUsd: setup.balanceUsd,
+        requiredUsd: usdValue,
+        market: req.market.externalId,
+      });
+      return {
+        success: false,
+        error: `Insufficient Polymarket collateral ($${setup.balanceUsd.toFixed(2)} available, need ~$${usdValue.toFixed(2)})`,
+      };
+    }
+  }
+
   // Record the intent first (audit trail)
   const [trade] = await db.insert(realTrades).values({
     platform: req.market.platform,
     marketExternalId: req.market.externalId,
     side: req.side,
     price: req.price.toString(),
-    size: req.size.toString(),
+    size: finalSize.toString(),
     fee: (usdValue * 0.0005).toString(),
     status: 'pending',
   }).returning();
@@ -173,17 +312,34 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
 
   // === ExecutionManager Decision ===
   // In a real implementation we would pass the live book here
-  const decision = executionManager.decideExecution(
+  const book = req.book
+    ? { ...req.book, marketExternalId: req.market.externalId }
+    : null;
+  const topBid = book?.bids?.[0]?.size ?? 0;
+  const topAsk = book?.asks?.[0]?.size ?? 0;
+  const recentImbalance =
+    topBid + topAsk > 0 ? (topBid - topAsk) / (topBid + topAsk) : 0;
+
+  let decision = executionManager.decideExecution(
     { action: req.side, price: req.price, size: finalSize, reason: req.reason },
-    req.book ?? null, // live book from the runner; null → execution manager WAITs
+    book, // normalized live book from the runner; null → execution manager WAITs
     {
-      regime: 'normal', // should come from recent features
-      recentImbalance: 0.1,
-      timeSinceSignal: 12,
+      regime: 'normal',
+      recentImbalance,
+      timeSinceSignal: 0,
       isRealMoney: true,
       openOrders: executionManager.getOpenOrdersForMarket(req.market.externalId),
     }
   );
+
+  if (req.takeLiquidity && req.side === 'BUY' && book?.asks?.length) {
+    decision = {
+      type: 'TAKE_AGGRESSIVE',
+      price: req.price,
+      size: finalSize,
+      reason: 'Quick-flip entry — lift ask',
+    };
+  }
 
   await logAudit('execution_manager_decision', {
     tradeId: trade.id,
@@ -197,23 +353,40 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
 
   // 2. Polymarket execution
   if (req.market.platform === 'polymarket') {
-    if (!POLYMARKET_PRIVATE_KEY) {
+    const privateKey = getPolymarketPrivateKey();
+    if (!privateKey) {
       const msg = 'POLYMARKET_PRIVATE_KEY not set in environment';
       await db.update(realTrades).set({ status: 'rejected' }).where(eq(realTrades.id, trade.id));
       return { success: false, error: msg };
     }
 
-    const execPrice = decision.type === 'POST_PASSIVE' || decision.type === 'TAKE_AGGRESSIVE' 
-      ? decision.price 
+    const execPrice = decision.type === 'POST_PASSIVE' || decision.type === 'TAKE_AGGRESSIVE'
+      ? decision.price
       : req.price;
+    const postOnly = decision.type === 'POST_PASSIVE';
 
-    const result = await placePolymarketLimitOrder({
-      privateKey: POLYMARKET_PRIVATE_KEY,
-      tokenId: req.market.externalId,
-      price: Math.max(0.01, Math.min(0.99, execPrice)),
-      size: finalSize,
-      side: req.side,
-    });
+    const { placePolymarketLimitOrder, placePolymarketMarketOrder } = await import(
+      '@/lib/clients/polymarket-trading'
+    );
+    const { isPolymarketGeoblockOrderError } = await import('@/lib/clients/polymarket-geoblock');
+
+    const result =
+      req.takeLiquidity && req.side === 'BUY'
+        ? await placePolymarketMarketOrder({
+            privateKey,
+            tokenId: req.market.externalId,
+            amountUsd: Math.min(usdValue, req.maxNotionalUsd ?? usdValue),
+            side: 'BUY',
+            orderType: 'FOK',
+          })
+        : await placePolymarketLimitOrder({
+            privateKey,
+            tokenId: req.market.externalId,
+            price: Math.max(0.01, Math.min(0.99, execPrice)),
+            size: finalSize,
+            side: req.side,
+            postOnly,
+          });
 
     if (result.success) {
       executionManager.recordOrderPosted(
@@ -222,15 +395,6 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         execPrice,
         finalSize,
       );
-
-      // Basic position tracking for real trades (advances audit-real-2)
-      await recordRealFillForPosition({
-        platform: req.market.platform,
-        marketExternalId: req.market.externalId,
-        side: req.side,
-        size: finalSize,
-        price: execPrice,
-      });
     }
 
     // For limit orders we optimistically set to 'pending' so reconciliation can later confirm the fill.
@@ -244,7 +408,19 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       })
       .where(eq(realTrades.id, trade.id));
 
-    await logAudit('real_order_result', { tradeId: trade.id, ...result });
+    await logAudit('real_order_result', { tradeId: trade.id, finalSize, usdValue, ...result });
+
+    if (!result.success && isPolymarketGeoblockOrderError(result.raw)) {
+      clobGeoblockBackoffUntil = Date.now() + 5 * 60 * 1000;
+      if (Date.now() - lastGeoblockHintAt > 60_000) {
+        lastGeoblockHintAt = Date.now();
+        console.warn(
+          '[Polymarket] CLOB geoblock/WAF — pausing real orders 5m. Fix: /real → Cloudflare clearance (cf_clearance + User-Agent) or residential EU proxy.',
+        );
+      }
+    } else if (result.success) {
+      clobGeoblockBackoffUntil = 0;
+    }
 
     return {
       success: result.success,
@@ -311,70 +487,6 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   }
 
   return { success: false, error: 'Unsupported platform for real execution' };
-}
-
-/**
- * Basic helper to update positions table after a successful real fill.
- * This is a pragmatic step toward better real trade position tracking.
- */
-async function recordRealFillForPosition(params: {
-  platform: string;
-  marketExternalId: string;
-  side: 'BUY' | 'SELL';
-  size: number;
-  price: number;
-}) {
-  try {
-    // Ensure the market exists in our DB (important for real trades) — use the minimal form to avoid casts
-    const { ensureMarket } = await import('@/lib/markets');
-
-    const marketId = await ensureMarket({
-      platform: params.platform as 'polymarket' | 'kalshi',
-      externalId: params.marketExternalId,
-      question: 'Real Execution Market',
-      status: 'open',
-    });
-
-    // Find or create the internal market row (we just ensured it)
-    const market = await db.query.markets.findFirst({
-      where: (m, { eq }) => eq(m.id, marketId),
-    });
-
-    if (!market) return;
-
-    const signedSize = params.side === 'BUY' ? params.size : -params.size;
-
-    const existing = await db.query.positions.findFirst({
-      where: (p, { and, eq }) => and(
-        eq(p.platform, params.platform),
-        eq(p.marketId, market.id)
-      ),
-    });
-
-    if (existing) {
-      const newSize = parseFloat(existing.sizeShares) + signedSize;
-      // Very simplified average price update
-      const totalCost = parseFloat(existing.sizeShares) * parseFloat(existing.avgPrice) + signedSize * params.price;
-      const newAvg = newSize !== 0 ? totalCost / newSize : params.price;
-
-      await db.update(positions).set({
-        sizeShares: newSize.toString(),
-        avgPrice: newAvg.toString(),
-        updatedAt: new Date(),
-      }).where(eq(positions.id, existing.id));
-    } else {
-      await db.insert(positions).values({
-        platform: params.platform,
-        marketId: market.id,
-        side: params.side,
-        sizeShares: signedSize.toString(),
-        avgPrice: params.price.toString(),
-      });
-    }
-  } catch (err) {
-    // Best effort — don't fail the whole order because of position tracking
-    console.warn('[Real Executor] Position tracking failed (non-fatal)', err);
-  }
 }
 
 async function logAudit(action: string, payload: Record<string, unknown>) {

@@ -23,6 +23,13 @@ export interface PolymarketWSOptions {
   onError?: (err: Event | Error) => void;
 }
 
+/** True when both lists contain the same token IDs (order-independent). */
+export function sameAssetIdSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(b);
+  return a.every((id) => seen.has(id));
+}
+
 export class PolymarketWSClient {
   private ws: WebSocket | null = null;
   private assetIds: string[] = [];
@@ -31,24 +38,61 @@ export class PolymarketWSClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private isManuallyClosed = false;
+  /** Closing socket to open a replacement — do not auto-reconnect from this close. */
+  private replacingSocket = false;
 
   constructor(private options: PolymarketWSOptions) {}
 
+  isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  isConnecting(): boolean {
+    const state = this.ws?.readyState;
+    return state === WebSocket.CONNECTING || state === WebSocket.OPEN;
+  }
+
   connect(assetIds: string[]) {
-    this.assetIds = assetIds;
     this.isManuallyClosed = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.isOpen() && sameAssetIdSet(assetIds, this.assetIds)) {
+      return;
+    }
+
+    if (this.isOpen()) {
+      this.assetIds = assetIds;
+      this.updateSubscriptions(assetIds);
+      return;
+    }
+
+    this.assetIds = assetIds;
     this._connectInternal();
   }
 
+  private _clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private _connectInternal() {
+    this._clearReconnectTimer();
+
     if (this.ws) {
+      this.replacingSocket = true;
       this.ws.close();
+      this.ws = null;
     }
 
     this.ws = new WebSocket(WS_URL);
 
     this.ws.onopen = () => {
-      console.log('[PolymarketWS] Connected');
+      wsLog('Connected');
       this.reconnectAttempts = 0;
       this.subscribedIds.clear();
       this._sendInitialSubscribe();
@@ -58,6 +102,7 @@ export class PolymarketWSClient {
 
     this.ws.onmessage = (event) => {
       const raw = event.data as string;
+      if (raw === 'PONG' || raw.trim() === 'PONG') return;
       if (typeof raw === 'string' && !raw.trimStart().startsWith('{')) {
         if (raw.includes('INVALID')) {
           console.warn('[PolymarketWS]', raw.trim());
@@ -73,13 +118,18 @@ export class PolymarketWSClient {
     };
 
     this.ws.onclose = () => {
-      console.log('[PolymarketWS] Disconnected');
+      const wasReplacement = this.replacingSocket;
+      this.replacingSocket = false;
+      this.ws = null;
       this._stopHeartbeat();
       this.options.onClose?.();
 
-      if (!this.isManuallyClosed) {
-        this._scheduleReconnect();
+      if (wasReplacement || this.isManuallyClosed) {
+        return;
       }
+
+      wsLog('Disconnected (unexpected)');
+      this._scheduleReconnect();
     };
 
     this.ws.onerror = (err) => {
@@ -99,7 +149,7 @@ export class PolymarketWSClient {
       }),
     );
     this.subscribedIds = new Set(this.assetIds);
-    console.log('[PolymarketWS] Subscribed to', this.assetIds.length, 'assets');
+    wsLog('Subscribed to', this.assetIds.length, 'assets');
   }
 
   private _sendDelta(ids: string[], operation: 'subscribe' | 'unsubscribe') {
@@ -136,20 +186,30 @@ export class PolymarketWSClient {
     const delay = Math.min(1000 * Math.pow(1.6, this.reconnectAttempts), 15000);
     this.reconnectAttempts++;
 
-    console.log(`[PolymarketWS] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts})`);
+    wsLog(`Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this._connectInternal();
     }, delay);
   }
 
   updateSubscriptions(newAssetIds: string[]) {
+    if (sameAssetIdSet(newAssetIds, this.assetIds) && this.subscribedIds.size === newAssetIds.length) {
+      return;
+    }
+
     const nextSet = new Set(newAssetIds);
     const toAdd = newAssetIds.filter((id) => !this.subscribedIds.has(id));
     const toRemove = [...this.subscribedIds].filter((id) => !nextSet.has(id));
     this.assetIds = newAssetIds;
 
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (!this.isOpen()) {
+      if (newAssetIds.length > 0 && !this.isConnecting()) {
+        this.connect(newAssetIds);
+      }
+      return;
+    }
 
     if (this.subscribedIds.size === 0 && newAssetIds.length > 0) {
       this._sendInitialSubscribe();
@@ -169,10 +229,11 @@ export class PolymarketWSClient {
   disconnect() {
     this.isManuallyClosed = true;
     this._stopHeartbeat();
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this._clearReconnectTimer();
     this.subscribedIds.clear();
 
     if (this.ws) {
+      this.replacingSocket = true;
       this.ws.close();
       this.ws = null;
     }
@@ -180,7 +241,20 @@ export class PolymarketWSClient {
 }
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
-const HEARTBEAT_INTERVAL = 8000;
+/** Polymarket docs: send PING at least every 10s. */
+const HEARTBEAT_INTERVAL = 10_000;
+
+function wsLog(...args: unknown[]) {
+  if (process.env.SNIPER_VERBOSE_WS === 'true') {
+    console.log('[PolymarketWS]', ...args);
+    return;
+  }
+  // Surface only subscribe + unexpected disconnect/reconnect (not every connect/close).
+  const head = typeof args[0] === 'string' ? args[0] : '';
+  if (head.startsWith('Subscribed') || head.startsWith('Disconnected') || head.startsWith('Reconnecting')) {
+    console.log('[PolymarketWS]', ...args);
+  }
+}
 
 function messageKind(msg: PolymarketWSMessage): string | undefined {
   if ('type' in msg && typeof msg.type === 'string') return msg.type;

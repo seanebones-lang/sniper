@@ -156,29 +156,147 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
         const ageMs = Date.now() - new Date(trade.createdAt).getTime();
         const ageMinutes = Math.round(ageMs / 60000);
 
-        if (trade.platform === 'polymarket' && trade.txHash) {
+        if (trade.platform === 'polymarket') {
           try {
-            const { getPolymarketOpenOrders } = await import('@/lib/clients/polymarket');
-            // Note: This requires POLYMARKET_PRIVATE_KEY to be set for real reconciliation
-            const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
-            if (privateKey) {
-              const openOrders = await getPolymarketOpenOrders(privateKey);
-              const stillOpen = Array.isArray(openOrders) && openOrders.some((o: any) => o.orderID === trade.txHash);
+            const {
+              getPolymarketPrivateKey,
+              fetchPolymarketOrder,
+              fetchPolymarketTradesForOrder,
+              getPolymarketOpenOrders,
+              isValidPolymarketOrderId,
+            } = await import('@/lib/clients/polymarket-trading');
 
-              if (!stillOpen && ageMinutes > 5) {
-                // Order no longer open → likely filled or cancelled. Mark for review / heuristic close
-                await db.update(realTrades)
-                  .set({ status: ageMinutes > 30 ? 'needs_review' : 'pending' })
-                  .where(eq(realTrades.id, trade.id));
+            const privateKey = getPolymarketPrivateKey();
+            if (!privateKey) {
+              continue;
+            }
 
-                await logAudit('polymarket_order_no_longer_open', {
+            if (ageMinutes > 5 && ageMinutes % 30 === 0) {
+              const { getPolymarketUsdcBalance } = await import('@/lib/clients/polymarket-trading');
+              const balance = await getPolymarketUsdcBalance(privateKey);
+              await logAudit('polymarket_recon_balance_check', {
+                tradeId: trade.id,
+                balanceUsd: balance,
+                ageMinutes,
+              });
+            }
+
+            let orderId = isValidPolymarketOrderId(trade.txHash) ? trade.txHash! : null;
+
+            if (!orderId) {
+              const open = await getPolymarketOpenOrders(privateKey);
+              const wantSide = trade.side === 'BUY' ? 'BUY' : 'SELL';
+              const tradePrice = parseFloat(trade.price);
+              const tradeSize = parseFloat(trade.size);
+              const match = open.find((o) => {
+                const row = o as Record<string, unknown>;
+                const assetId = String(row.asset_id ?? '');
+                const side = String(row.side ?? '').toUpperCase();
+                const price = parseFloat(String(row.price ?? '0'));
+                const size = parseFloat(String(row.original_size ?? row.size ?? '0'));
+                return (
+                  assetId === trade.marketExternalId &&
+                  side === wantSide &&
+                  Math.abs(price - tradePrice) < 0.02 &&
+                  Math.abs(size - tradeSize) < 2
+                );
+              });
+              if (match) {
+                const row = match as Record<string, unknown>;
+                orderId = String(row.id ?? row.orderID ?? '');
+                if (isValidPolymarketOrderId(orderId)) {
+                  await db.update(realTrades)
+                    .set({ txHash: orderId })
+                    .where(eq(realTrades.id, trade.id));
+                }
+              }
+            }
+
+            if (!orderId) {
+              if (ageMinutes > 2) {
+                await logAudit('polymarket_recon_no_order_id', {
                   tradeId: trade.id,
-                  orderId: trade.txHash,
+                  txHash: trade.txHash,
                   ageMinutes,
                 });
-
-                result.updated++;
               }
+              if (
+                ageMinutes >= 5 &&
+                (!trade.txHash || trade.txHash === 'submitted')
+              ) {
+                await db.update(realTrades)
+                  .set({ status: 'cancelled' })
+                  .where(eq(realTrades.id, trade.id));
+                result.updated++;
+                await logAudit('polymarket_stale_pending_cancelled', {
+                  tradeId: trade.id,
+                  txHash: trade.txHash,
+                  ageMinutes,
+                });
+              }
+              continue;
+            }
+
+            let recon = await fetchPolymarketOrder(privateKey, orderId);
+
+            if (!recon || recon.status === 'unknown') {
+              const trades = await fetchPolymarketTradesForOrder(
+                privateKey,
+                orderId,
+                trade.marketExternalId,
+              );
+              if (trades.length > 0) {
+                const totalSize = trades.reduce((s, t) => s + t.size, 0);
+                const avgPrice =
+                  trades.reduce((s, t) => s + t.size * t.price, 0) / totalSize;
+                recon = {
+                  orderId,
+                  status: 'filled',
+                  filledSize: totalSize,
+                  originalSize: parseFloat(trade.size),
+                  avgPrice,
+                };
+              }
+            }
+
+            if (recon?.status === 'filled' && recon.filledSize > 0) {
+              await recordRealFill({
+                tradeId: trade.id,
+                filledSize: recon.filledSize,
+                filledPrice: recon.avgPrice > 0 ? recon.avgPrice : parseFloat(trade.price),
+                txHash: orderId,
+              });
+              result.updated++;
+              await logAudit('polymarket_real_fill_confirmed_via_api', {
+                tradeId: trade.id,
+                orderId,
+                recon,
+              });
+              continue;
+            }
+
+            if (recon?.status === 'cancelled') {
+              await db.update(realTrades)
+                .set({ status: 'cancelled' })
+                .where(eq(realTrades.id, trade.id));
+              result.updated++;
+              await logAudit('polymarket_order_cancelled_on_exchange', {
+                tradeId: trade.id,
+                orderId,
+              });
+              continue;
+            }
+
+            if (ageMinutes > 45) {
+              await db.update(realTrades)
+                .set({ status: 'needs_review' })
+                .where(eq(realTrades.id, trade.id));
+              result.updated++;
+              await logAudit('polymarket_real_trade_pending_review', {
+                tradeId: trade.id,
+                orderId,
+                ageMinutes,
+              });
             }
           } catch (polyErr) {
             await logAudit('polymarket_recon_error', {

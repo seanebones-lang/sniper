@@ -3,10 +3,7 @@
  * Supports both public reads and (heavily gated) real trading.
  */
 
-import { ClobClient, Side } from '@polymarket/clob-client-v2';
-import { createWalletClient, http } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { polygon } from 'viem/chains';
+import { ClobClient } from '@polymarket/clob-client-v2';
 import type { Market, OrderBook, OrderBookLevel } from '../types';
 import { getErrorMessage } from '../error-message';
 import { normalizeOrderBookLevels } from '../orderbook';
@@ -15,7 +12,6 @@ const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_HOST = 'https://clob.polymarket.com';
 
 let publicClient: ClobClient | null = null;
-let tradingClient: ClobClient | null = null;
 
 function getPublicClient(): ClobClient {
   if (!publicClient) {
@@ -25,30 +21,6 @@ function getPublicClient(): ClobClient {
     });
   }
   return publicClient;
-}
-
-/**
- * Returns an authenticated ClobClient for real trading.
- * Only use this when SNIPER_ENABLE_REAL_EXECUTION=true and you have explicit user consent.
- */
-export function getTradingClient(privateKey: string): ClobClient {
-  if (tradingClient) return tradingClient;
-
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
-
-  const walletClient = createWalletClient({
-    account,
-    chain: polygon,
-    transport: http(),
-  });
-
-  tradingClient = new ClobClient({
-    host: CLOB_HOST,
-    chain: 137,
-    signer: walletClient as any, // viem wallet client works with the SDK
-  });
-
-  return tradingClient;
 }
 
 export interface GammaMarket {
@@ -244,76 +216,12 @@ export async function fetchPolymarketPrice(tokenId: string): Promise<number | nu
   }
 }
 
-/**
- * Place a real limit order on Polymarket.
- * This should ONLY be called from the Real Executor after all risk checks pass.
- */
-/**
- * Get open orders for the authenticated user.
- * Useful for reconciliation of real Polymarket trades.
- */
-export async function getPolymarketOpenOrders(privateKey: string): Promise<any> {
-  try {
-    const client = getTradingClient(privateKey);
-    // The CLOB SDK supports getOpenOrders
-    const orders = await client.getOpenOrders();
-    return orders;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Polymarket] getOpenOrders failed:', err);
-    return [];
-  }
-}
-
-/**
- * Cancel an order (best effort).
- */
-export async function cancelPolymarketOrder(privateKey: string, orderId: string): Promise<boolean> {
-  try {
-    const client = getTradingClient(privateKey);
-    await client.cancelOrder({ orderID: orderId });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function placePolymarketLimitOrder(params: {
-  privateKey: string;
-  tokenId: string;
-  price: number;           // 0-1 decimal (e.g. 0.47)
-  size: number;            // in shares
-  side: 'BUY' | 'SELL';
-}): Promise<{ success: boolean; orderId?: string; error?: string }> {
-  try {
-    const client = getTradingClient(params.privateKey);
-
-    // Ensure we have L2 credentials (this will create/derive if needed)
-    await client.createOrDeriveApiKey();
-
-    const order = await client.createAndPostOrder(
-      {
-        tokenID: params.tokenId,
-        price: params.price,
-        size: params.size,
-        side: params.side === 'BUY' ? Side.BUY : Side.SELL,
-      },
-      {
-        tickSize: '0.01', // safe default, can be improved later
-        negRisk: false,
-      }
-    );
-
-    return {
-      success: true,
-      orderId: order?.orderID || 'submitted',
-    };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Polymarket] Real order failed:', err);
-    return {
-      success: false,
-      error: message,
-    };
-  }
-}
+export {
+  placePolymarketLimitOrder,
+  getPolymarketOpenOrders,
+  cancelPolymarketOrder,
+  getPolymarketPrivateKey,
+  getPolymarketOrderOptions,
+  fetchPolymarketOrder,
+  getPolymarketUsdcBalance,
+} from '@/lib/clients/polymarket-trading';

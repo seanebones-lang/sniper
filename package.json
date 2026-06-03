@@ -2,8 +2,12 @@
   "name": "sniper",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
+    "dev:turbo": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -15,15 +19,17 @@
     "test:smoke": "node scripts/smoke-test.js",
     "test:e2e": "playwright test",
     "test:all": "npm run test:ci && npm run test:e2e",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push --force"
   },
   "dependencies": {
     "@ai-sdk/xai": "^3.0.93",
+    "@polymarket/builder-relayer-client": "^0.0.10",
     "@polymarket/clob-client-v2": "^1.0.6",
     "@tanstack/react-query": "^5.100.14",
     "ai": "^6.0.193",
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
+    "https-proxy-agent": "^5.0.1",
     "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "postgres": "^3.4.9",

@@ -21,7 +21,7 @@ This document describes how to safely operate real money execution on Sniper.
 ## Reconciliation
 - The runner periodically calls `reconcilePendingRealTrades()`.
 - Kalshi: Actively polls order status via `getOrder`/`getFills` and auto-reconciles confirmed fills using `recordRealFill`.
-- Polymarket: Basic open-order reconciliation (detects when orders are no longer open).
+- Polymarket: `getOrder` + trade fallback → `recordRealFill`; cancelled orders marked; balance liveness pings.
 - Durable risk snapshots and positions table are the source of truth for exposure after reconciliation.
 - Monitor "real_fill_reconciled", "kalshi_real_fill_confirmed_via_api", and "polymarket_order_no_longer_open" audit events.
 
@@ -102,7 +102,7 @@ In code / logs: look for `runner_signal_created` with real context, `real_fill_r
 
 ## Known Limitations (Updated June 2026)
 - Kalshi reconciliation is active (order + fills polling) but still needs stronger partial-fill and fee accuracy.
-- Polymarket reconciliation is basic (detects when orders are no longer open).
+- Polymarket reconciliation polls order status and user trades; confirm fills via `/api/real/status` + audit `polymarket_real_fill_confirmed_via_api`.
 - MaxDrawdown tracking + circuit breaker exists (peak bankroll based).
 - Durable risk snapshots (exposure, mode, health, maxDrawdown) are now persisted and recovered by the runner.
 - Position math is pragmatic. Live marks and advanced cost-basis tracking are future work.

@@ -31,6 +31,9 @@ export interface PaperRunSession {
  * Database rows are kept — this is a display / session boundary, not a delete.
  */
 export async function getPaperRunStartedAt(): Promise<Date | null> {
+  const { getPaperRunStartedAtFromSettings } = await import('@/lib/settings/paper-budget');
+  const fromDb = await getPaperRunStartedAtFromSettings();
+  if (fromDb) return fromDb;
   const file = await readSettingsFile();
   if (!file.paperRunStartedAt) return null;
   const d = new Date(file.paperRunStartedAt);
@@ -39,6 +42,9 @@ export async function getPaperRunStartedAt(): Promise<Date | null> {
 
 export async function startNewPaperRun(): Promise<PaperRunSession> {
   const startedAt = new Date().toISOString();
+  const { setPaperRunStartedAt, clearPaperBudgetCache } = await import('@/lib/settings/paper-budget');
+  await setPaperRunStartedAt(startedAt);
+  clearPaperBudgetCache();
   const file = await readSettingsFile();
   file.paperRunStartedAt = startedAt;
   await writeSettingsFile(file);

@@ -91,3 +91,4 @@ recovered-from-transcript/
 
 # Allow specific env files if needed (commented for safety)
 # !.env.example
+data/relayer-api-key.txt

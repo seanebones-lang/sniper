@@ -3,6 +3,7 @@
  */
 
 import { db, paperTrades, signals, realTrades } from '@/lib/db';
+import { chunkArray } from '@/lib/db/chunk-in-array';
 import { gte, inArray } from 'drizzle-orm';
 import { computeStrategyPnlWindows } from '@/lib/paper/strategy-pnl';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
@@ -60,9 +61,14 @@ export async function getStrategyPerformance(days = 7) {
   }
 
   const signalIds = recentPaper.map((t) => t.signalId).filter(Boolean) as string[];
-  const linkedSignals = signalIds.length
-    ? await db.query.signals.findMany({ where: inArray(signals.id, signalIds) })
-    : [];
+  const linkedSignals: Array<{ id: string; strategyId: string }> = [];
+  for (const ids of chunkArray(signalIds)) {
+    const batch = await db.query.signals.findMany({
+      where: inArray(signals.id, ids),
+      columns: { id: true, strategyId: true },
+    });
+    linkedSignals.push(...batch);
+  }
   const signalStrategyMap = Object.fromEntries(linkedSignals.map((s) => [s.id, s.strategyId]));
 
   for (const fill of recentPaper) {

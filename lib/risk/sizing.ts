@@ -11,6 +11,13 @@ export function sharesToUsd(shares: number, price: number): number {
   return shares * price;
 }
 
+/** Minimum notional for a real order given current bankroll (supports micro accounts). */
+export function minRealOrderUsd(bankrollUsd: number): number {
+  if (bankrollUsd <= 25) return 0.5;
+  if (bankrollUsd <= 100) return 1;
+  return 5;
+}
+
 /**
  * Apply risk multipliers to a signal, returning final share count.
  */

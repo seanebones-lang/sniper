@@ -35,7 +35,7 @@ export function PaperPnlIndicator({
       <div className={`card border-white/10 ${className}`}>
         <div className="flex items-center gap-2 text-sm text-zinc-500">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Loading P&amp;L from paper_trades database…
+          Loading paper simulation P&amp;L…
         </div>
       </div>
     );

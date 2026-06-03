@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
-import { db, paperTrades } from '@/lib/db';
+import { isRealExecutionAllowed } from '@/lib/execution/real-executor';
+import { db, paperTrades, strategies } from '@/lib/db';
+import { eq } from 'drizzle-orm';
 import { gte, count, and } from 'drizzle-orm';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 import { getPaperPortfolio } from '@/lib/paper/portfolio';
@@ -29,13 +31,28 @@ async function cheapRunnerCounts() {
   };
 }
 
+async function getRunnerExecutionMode(): Promise<'paper' | 'live' | 'mixed'> {
+  const active = await db.query.strategies.findMany({
+    where: eq(strategies.isActive, true),
+    columns: { paperOnly: true },
+  });
+  const realAllowed = await isRealExecutionAllowed();
+  const liveCount = active.filter((s) => !s.paperOnly).length;
+  if (!realAllowed || liveCount === 0) return 'paper';
+  if (liveCount >= active.length) return 'live';
+  return 'mixed';
+}
+
 async function runnerPayload(includePnl: boolean) {
   const status = getRunnerStatus();
   const counts = await cheapRunnerCounts();
+  const executionMode = await getRunnerExecutionMode();
 
   const payload: Record<string, unknown> = {
     ...status,
     ...counts,
+    executionMode,
+    realExecutionEnabled: process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true',
     lastRunAgeSeconds: status.lastRun
       ? Math.round((Date.now() - new Date(status.lastRun).getTime()) / 1000)
       : null,

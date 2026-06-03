@@ -8,21 +8,17 @@
 
 import { db, signals, paperTrades, auditEvents, strategies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
-import { getAllMarkets, getMarketsForQuickFlip, ensureMarketRecord } from '@/lib/markets';
+import { getAllMarkets, getMarketsForQuickFlip } from '@/lib/markets';
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
-import type { StrategyConfig, StrategySignal } from '@/lib/strategies/types';
+import type { StrategyConfig } from '@/lib/strategies/types';
 import { resolveStrategyConfig, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
-import { evaluateExitSignal } from '@/lib/strategies/exit-engine';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
-import { categorizeMarket } from '@/lib/risk/categorizer';
-import { saveBookSnapshot } from '@/lib/data/historical';
 import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
-import { extractFeaturesFromRecentSnapshots } from '@/lib/data/features';
 import { getRecentSnapshotsBatch } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
@@ -32,15 +28,19 @@ import { loadPaperRiskState } from '@/lib/paper/risk-state';
 import { computeStrategyPnlWindows, statsToPerformanceWindow } from '@/lib/paper/strategy-pnl';
 import { CycleBookCache } from '@/lib/runner/book-cache';
 import { getRunnerBookHub } from '@/lib/runner/book-hub';
-import { computeFinalShareSize } from '@/lib/risk/sizing';
 import { 
   applyTemporaryAdjustment, 
   cleanupExpiredAdjustments, 
   getEffectiveGlobalRiskMultiplier,
-  getStrategySizeMultiplier,
   incrementRunCount,
   getCurrentRunCount,
 } from '@/lib/monitoring/temporary-adjustments';
+import {
+  evaluateMarketForStrategy,
+  type EvaluateMarketContext,
+  type QueuedRunnerSignal,
+} from '@/lib/runner/evaluate-market';
+import { runPool } from '@/lib/runner/parallel-pool';
 
 export interface ActiveStrategyProfile {
   id: string;
@@ -72,23 +72,6 @@ export interface RunnerCycleDiagnostics {
   };
 }
 
-/** Signal queued during evaluation, persisted in batch per strategy. */
-interface QueuedRunnerSignal {
-  stratRow: { id: string; name: string; type: string; paperOnly: boolean | null };
-  market: Market;
-  signal: StrategySignal;
-  config: ResolvedStrategyConfig;
-  book: import('@/lib/types').OrderBook | null | undefined;
-  advancedRegime: string | undefined;
-  finalSize: number;
-  isExitSignal: boolean;
-  isQuickFlip: boolean;
-  marketDbId: string;
-  cooldownKey: string;
-  healthMultiplier: number;
-  sizeReason: string;
-}
-
 export interface RunnerStatus {
   running: boolean;
   lastRun: string | null;
@@ -112,7 +95,11 @@ let cycleTimeout: ReturnType<typeof setTimeout> | null = null;
 let cycleInFlight = false;
 /** Last signal timestamp per strategy:market for cooldown enforcement */
 const lastSignalAtByKey = new Map<string, number>();
-let snapshotSaveCounter = 0;
+
+const MARKET_EVAL_CONCURRENCY = Math.min(
+  16,
+  Math.max(4, parseInt(process.env.SNIPER_MARKET_EVAL_CONCURRENCY ?? '12', 10) || 12),
+);
 
 /** Persist runner singleton across Next.js dev HMR / route reloads */
 type RunnerGlobal = typeof globalThis & {
@@ -232,6 +219,31 @@ export async function startRunner(intervalMs = 15000) {
     }
   } catch (e) {
     console.warn('[Runner] Could not load durable safety state (non-fatal):', e);
+  }
+
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+    try {
+      const { checkPolymarketGeoblock, formatGeoblockMessage } = await import(
+        '@/lib/clients/polymarket-geoblock'
+      );
+      const geo = await checkPolymarketGeoblock({ force: true, ignoreSkip: true });
+      if (geo.blocked) {
+        console.warn(`[Runner] ${formatGeoblockMessage(geo)}`);
+      }
+    } catch (e) {
+      console.warn('[Runner] Geoblock check failed (non-fatal):', e);
+    }
+    try {
+      const { ensurePolymarketTradingReady } = await import(
+        '@/lib/clients/polymarket-trading-setup'
+      );
+      const setup = await ensurePolymarketTradingReady({ force: true });
+      console.log(
+        `[Runner] Polymarket auto-setup: ready=${setup.ready} balance=$${setup.balanceUsd?.toFixed(2) ?? '?'} relayer=${setup.relayerMode}${setup.message ? ` (${setup.message})` : ''}`,
+      );
+    } catch (e) {
+      console.warn('[Runner] Polymarket auto-setup failed (non-fatal):', e);
+    }
   }
 
   alerts.runnerStarted();
@@ -463,12 +475,56 @@ export async function runOnce() {
     8,
   );
 
-  const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
-  portfolioRiskManager.setCyclePortfolioState(
-    paperRisk.state,
-    paperRisk.equityUsd,
-    paperRisk.ledger.realizedPnLUsd,
-  );
+  const liveRealActive =
+    process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
+    activeStrategies.some((s) => !s.paperOnly);
+
+  if (liveRealActive) {
+    const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
+      '@/lib/clients/polymarket-trading'
+    );
+    const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
+    const pk = getPolymarketPrivateKey();
+    let balanceUsd: number | null = null;
+    if (pk) {
+      balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
+      if (balanceUsd == null) {
+        const snap = (await import('@/lib/clients/polymarket-trading-setup'))
+          .getPolymarketSetupSnapshot();
+        balanceUsd = snap?.balanceUsd ?? null;
+      }
+      if (balanceUsd == null) {
+        balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: true });
+      }
+    }
+    if (balanceUsd == null || balanceUsd <= 0) {
+      const snap = (await import('@/lib/clients/polymarket-trading-setup')).getPolymarketSetupSnapshot();
+      balanceUsd = snap?.balanceUsd ?? null;
+    }
+    if (balanceUsd != null && balanceUsd > 0) {
+      portfolioRiskManager.applyMicroRealBudget(balanceUsd);
+      const realRisk = await loadRealRiskSnapshot(balanceUsd);
+      portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
+    } else {
+      console.warn('[Runner] Live mode: could not read Polymarket balance — using paper risk caps (orders may be blocked)');
+      const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
+      portfolioRiskManager.setCyclePortfolioState(
+        paperRisk.state,
+        paperRisk.equityUsd,
+        paperRisk.ledger.realizedPnLUsd,
+      );
+    }
+  } else {
+    const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
+    const { getPaperBudgetSettings } = await import('@/lib/settings/paper-budget');
+    const { applyPaperBudgetToPortfolioManager } = await import('@/lib/risk/portfolio-manager');
+    applyPaperBudgetToPortfolioManager(await getPaperBudgetSettings());
+    portfolioRiskManager.setCyclePortfolioState(
+      paperRisk.state,
+      paperRisk.equityUsd,
+      paperRisk.ledger.realizedPnLUsd,
+    );
+  }
 
   const activeProfiles: ActiveStrategyProfile[] = activeStrategies.map((s) => {
     const cfg = resolveStrategyConfig(s.config as unknown as StrategyConfig);
@@ -561,200 +617,39 @@ export async function runOnce() {
       }
     }
 
-    const queuedSignals: QueuedRunnerSignal[] = [];
+    const evalCtx: EvaluateMarketContext = {
+      stratRow,
+      strategyImpl,
+      config,
+      allocation,
+      openByMarket,
+      bookCache,
+      snapshotBatch,
+      marketDbIds,
+      lastSignalAtByKey,
+      globalRiskMultiplier,
+    };
 
-    for (const market of relevantMarkets) {
-      try {
-        // Get fresh book/price (deduplicated per cycle)
-        const book = bookCache.getBook(market.platform, market.externalId);
-
-        const currentPrice = book?.mid ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
-
-        const recentSnaps =
-          snapshotBatch.get(`${market.platform}:${market.externalId}`) ?? [];
-        const advanced = extractFeaturesFromRecentSnapshots(recentSnaps);
-
-        // === Self-Protection: Execution Health Throttle ===
-        const marketHealth = executionManager.getMarketHealth(market.externalId);
-        let healthMultiplier = 1.0;
-
-        if (marketHealth.healthScore < 0.5) {
-          healthMultiplier = Math.max(0.15, marketHealth.healthScore * 0.8);
-          console.warn(`[Runner] Downweighting ${market.externalId} — poor execution health (${(marketHealth.healthScore * 100).toFixed(0)}%, ${marketHealth.recentAdverseCount}/${marketHealth.recentFills} adverse)`);
-        }
-
-        if (book && (book.bids?.length || book.asks?.length)) {
-          const topBid = book.bids?.[0]?.size || 0;
-          const topAsk = book.asks?.[0]?.size || 0;
-          const imbalance = topBid / (topBid + topAsk + 0.0001);
-
-          snapshotSaveCounter++;
-          if (snapshotSaveCounter % 3 === 0) {
-            void saveBookSnapshot({
-              platform: market.platform,
-              marketExternalId: market.externalId,
-              bids: book.bids?.slice(0, 3) || [],
-              asks: book.asks?.slice(0, 3) || [],
-              mid: book.mid || currentPrice || 0,
-              spread: book.spread || 0,
-              timestamp: new Date(),
-              imbalance: parseFloat(imbalance.toFixed(4)),
-              topDepth: topBid + topAsk,
-              extra: {
-                regime: advanced.regime,
-                volatilityProxy: advanced.volatilityProxy,
-                imbalancePersistence: advanced.imbalancePersistence,
-              },
-            } as unknown as Parameters<typeof saveBookSnapshot>[0]);
-          }
-        }
-
-        const posKey = `${market.platform}:${market.externalId}`;
-        const openPos = openByMarket.get(posKey);
-
-        // === 1. Exit open positions first (take profit / stop loss / max hold) ===
-        let signal: StrategySignal | null = null;
-        let isExitSignal = false;
-
-        if (openPos && currentPrice) {
-          signal = evaluateExitSignal(
-            openPos,
-            currentPrice,
-            book?.spread,
-            book?.mid ?? currentPrice,
-            config,
-          );
-          isExitSignal = signal?.action === 'SELL';
-        }
-
-        // === 2. Entry signals only when flat or scale-in allowed ===
-        if (!signal) {
-          if (openPos && !config.allowScaleIn) {
-            continue;
-          }
-          signal = strategyImpl.evaluate(
-            { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
-            config,
-          );
-          if (signal?.action === 'SELL') {
-            isExitSignal = true;
-          }
-        }
-
-        if (signal && signal.action !== 'HOLD' && signal.action !== 'CANCEL') {
-          const cooldownKey = `${stratRow.id}:${market.platform}:${market.externalId}`;
-          const cooldownMs = (config.cooldownSeconds ?? 300) * 1000;
-          if (signal.action === 'BUY' && !isExitSignal) {
-            const lastAt = lastSignalAtByKey.get(cooldownKey);
-            if (lastAt != null && Date.now() - lastAt < cooldownMs) {
-              continue;
-            }
-          }
-
-          let orderSize = signal.size;
-          if (signal.action === 'SELL' && openPos) {
-            orderSize = Math.min(orderSize, Math.floor(openPos.netSize));
-            if (orderSize <= 0) continue;
-          }
-
-          const isQuickFlip =
-            config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
-
-          // === ADVANCED RISK SIZING (applied to both paper and real) ===
-          const categoryInfo = categorizeMarket(market.question, market.platform, market.externalId);
-          const riskDecision = await portfolioRiskManager.calculateSafeSize({
-            platform: market.platform,
-            marketExternalId: market.externalId,
-            side: signal.action as 'BUY' | 'SELL',
-            edge: signal.edge ?? (signal.confidence ? (signal.confidence - 0.5) * 2 : 0.025),
-            confidence: signal.confidence ?? 0.65,
-            category: categoryInfo.category,
-            currentPrice: signal.price,
-            isExit: isExitSignal,
+    const evalResults = await runPool(
+      relevantMarkets,
+      MARKET_EVAL_CONCURRENCY,
+      async (market) => {
+        try {
+          return await evaluateMarketForStrategy(market, evalCtx);
+        } catch (e) {
+          console.warn(`[Runner] Error on ${market.externalId}:`, e);
+          void logAudit('runner_market_error', {
+            market: market.externalId,
+            strategy: stratRow.name,
+            error: e instanceof Error ? e.message : String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
           });
-
-          const minAllowedUsd = isQuickFlip ? 0.5 : 5;
-          if (riskDecision.allowedSize < minAllowedUsd) {
-            void logAudit('runner_signal_rejected_risk', {
-              strategy: stratRow.name,
-              market: market.externalId,
-              signal,
-              reason: riskDecision.reason,
-            });
-            continue; // Skip this signal
-          }
-
-          let allocatorMultiplier = allocation.maxSizeMultiplier || 0.85;
-
-          // Apply durable config downweight + temporary Grok adjustments
-          if (typeof config.allocationDownweight === 'number' && config.allocationDownweight > 0) {
-            allocatorMultiplier *= Math.max(0.05, Math.min(1, config.allocationDownweight));
-          }
-          allocatorMultiplier = getStrategySizeMultiplier(stratRow.id, allocatorMultiplier);
-
-          const riskCapUsd =
-            riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
-
-          const finalSize = computeFinalShareSize({
-            requestedShares: orderSize,
-            riskCapUsd:
-              isQuickFlip && signal.action === 'BUY'
-                ? Math.min(config.maxSizeUsd, riskCapUsd)
-                : riskCapUsd,
-            price: signal.price,
-            isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
-            minSharesUsd: isQuickFlip ? 0.5 : 1,
-          });
-
-          if (finalSize <= 0) continue;
-
-          let sizeReason = '';
-          if (healthMultiplier < 0.95) sizeReason += ` | Health throttle ${healthMultiplier.toFixed(2)}`;
-          if (globalRiskMultiplier < 0.95) sizeReason += ` | Global risk ${globalRiskMultiplier.toFixed(2)}`;
-
-          const marketKey = `${market.platform}:${market.externalId}`;
-          let marketDbId = marketDbIds.get(marketKey);
-          if (!marketDbId) {
-            try {
-              marketDbId = await ensureMarketRecord(market);
-              marketDbIds.set(marketKey, marketDbId);
-            } catch (ensureErr) {
-              console.error(`[Runner] Failed to ensure market record for ${market.platform}:${market.externalId}`, ensureErr);
-              void logAudit('runner_market_ensure_failed', {
-                strategy: stratRow.name,
-                market: market.externalId,
-                error: String(ensureErr),
-              });
-              continue;
-            }
-          }
-
-          queuedSignals.push({
-            stratRow,
-            market,
-            signal,
-            config,
-            book,
-            advancedRegime: advanced.regime,
-            finalSize,
-            isExitSignal,
-            isQuickFlip,
-            marketDbId,
-            cooldownKey,
-            healthMultiplier,
-            sizeReason,
-          });
+          return null;
         }
-      } catch (e) {
-        console.warn(`[Runner] Error on ${market.externalId}:`, e);
-        void logAudit('runner_market_error', {
-          market: market.externalId,
-          strategy: stratRow.name,
-          error: e instanceof Error ? e.message : String(e),
-          stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
-        });
-      }
-    }
+      },
+    );
+
+    const queuedSignals = evalResults.filter((q): q is QueuedRunnerSignal => q != null);
 
     if (queuedSignals.length > 0) {
       signalsThisRun += queuedSignals.length;
@@ -794,6 +689,12 @@ export async function runOnce() {
             side: q.signal.action as 'BUY' | 'SELL',
             price: q.signal.price,
             size: q.finalSize,
+            edge: q.signal.edge,
+            confidence: q.signal.confidence,
+            isExit: q.isExitSignal,
+            book: q.book ?? undefined,
+            takeLiquidity: q.isQuickFlip && q.signal.action === 'BUY',
+            maxNotionalUsd: q.config.maxSizeUsd,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
             book: q.book ?? null,
           });
@@ -801,6 +702,9 @@ export async function runOnce() {
           if (result.success) {
             fillsThisRun++;
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
+            console.log(
+              `[Runner] REAL order posted ${q.market.externalId.slice(0, 12)}… ${q.signal.action} trade=${result.tradeId}`,
+            );
             alerts.realOrder({
               platform: q.market.platform,
               side: q.signal.action,
@@ -808,6 +712,10 @@ export async function runOnce() {
               price: q.signal.price,
               reason: q.signal.reason,
             });
+          } else if (isRealAllowed) {
+            console.warn(
+              `[Runner] REAL order blocked ${q.market.externalId.slice(0, 12)}…: ${result.error ?? 'unknown'}`,
+            );
           }
         } else {
           const useImmediate = shouldUseImmediateFill(
@@ -882,7 +790,7 @@ export async function runOnce() {
   portfolioRiskManager.clearCycleCache();
 
   if (signalsThisRun > 0) {
-    console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Paper fills: ${fillsThisRun}`);
+    console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Fills: ${fillsThisRun}`);
   }
 
   // === Edge Decay Monitoring — feed rolling PnL windows (every 5 cycles) ===

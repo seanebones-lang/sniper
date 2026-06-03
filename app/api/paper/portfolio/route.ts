@@ -18,19 +18,34 @@ export async function GET(req: Request) {
 }
 
 const patchSchema = z.object({
-  paperBudgetUsd: z.number().min(100).max(1_000_000).optional(),
-  maxExposureUsd: z.number().min(50).max(1_000_000).optional(),
-  maxDailyLossUsd: z.number().min(10).max(100_000).optional(),
+  paperBudgetUsd: z.number().min(1).max(1_000_000).optional(),
+  maxExposureUsd: z.number().min(1).max(1_000_000).optional(),
+  maxDailyLossUsd: z.number().min(1).max(100_000).optional(),
 });
 
 export async function PATCH(req: Request) {
   try {
     const body = patchSchema.parse(await req.json());
-    const { setPaperBudgetSettings } = await import('@/lib/settings/paper-budget');
+    const { setPaperBudgetSettings, clearPaperBudgetCache } = await import(
+      '@/lib/settings/paper-budget'
+    );
     const budget = await setPaperBudgetSettings(body);
-    await applyPaperBudgetToRiskManager();
+    clearPaperBudgetCache();
+
+    const liveReal =
+      process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+    if (!liveReal) {
+      await applyPaperBudgetToRiskManager();
+    }
+
     const portfolio = await getPaperPortfolio();
-    return NextResponse.json({ budget, runner: portfolio.runner });
+    return NextResponse.json({
+      budget,
+      runner: portfolio.runner,
+      note: liveReal
+        ? 'Paper budget saved (live mode uses Polymarket cash for real orders)'
+        : undefined,
+    });
   } catch (err: unknown) {
     return NextResponse.json({ error: getErrorMessage(err) || 'Invalid request' }, { status: 400 });
   }

@@ -22,7 +22,10 @@ export type SystemStateKey =
   | 'risk_mode'
   | 'daily_loss'
   | 'execution_health_summary'
-  | 'risk_snapshot';
+  | 'risk_snapshot'
+  | 'polymarket_http_proxy'
+  | 'polymarket_browser_session'
+  | 'paper_budget_settings';
 
 export interface KillSwitchState {
   disabled: boolean;

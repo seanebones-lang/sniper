@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { parsePolymarketWSBook } from '@/lib/ws/polymarket';
+import { parsePolymarketWSBook, sameAssetIdSet } from '@/lib/ws/polymarket';
 import { parseKalshiWSBook } from '@/lib/ws/kalshi';
+import { KalshiWSOrderbookState } from '@/lib/ws/kalshi-orderbook-state';
+
+describe('sameAssetIdSet', () => {
+  it('matches same ids regardless of order', () => {
+    expect(sameAssetIdSet(['a', 'b'], ['b', 'a'])).toBe(true);
+    expect(sameAssetIdSet(['a', 'b'], ['a', 'c'])).toBe(false);
+  });
+});
 
 describe('parsePolymarketWSBook', () => {
   it('parses full book messages', () => {
@@ -44,5 +52,36 @@ describe('parseKalshiWSBook', () => {
     );
     expect(book?.mid).toBeCloseTo(0.46);
     expect(book?.platform).toBe('kalshi');
+  });
+
+  it('parses ticker envelope messages', () => {
+    const book = parseKalshiWSBook(
+      {
+        type: 'ticker',
+        msg: {
+          market_ticker: 'KXTEST-YES',
+          yes_bid_dollars: '0.40',
+          yes_ask_dollars: '0.44',
+        },
+      },
+      'KXTEST-YES',
+    );
+    expect(book?.mid).toBeCloseTo(0.42);
+  });
+});
+
+describe('KalshiWSOrderbookState', () => {
+  it('builds book from orderbook_snapshot', () => {
+    const state = new KalshiWSOrderbookState();
+    const book = state.process({
+      type: 'orderbook_snapshot',
+      msg: {
+        market_ticker: 'KXTEST',
+        yes_dollars_fp: [['0.45', '100']],
+        no_dollars_fp: [['0.50', '80']],
+      },
+    });
+    expect(book?.bids[0]?.price).toBeCloseTo(0.45);
+    expect(book?.asks[0]?.price).toBeCloseTo(0.5);
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { LivePaperPortfolio, type LivePortfolioData } from '@/components/live-paper-portfolio';
 import { PaperPnlIndicator } from '@/components/paper-pnl-indicator';
+import { LiveEquityCard, type LiveStatusSummary } from '@/components/live-equity-card';
 import {
   ArrowLeft,
   TrendingUp,
@@ -27,6 +28,7 @@ interface HealthData {
 interface RunnerData {
   running: boolean;
   lastRun: string | null;
+  executionMode?: 'paper' | 'live' | 'mixed';
   dbPaperFillsToday?: number;
   dbPaperFillsTotal?: number;
   lastCycleDurationMs?: number | null;
@@ -50,20 +52,41 @@ export default function Dashboard() {
   const [runner, setRunner] = useState<RunnerData | null>(null);
   const [portfolio, setPortfolio] = useState<LivePortfolioData | null>(null);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveStatusSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      const timeoutMs = 12_000;
+      const fetchWithTimeout = (url: string) => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeoutMs);
+        return fetch(url, { signal: ctrl.signal, cache: 'no-store' }).finally(() =>
+          clearTimeout(t),
+        );
+      };
       try {
         const [healthRes, runnerRes, portfolioRes] = await Promise.all([
-          fetch('/api/health'),
-          fetch('/api/runner'),
-          fetch('/api/paper/portfolio?days=1', { cache: 'no-store' }),
+          fetchWithTimeout('/api/health'),
+          fetchWithTimeout('/api/runner'),
+          fetchWithTimeout('/api/paper/portfolio?days=1'),
         ]);
         if (healthRes.ok && !cancelled) setHealth(await healthRes.json());
-        if (runnerRes.ok && !cancelled) setRunner(await runnerRes.json());
+        let runnerJson: RunnerData | null = null;
+        if (runnerRes.ok && !cancelled) {
+          runnerJson = (await runnerRes.json()) as RunnerData;
+          setRunner(runnerJson);
+        }
+        if (runnerJson?.executionMode === 'live' && !cancelled) {
+          const realRes = await fetchWithTimeout('/api/real/status');
+          if (realRes.ok && !cancelled) {
+            setLiveStatus((await realRes.json()) as LiveStatusSummary);
+          }
+        } else if (!cancelled) {
+          setLiveStatus(null);
+        }
         if (portfolioRes.ok && !cancelled) {
           const json = await portfolioRes.json();
           setPortfolio({ ...json, updatedAt: new Date().toISOString() });
@@ -101,7 +124,12 @@ export default function Dashboard() {
             <Shield className="h-8 w-8 text-emerald-400" />
             <h1 className="text-4xl font-semibold tracking-tight">Dashboard</h1>
           </div>
-          <p className="text-zinc-400">Paper mode · live portfolio &amp; system status</p>
+          <p className="text-zinc-400">
+            Portfolio &amp; system status
+            {runner?.executionMode === 'live' && (
+              <span className="text-red-400"> · live Polymarket armed</span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Link
@@ -124,10 +152,13 @@ export default function Dashboard() {
         <div className={`card mb-6 text-sm flex flex-wrap items-center gap-x-4 gap-y-1 ${
           !runner.running ? 'border-amber-500/30' : 'border-emerald-500/20'
         }`}>
-          <span className="text-zinc-500">24/7 paper runner</span>
+          <span className="text-zinc-500">24/7 runner</span>
           <span className={runner.running ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium'}>
             {runner.running ? 'RUNNING' : 'STOPPED'}
           </span>
+          {runner.executionMode === 'live' && (
+            <span className="text-red-400 font-medium">· LIVE</span>
+          )}
           {runner.lastRun && (
             <span className="text-zinc-500">Last cycle {new Date(runner.lastRun).toLocaleTimeString()}</span>
           )}
@@ -150,14 +181,19 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Paper P&L — from paper_trades DB + live marks */}
-      <PaperPnlIndicator
-        pnl={portfolio?.pnl ?? null}
-        loading={!portfolio && !portfolioError}
-        error={portfolioError}
-        variant="hero"
-        className="mb-6"
-      />
+      {runner?.executionMode === 'live' && (
+        <LiveEquityCard status={liveStatus} loading={loading && !liveStatus} />
+      )}
+
+      {runner?.executionMode !== 'live' && (
+        <PaperPnlIndicator
+          pnl={portfolio?.pnl ?? null}
+          loading={!portfolio && !portfolioError}
+          error={portfolioError}
+          variant="hero"
+          className="mb-6"
+        />
+      )}
 
       <div className="mb-8">
         <LivePaperPortfolio pollMs={0} externalData={portfolio} />

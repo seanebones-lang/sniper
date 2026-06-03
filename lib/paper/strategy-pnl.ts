@@ -1,4 +1,5 @@
 import { db, paperTrades, signals } from '@/lib/db';
+import { chunkArray } from '@/lib/db/chunk-in-array';
 import { eq, gte, and, inArray } from 'drizzle-orm';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 import type { StrategyPerformanceWindow } from '@/lib/monitoring/edge-decay';
@@ -34,13 +35,14 @@ export async function computeStrategyPnlWindows(
   const signalIds = stratSignals.map((s) => s.id);
   const signalToStrategy = Object.fromEntries(stratSignals.map((s) => [s.id, s.strategyId]));
 
-  const fills =
-    signalIds.length > 0
-      ? await db.query.paperTrades.findMany({
-          where: and(inArray(paperTrades.signalId, signalIds), gte(paperTrades.filledAt, since)),
-          orderBy: (t, { asc }) => [asc(t.filledAt)],
-        })
-      : [];
+  const fills: Awaited<ReturnType<typeof db.query.paperTrades.findMany>> = [];
+  for (const ids of chunkArray(signalIds)) {
+    const batch = await db.query.paperTrades.findMany({
+      where: and(inArray(paperTrades.signalId, ids), gte(paperTrades.filledAt, since)),
+      orderBy: (t, { asc }) => [asc(t.filledAt)],
+    });
+    fills.push(...batch);
+  }
 
   const stats = new Map<string, StrategyPnlStats>();
   for (const id of strategyIds) {

@@ -73,10 +73,14 @@ export default function StrategiesPage() {
     dbPaperFillsTotal?: number;
     dbPaperFillsToday?: number;
     activeStrategies?: number;
+    executionMode?: 'paper' | 'live' | 'mixed';
+    realExecutionEnabled?: boolean;
     lastCycle?: {
       marketPoolSize: number;
       eligibleQuickFlipMarkets: number;
       marketsEvaluated: number;
+      signalsThisCycle?: number;
+      fillsThisCycle?: number;
       skipReason: string | null;
       activeProfiles: Array<{
         name: string;
@@ -282,7 +286,11 @@ export default function StrategiesPage() {
             className={`flex items-center gap-2 rounded-full px-5 py-2 text-sm font-medium border transition ${runnerStatus?.running ? 'border-red-500 text-red-400' : 'border-emerald-500 text-emerald-400'}`}
           >
             {runnerStatus?.running ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            {runnerStatus?.running ? 'Stop 24/7 Runner' : 'Start 24/7 Paper Runner'}
+            {runnerStatus?.running
+              ? 'Stop 24/7 Runner'
+              : runnerStatus?.executionMode === 'live'
+                ? 'Start 24/7 Live Runner'
+                : 'Start 24/7 Runner'}
           </button>
           <button
             onClick={() => setShowForm(!showForm)}
@@ -299,7 +307,7 @@ export default function StrategiesPage() {
         <ol className="text-zinc-400 space-y-1 list-decimal list-inside">
           <li><strong className="text-zinc-300">Create</strong> a strategy below and pick a rule type</li>
           <li><strong className="text-zinc-300">Activate</strong> it in the table (starts paused)</li>
-          <li><strong className="text-zinc-300">Start the runner</strong> — it checks markets every ~12 seconds and paper-trades when rules fire</li>
+          <li><strong className="text-zinc-300">Start the runner</strong> — scans markets every few seconds; fills are <strong className="text-zinc-300">paper</strong> or <strong className="text-red-400">live</strong> per strategy Mode</li>
         </ol>
       </div>
 
@@ -309,6 +317,15 @@ export default function StrategiesPage() {
           <span className={runnerStatus.running ? 'text-emerald-400' : 'text-zinc-500'}>
             {runnerStatus.running ? 'RUNNING' : 'STOPPED'}
           </span>
+          {runnerStatus.executionMode === 'live' && (
+            <span className="ml-2 text-red-400 font-medium">· LIVE Polymarket</span>
+          )}
+          {runnerStatus.executionMode === 'mixed' && (
+            <span className="ml-2 text-amber-400">· mixed paper + live</span>
+          )}
+          {runnerStatus.running && runnerStatus.executionMode === 'paper' && (
+            <span className="ml-2 text-zinc-500">· paper only</span>
+          )}
           {' '}· Last run: {runnerStatus.lastRun ? new Date(runnerStatus.lastRun).toLocaleTimeString() : 'never'}
           {' '}· Session signals/fills: {runnerStatus.signalsGenerated} / {runnerStatus.fillsExecuted}
           {' '}· DB fills (today): {runnerStatus.dbPaperFillsToday ?? '—'}
@@ -320,6 +337,14 @@ export default function StrategiesPage() {
               {runnerStatus.lastCycle.activeProfiles.length > 0 && (
                 <> · style: {runnerStatus.lastCycle.activeProfiles.map((p) =>
                   `${p.name} (${p.tradingStyle}/${p.tradingGoal})`).join(', ')}</>
+              )}
+              {runnerStatus.lastCycle.signalsThisCycle != null && (
+                <span className="block mt-1 text-zinc-500">
+                  Last cycle: {runnerStatus.lastCycle.signalsThisCycle} signals, {runnerStatus.lastCycle.fillsThisCycle ?? 0} fills
+                  {runnerStatus.executionMode === 'live' && runnerStatus.lastCycle.signalsThisCycle === 0
+                    ? ' (live-armed — waiting for a rule to fire)'
+                    : ''}
+                </span>
               )}
               {runnerStatus.lastCycle.skipReason && (
                 <span className="block mt-1 text-amber-300">{runnerStatus.lastCycle.skipReason}</span>
@@ -597,15 +622,16 @@ export default function StrategiesPage() {
               <th className="py-3 px-4 font-normal">Max / trade</th>
               <th className="py-3 px-4 font-normal">Key setting</th>
               <th className="py-3 px-4 font-normal">Status</th>
+              <th className="py-3 px-4 font-normal">Mode</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {loading && strategies.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-zinc-500">Loading…</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-zinc-500">Loading…</td></tr>
             )}
             {!loading && strategies.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-zinc-500">No strategies yet. Click “New Strategy” above.</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-zinc-500">No strategies yet. Click “New Strategy” above.</td></tr>
             )}
             {strategies.map(s => {
               const cfg = (s.config ?? {}) as Record<string, string | number | undefined>;

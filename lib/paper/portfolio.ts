@@ -1,4 +1,5 @@
 import { db, paperTrades, signals } from '@/lib/db';
+import { chunkArray } from '@/lib/db/chunk-in-array';
 import { gte, desc, inArray, count, and } from 'drizzle-orm';
 import { getRunnerStatus } from '@/lib/runner/engine';
 import { getPaperBudgetSettings } from '@/lib/settings/paper-budget';
@@ -87,6 +88,14 @@ export interface PaperPortfolioSnapshot {
     fillsInRun: number;
   };
   pnl: PaperPnlSnapshot;
+  /** Present when SNIPER_ENABLE_REAL_EXECUTION=true — real wallet is separate from paper budget. */
+  live?: {
+    armed: boolean;
+    polymarketUsdcBalance: number | null;
+    polymarketReady: boolean;
+    geoblockBlocked: boolean;
+    note: string;
+  };
 }
 
 export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioSnapshot> {
@@ -163,9 +172,14 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
 
   const stratById = Object.fromEntries(stratRows.map((s) => [s.id, s]));
   const signalIds = periodTrades.map((t) => t.signalId).filter(Boolean) as string[];
-  const linkedSignals = signalIds.length
-    ? await db.query.signals.findMany({ where: inArray(signals.id, signalIds) })
-    : [];
+  const linkedSignals: Array<{ id: string; strategyId: string }> = [];
+  for (const ids of chunkArray(signalIds)) {
+    const batch = await db.query.signals.findMany({
+      where: inArray(signals.id, ids),
+      columns: { id: true, strategyId: true },
+    });
+    linkedSignals.push(...batch);
+  }
   const signalStrategyMap = Object.fromEntries(linkedSignals.map((s) => [s.id, s.strategyId]));
 
   const byStrategy: Record<string, StrategyPerformanceRow> = {};
@@ -227,6 +241,44 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
       return b.fills - a.fills;
     });
 
+  let live: PaperPortfolioSnapshot['live'];
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+    try {
+      const { getRealExecutionStatus } = await import('@/lib/execution/real-executor');
+      const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
+        '@/lib/clients/polymarket-trading'
+      );
+      const { ensurePolymarketTradingReady } = await import(
+        '@/lib/clients/polymarket-trading-setup'
+      );
+      const realStatus = await getRealExecutionStatus();
+      const pk = getPolymarketPrivateKey();
+      let polymarketUsdcBalance: number | null = null;
+      let polymarketReady = false;
+      if (pk) {
+        const setup = await ensurePolymarketTradingReady();
+        polymarketReady = setup.ready;
+        polymarketUsdcBalance =
+          setup.balanceUsd ?? (await getPolymarketUsdcBalance(pk, { syncFirst: false }));
+      }
+      live = {
+        armed: realStatus.allowed,
+        polymarketUsdcBalance,
+        polymarketReady,
+        geoblockBlocked: realStatus.geoblock?.blocked === true,
+        note: 'Paper bankroll below is simulation only. Live orders use Polymarket CLOB cash.',
+      };
+    } catch {
+      live = {
+        armed: false,
+        polymarketUsdcBalance: null,
+        polymarketReady: false,
+        geoblockBlocked: false,
+        note: 'Live status unavailable',
+      };
+    }
+  }
+
   return {
     runner: {
       ...runner,
@@ -237,6 +289,7 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
         ? Math.round((Date.now() - new Date(runner.lastRun).getTime()) / 1000)
         : null,
     },
+    live,
     budget: {
       paperBudgetUsd: budget.paperBudgetUsd,
       maxExposureUsd: budget.maxExposureUsd,
