@@ -240,6 +240,15 @@ export class RunnerBookHub {
     return Date.now() - entry.updatedAt < maxAge;
   }
 
+  /** WS often sends ask-only or bid-only snapshots; REST has the full book. */
+  private isOneSided(platform: string, externalId: string): boolean {
+    const book = this.books.get(bookKey(platform, externalId))?.book;
+    if (!book) return false;
+    const hasBid = (book.bids?.length ?? 0) > 0;
+    const hasAsk = (book.asks?.length ?? 0) > 0;
+    return hasBid !== hasAsk;
+  }
+
   private waitMs(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -260,7 +269,9 @@ export class RunnerBookHub {
     const needRest: typeof unique = [];
 
     for (const m of unique) {
-      if (this.isFresh(m.platform, m.externalId)) {
+      const fresh = this.isFresh(m.platform, m.externalId);
+      const oneSided = fresh && this.isOneSided(m.platform, m.externalId);
+      if (fresh && !oneSided) {
         wsHits++;
       } else {
         needRest.push(m);

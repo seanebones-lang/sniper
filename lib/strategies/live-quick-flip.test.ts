@@ -52,14 +52,34 @@ describe('LiveQuickFlip', () => {
     expect(signal?.price).toBe(0.12);
   });
 
-  it('rejects ask-only books (no bid = no exit for a flip)', () => {
+  it('aggressive mode enters ask-only books (cheap in-play esports)', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('Valorant: Team A vs Team B'),
+        book: book(0.001, undefined, 1000),
+        currentPrice: 0.001,
+      },
+      config,
+    );
+    expect(signal?.action).toBe('BUY');
+    expect(signal?.size).toBe(1000);
+  });
+
+  it('balanced mode rejects ask-only books', () => {
+    const balanced = resolveStrategyConfig({
+      maxSizeUsd: 1,
+      tradingGoal: 'quick-flip',
+      tradingStyle: 'balanced',
+      targetProfitMultiple: 2.5,
+      liveMarketsOnly: true,
+    });
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Valorant: Team A vs Team B'),
         book: book(0.25, undefined, 50),
         currentPrice: 0.25,
       },
-      config,
+      balanced,
     );
     expect(signal).toBeNull();
   });
@@ -77,24 +97,28 @@ describe('LiveQuickFlip', () => {
     expect(maxQuickFlipEntryPrice(2.5)).toBeCloseTo(0.396, 2);
   });
 
-  it('rejects dead longshots below the minimum entry price (0.1¢)', () => {
+  it('rejects asks below the minimum entry price floor', () => {
+    const strict = resolveStrategyConfig({
+      ...config,
+      minEntryPrice: 0.01,
+    });
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Counter-Strike: Team A vs Team B'),
-        book: book(0.001, 0.0005, 1000, 1000),
+        book: book(0.001, undefined, 1000),
         currentPrice: 0.001,
       },
-      config,
+      strict,
     );
     expect(signal).toBeNull();
   });
 
-  it('still enters asks at/above the 0.1¢ minimum entry floor', () => {
+  it('enters asks at/above the 0.1¢ minimum entry floor', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('NBA: Team A vs Team B live'),
-        book: book(0.001, 0.0005, 200, 50),
-        currentPrice: 0.00075,
+        book: book(0.001, undefined, 200),
+        currentPrice: 0.001,
       },
       config,
     );

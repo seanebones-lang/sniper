@@ -15,9 +15,9 @@ export function maxQuickFlipEntryPrice(mult = 2.5): number {
  * Live quick-flip scalper: $1 in, sell the instant price hits 2.5× (≈$2.50 out).
  * Only enters markets that resolve within 3 hours (exchange endDate required).
  *
- * Entry philosophy: lift the ask on cheap outcomes with room to run, but only
- * where there is a real bid to flip back into and a real (non-zero, non-dead)
- * price — no ask-only books, no 0.1¢ longshots.
+ * Aggressive mode lifts cheap asks (including 0.1¢ esports) even on one-sided
+ * books — matching live micro fills on Polymarket. Balanced/conservative still
+ * require a live bid and tighter spreads.
  */
 export const LiveQuickFlip: Strategy = {
   id: 'live-quick-flip',
@@ -60,27 +60,29 @@ export const LiveQuickFlip: Strategy = {
       return null;
     }
 
-    // A flip needs a way out: require a live bid to sell into. Entering a
-    // one-sided (ask-only) book leaves the position with no exit before
-    // maxHold, so it can only end in a stop-loss or worthless expiry.
     const bidLevel = book.bids?.[0];
     const bid = bidLevel?.price ?? 0;
     const bidSize = bidLevel?.size ?? 0;
-    if (bid <= 0 || bidSize <= 0) {
+    const hasBid = bid > 0 && bidSize > 0;
+
+    // Balanced/conservative: require a live bid to sell into. Aggressive live
+    // micro scalps lift ask-only books (common on cheap in-play esports).
+    if (config.tradingStyle !== 'aggressive' && !hasBid) {
       return null;
     }
 
-    const mid = book.mid ?? (ask + bid) / 2;
-    const spread = book.spread ?? ask - bid;
-
-    const maxSpreadPct =
-      config.tradingStyle === 'conservative' ? 8
-        : config.tradingStyle === 'balanced' ? 18
-          : 30;
-    if (mid > 0) {
-      const spreadPct = (spread / mid) * 100;
-      if (spreadPct > maxSpreadPct) {
-        return null;
+    if (hasBid) {
+      const mid = book.mid ?? (ask + bid) / 2;
+      const spread = book.spread ?? ask - bid;
+      const maxSpreadPct =
+        config.tradingStyle === 'conservative' ? 8
+          : config.tradingStyle === 'balanced' ? 18
+            : 50;
+      if (mid > 0) {
+        const spreadPct = (spread / mid) * 100;
+        if (spreadPct > maxSpreadPct) {
+          return null;
+        }
       }
     }
 
