@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { requireApiAuth } from '@/lib/api-auth';
 import { startRunner, stopRunner, getRunnerStatus, getRunnerIntervalMs } from '@/lib/runner/engine';
+import { countRunnerSessionStats } from '@/lib/runner/session-counters';
 import { db, paperTrades } from '@/lib/db';
 import { getRunnerExecutionMode } from '@/lib/runner/execution-mode';
 import { gte, count, and } from 'drizzle-orm';
@@ -35,9 +36,12 @@ async function runnerPayload(includePnl: boolean) {
   const status = getRunnerStatus();
   const counts = await cheapRunnerCounts();
   const executionMode = await getRunnerExecutionMode();
+  const sessionStats = await countRunnerSessionStats();
 
   const payload: Record<string, unknown> = {
     ...status,
+    signalsGenerated: sessionStats.signals,
+    fillsExecuted: sessionStats.fills,
     ...counts,
     executionMode,
     realExecutionEnabled: process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true',

@@ -964,7 +964,20 @@ export async function runOnce() {
             continue;
           }
           if (q.signal.action === 'BUY') {
-            const openForStrat = openPositionsByStrategy.get(q.stratRow.id) ?? [];
+            // Re-read open positions at order time — cycle-start snapshot can be stale
+            // after reconcile/self-heal/partial exits in the same loop.
+            let openForStrat = openPositionsByStrategy.get(q.stratRow.id) ?? [];
+            if (realEnabled && !q.stratRow.paperOnly) {
+              try {
+                const { getRealOpenPositionsByStrategy } = await import(
+                  '@/lib/execution/real-positions'
+                );
+                const fresh = await getRealOpenPositionsByStrategy([q.stratRow.id]);
+                openForStrat = fresh.get(q.stratRow.id) ?? [];
+              } catch {
+                // use cycle-start snapshot
+              }
+            }
             const { isMeaningfulOpenPosition } = await import('@/lib/execution/dead-market-tokens');
             const meaningfulOpen = openForStrat.filter((p) =>
               isMeaningfulOpenPosition(p.netSize, p.avgEntryPrice),

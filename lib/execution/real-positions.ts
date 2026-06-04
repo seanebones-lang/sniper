@@ -77,6 +77,13 @@ export function aggregateRealPositions(
         state.openedAt = null;
         state.costBasis = 0;
         state.netSize = 0;
+      } else if (state.netSize < 1) {
+        const exitAvg = state.costBasis / state.netSize;
+        if (isDustOpenPosition(state.netSize, exitAvg)) {
+          state.openedAt = null;
+          state.costBasis = 0;
+          state.netSize = 0;
+        }
       }
     }
 
