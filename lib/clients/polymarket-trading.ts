@@ -544,17 +544,25 @@ export async function fetchPolymarketTradesForOrder(
   }
 }
 
+/** CLOB may return an array or `{ data: Order[] }` depending on client/proxy version. */
+export function normalizePolymarketOpenOrders(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    const row = raw as Record<string, unknown>;
+    if ('error' in row) return [];
+    if (Array.isArray(row.data)) return row.data;
+    if (Array.isArray(row.orders)) return row.orders;
+    if (Array.isArray(row.results)) return row.results;
+  }
+  return [];
+}
+
 export async function getPolymarketOpenOrders(privateKey: string): Promise<unknown[]> {
   try {
     const client = getTradingClient(privateKey);
     await ensurePolymarketApiCreds(client);
     const orders = await client.getOpenOrders(undefined, true);
-    if (Array.isArray(orders)) return orders;
-    if (orders && typeof orders === 'object' && 'error' in (orders as object)) {
-      console.warn('[Polymarket] getOpenOrders API error:', getErrorMessage((orders as { error?: unknown }).error));
-      return [];
-    }
-    return [];
+    return normalizePolymarketOpenOrders(orders);
   } catch (err) {
     console.warn('[Polymarket] getOpenOrders failed:', getErrorMessage(err));
     return [];

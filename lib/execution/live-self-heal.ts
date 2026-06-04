@@ -243,6 +243,17 @@ async function healLedgerVsOnChain(
         continue;
       }
 
+      if (pos.netSize < 1 && onChain < 1 && pos.netSize > 0.01) {
+        await writeOffGhostLedgerPosition(
+          tokenId,
+          pos.netSize,
+          pos.avgEntryPrice,
+          'partial-exit residue (<1 share)',
+        );
+        result.dustWriteOffs++;
+        continue;
+      }
+
       if (onChain > 0.05) {
         const book = await fetchPolymarketOrderBook(tokenId);
         if (isEmptyBook(book)) {
