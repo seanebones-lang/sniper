@@ -2,11 +2,13 @@ import { db, signals, paperTrades, realTrades } from '@/lib/db';
 import { and, count, gte, eq, isNotNull } from 'drizzle-orm';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
 
+const LIVE_STATS_LOOKBACK_MS = 7 * 24 * 3600 * 1000;
+
 /** DB-backed session stats (signals + fills in the active trading window). */
 export async function countRunnerSessionStats(): Promise<{ signals: number; fills: number }> {
   const liveEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
-  const runStart = await getPaperRunStartedAt();
-  const since = runStart ?? new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  const runStart = liveEnabled ? null : await getPaperRunStartedAt();
+  const since = runStart ?? new Date(Date.now() - LIVE_STATS_LOOKBACK_MS);
 
   const [sigRow, paperFillRow, realFillRow] = await Promise.all([
     db.select({ count: count() }).from(signals).where(gte(signals.createdAt, since)),

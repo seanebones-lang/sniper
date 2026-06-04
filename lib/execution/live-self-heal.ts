@@ -243,7 +243,7 @@ async function healLedgerVsOnChain(
         continue;
       }
 
-      if (pos.netSize < 1 && onChain < 1 && pos.netSize > 0.01) {
+      if (pos.netSize < 1 && onChain < 1 && pos.netSize > 0.01 && onChain < pos.netSize * 0.5) {
         await writeOffGhostLedgerPosition(
           tokenId,
           pos.netSize,

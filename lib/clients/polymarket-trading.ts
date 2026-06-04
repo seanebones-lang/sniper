@@ -562,9 +562,14 @@ export async function getPolymarketOpenOrders(privateKey: string): Promise<unkno
     const client = getTradingClient(privateKey);
     await ensurePolymarketApiCreds(client);
     const orders = await client.getOpenOrders(undefined, true);
+    if (Array.isArray(orders)) return orders;
     return normalizePolymarketOpenOrders(orders);
   } catch (err) {
-    console.warn('[Polymarket] getOpenOrders failed:', getErrorMessage(err));
+    const msg = getErrorMessage(err);
+    // Proxy/WAF may return non-array `data` — client throws on spread; heal still proceeds.
+    if (!/not iterable/i.test(msg)) {
+      console.warn('[Polymarket] getOpenOrders failed:', msg);
+    }
     return [];
   }
 }
