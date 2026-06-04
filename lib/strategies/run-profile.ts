@@ -13,6 +13,7 @@ export interface ResolvedStrategyConfig extends StrategyConfig {
   targetExitValueUsd: number;
   minEntryPrice: number;
   liveMarketsOnly: boolean;
+  minEdgeAfterSpreadPct: number;
   /** Passive fill probability floor for paper execution (0–1) */
   minFillProbability: number;
   /** Use immediate (aggressive) paper fills for entries */
@@ -42,11 +43,11 @@ const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
   },
 };
 
-/** Take-profit multiple for quick-flip exits (1.5× — lower bound of 1.5–2× band). */
-export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.5;
+/** Take-profit multiple for quick-flip exits (micro live: smaller target, faster exit). */
+export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.2;
 
 /** Minimum fast-moving score for live quick-flip entries (filters dead tails). */
-export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 15;
+export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 22;
 
 /** Live entries below this price are lottery tickets with no exit liquidity. */
 export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.015;
@@ -54,8 +55,8 @@ export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.015;
 /** Live max ask — room for 1.5× exit; 0.48 allows active 47–48¢ up/down markets. */
 export const LIVE_QUICK_FLIP_MAX_ENTRY_PRICE = 0.48;
 
-/** Max spread (mid %) for live entries — crypto up/down books can run wide briefly. */
-export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 45;
+/** Max spread (mid %) for live entries. */
+export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 25;
 
 /** Bid notional must cover at least this fraction of stake USD. */
 export const LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO = 1;
@@ -68,10 +69,11 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
     maxSizeUsd: 1,
     targetProfitPct: 50,
     targetProfitMultiple: QUICK_FLIP_TAKE_PROFIT_MULTIPLE,
-    targetExitValueUsd: 1.5,
+    targetExitValueUsd: 1.15,
     minEntryPrice: 0.001,
-    stopLossPct: 30,
-    maxHoldSeconds: 300,
+    stopLossPct: 15,
+    maxHoldSeconds: 180,
+    minEdgeAfterSpreadPct: 6,
     allowScaleIn: false,
     cooldownSeconds: 15,
     liveMarketsOnly: true,
@@ -106,7 +108,7 @@ export const TRADING_STYLE_OPTIONS: Array<{ id: TradingStyle; label: string; des
 ];
 
 export const TRADING_GOAL_OPTIONS: Array<{ id: TradingGoal; label: string; description: string }> = [
-  { id: 'quick-flip', label: 'Quick flips', description: '$1 in, sell at 1.5× (up to 2× entry room); stop -30%; pre-resolution safety.' },
+  { id: 'quick-flip', label: 'Quick flips', description: '$1 in, sell at 1.2×; stop -15%; ~3 min max hold; crypto-focused live filters.' },
   { id: 'spread-capture', label: 'Spread capture', description: 'Enter on wide spreads, exit when spread narrows or target hit.' },
   { id: 'dip-buy', label: 'Buy the dip', description: 'Enter on cheap prices, hold for larger bounce.' },
   { id: 'swing', label: 'Swing', description: 'Fewer trades, wider profit targets, longer holds.' },
@@ -142,6 +144,8 @@ export function resolveStrategyConfig(raw: StrategyConfig): ResolvedStrategyConf
       baseMaxSize * (goalDefaults.targetProfitMultiple ?? 0),
     minEntryPrice: raw.minEntryPrice ?? goalDefaults.minEntryPrice ?? 0,
     liveMarketsOnly: raw.liveMarketsOnly ?? goalDefaults.liveMarketsOnly ?? false,
+    minEdgeAfterSpreadPct:
+      raw.minEdgeAfterSpreadPct ?? goalDefaults.minEdgeAfterSpreadPct ?? 6,
   };
 }
 
@@ -160,12 +164,13 @@ export function normalizeStrategyConfig(
     next.liveMarketsOnly = true;
     next.maxSizeUsd = next.maxSizeUsd ?? 1;
     next.targetProfitMultiple = QUICK_FLIP_TAKE_PROFIT_MULTIPLE;
-    next.targetExitValueUsd = 1.5;
-    next.targetProfitPct = 50;
-    next.stopLossPct = 30;
+    next.targetExitValueUsd = 1.15;
+    next.targetProfitPct = 20;
+    next.stopLossPct = 15;
     next.maxHoldSeconds = next.maxHoldSeconds ?? 180;
     next.cooldownSeconds = next.cooldownSeconds ?? 15;
     next.minEntryPrice = LIVE_QUICK_FLIP_MIN_ENTRY_PRICE;
+    next.minEdgeAfterSpreadPct = 6;
   }
   return next;
 }

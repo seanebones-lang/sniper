@@ -1,7 +1,18 @@
 import type { Strategy, StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
-import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_SPREAD_PCT, LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO } from './run-profile';
+import {
+  QUICK_FLIP_MAX_ENTRY_MULTIPLE,
+  LIVE_QUICK_FLIP_MIN_ENTRY_PRICE,
+  LIVE_QUICK_FLIP_MAX_ENTRY_PRICE,
+  LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO,
+  QUICK_FLIP_TAKE_PROFIT_MULTIPLE,
+} from './run-profile';
 import { assessFastMovingMarket, isQuickFlipCandidate } from '../markets/fast-moving';
+import {
+  checkLiveEntryGatesSync,
+  getRunnerLiveFilterSnapshot,
+  defaultLiveFilterSnapshot,
+} from '@/lib/monitoring/live-filter-snapshot';
 
 function asResolved(config: Parameters<Strategy['evaluate']>[1]): ResolvedStrategyConfig {
   return config as ResolvedStrategyConfig;
@@ -13,7 +24,7 @@ export function maxQuickFlipEntryPrice(mult = QUICK_FLIP_MAX_ENTRY_MULTIPLE): nu
 }
 
 /**
- * Live quick-flip scalper: $1 in, sell at 1.5× (entries sized for up to 2× room).
+ * Live quick-flip scalper: $1 in, sell at 1.2× (filters from live_intelligence).
  * Only enters markets that resolve within 3 hours (exchange endDate required).
  *
  * Aggressive mode lifts cheap asks when there is real two-sided liquidity.
@@ -51,7 +62,7 @@ export const LiveQuickFlip: Strategy = {
     }
 
     const stakeUsd = config.maxSizeUsd ?? 1;
-    const exitMult = config.targetProfitMultiple ?? 1.5;
+    const exitMult = config.targetProfitMultiple ?? QUICK_FLIP_TAKE_PROFIT_MULTIPLE;
     const maxEntry = isLive
       ? Math.min(maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE), LIVE_QUICK_FLIP_MAX_ENTRY_PRICE)
       : maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE);
@@ -84,11 +95,19 @@ export const LiveQuickFlip: Strategy = {
       return null;
     }
 
+    const liveFilters = isLive
+      ? (getRunnerLiveFilterSnapshot() ?? defaultLiveFilterSnapshot())
+      : null;
+
+    if (isLive) {
+      if (checkLiveEntryGatesSync(market, book, ask, bid)) return null;
+    }
+
     if (hasBid) {
       const mid = book.mid ?? (ask + bid) / 2;
       const spread = book.spread ?? ask - bid;
       const maxSpreadPct = isLive
-        ? LIVE_QUICK_FLIP_MAX_SPREAD_PCT
+        ? (liveFilters?.maxSpreadPct ?? 25)
         : config.tradingStyle === 'conservative'
           ? 8
           : config.tradingStyle === 'balanced'
@@ -103,7 +122,10 @@ export const LiveQuickFlip: Strategy = {
     }
 
     const assessment = assessFastMovingMarket(market);
-    if (isLive && assessment.score < LIVE_QUICK_FLIP_MIN_MARKET_SCORE) {
+    const minScore = isLive
+      ? (liveFilters?.minMarketScore ?? 22)
+      : 0;
+    if (isLive && assessment.score < minScore) {
       return null;
     }
     const targetPrice = Math.min(0.99, ask * exitMult);

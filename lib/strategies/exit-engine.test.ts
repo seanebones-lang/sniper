@@ -24,45 +24,45 @@ describe('evaluateExitSignal quick-flip', () => {
     tradingStyle: 'aggressive',
   });
 
-  it('sells at 1.5× entry price', () => {
+  it('sells at 1.2× entry price', () => {
     const signal = evaluateExitSignal(
       { ...basePosition, netSize: 10 },
-      0.15,
+      0.12,
       0.01,
-      0.15,
+      0.12,
       config,
       Date.parse('2026-01-01T00:00:30Z'),
     );
     expect(signal?.action).toBe('SELL');
-    expect(signal?.reason).toMatch(/1\.5×|\$1\.50/);
+    expect(signal?.reason).toMatch(/1\.2×|\$1\.20/);
   });
 
-  it('does not exit at 1.4× (below 1.5× target)', () => {
+  it('does not exit at 1.1× (below 1.2× target)', () => {
     const signal = evaluateExitSignal(
       { ...basePosition, netSize: 10 },
-      0.14,
+      0.11,
       0.01,
-      0.14,
+      0.11,
       config,
       Date.parse('2026-01-01T00:00:30Z'),
     );
     expect(signal).toBeNull();
   });
 
-  it('sells when position USD value hits $1.50', () => {
+  it('sells when position USD value hits $1.15', () => {
     const signal = evaluateExitSignal(
       { ...basePosition, netSize: 10, avgEntryPrice: 0.1 },
-      0.15,
+      0.115,
       0.01,
-      0.15,
+      0.115,
       config,
       Date.parse('2026-01-01T00:00:30Z'),
     );
     expect(signal?.action).toBe('SELL');
-    expect(signal?.reason).toMatch(/\$1\.50/);
+    expect(signal?.reason).toMatch(/\$1\.15/);
   });
 
-  it('stop loss at -30%', () => {
+  it('stop loss at -15%', () => {
     const signal = evaluateExitSignal(
       { ...basePosition, netSize: 10 },
       0.07,

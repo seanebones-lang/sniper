@@ -91,7 +91,7 @@ describe('real buy -> exit round-trip (the unblocker)', () => {
     tradingStyle: 'aggressive',
   });
 
-  it('a real fill becomes an open position that fires a take-profit SELL at 1.5×', () => {
+  it('a real fill becomes an open position that fires a take-profit SELL at 1.2×', () => {
     const [position] = aggregateRealPositions(
       [row('BUY', 10, 0.1, '2026-01-01T00:00:00Z')],
       's1',
@@ -101,9 +101,9 @@ describe('real buy -> exit round-trip (the unblocker)', () => {
 
     const exit = evaluateExitSignal(
       position,
-      0.15,
+      0.12,
       0.01,
-      0.15,
+      0.12,
       config,
       Date.parse('2026-01-01T00:00:30Z'),
     );
@@ -118,9 +118,9 @@ describe('real buy -> exit round-trip (the unblocker)', () => {
     );
     const exit = evaluateExitSignal(
       position,
-      0.12,
+      0.11,
       0.01,
-      0.12,
+      0.11,
       config,
       Date.parse('2026-01-01T00:00:05Z'),
     );

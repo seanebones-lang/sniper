@@ -1,12 +1,16 @@
 /**
- * Performance attribution — joins signals to paper fills via signalId.
+ * Performance attribution — live mode uses real fills + round trips only.
  */
 
 import { db, paperTrades, signals, realTrades } from '@/lib/db';
 import { chunkArray } from '@/lib/db/chunk-in-array';
-import { gte, inArray } from 'drizzle-orm';
-import { computeStrategyPnlWindows } from '@/lib/paper/strategy-pnl';
+import { gte, inArray, and, eq } from 'drizzle-orm';
+import {
+  computeStrategyPnlWindows,
+  isLiveExecutionEnabled,
+} from '@/lib/research/strategy-attribution';
 import { getPaperRunStartedAt } from '@/lib/paper/run-session';
+import { analyzeLiveRoundTrips } from '@/lib/execution/real-strategy-pnl';
 
 interface StrategyStats {
   name: string;
@@ -20,27 +24,9 @@ interface StrategyStats {
 
 export async function getStrategyPerformance(days = 7) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000);
-  const runStart = await getPaperRunStartedAt();
-  const paperSince = runStart && runStart > since ? runStart : since;
+  const live = isLiveExecutionEnabled();
 
-  // Only pull the columns this function actually reads — full signal/trade rows
-  // over a multi-day window are large and dominate the runtime of this query.
-  const [recentSignals, recentPaper, recentReal, stratRows] = await Promise.all([
-    db.query.signals.findMany({
-      where: gte(signals.createdAt, since),
-      columns: { strategyId: true },
-    }),
-    db.query.paperTrades.findMany({
-      where: gte(paperTrades.filledAt, paperSince),
-      columns: { signalId: true, size: true, price: true },
-    }),
-    db.query.realTrades.findMany({
-      where: gte(realTrades.createdAt, since),
-      columns: { id: true },
-    }),
-    db.query.strategies.findMany(),
-  ]);
-
+  const stratRows = await db.query.strategies.findMany();
   const stratById = Object.fromEntries(stratRows.map((s) => [s.id, s]));
   const byStrategy: Record<string, StrategyStats> = {};
 
@@ -56,6 +42,11 @@ export async function getStrategyPerformance(days = 7) {
     };
   }
 
+  const recentSignals = await db.query.signals.findMany({
+    where: gte(signals.createdAt, since),
+    columns: { strategyId: true },
+  });
+
   for (const sig of recentSignals) {
     if (!byStrategy[sig.strategyId]) {
       byStrategy[sig.strategyId] = {
@@ -70,6 +61,66 @@ export async function getStrategyPerformance(days = 7) {
     }
     byStrategy[sig.strategyId].signals++;
   }
+
+  let totalPaperFills = 0;
+  let totalRealFills = 0;
+
+  if (live) {
+    const realFills = await db.query.realTrades.findMany({
+      where: and(eq(realTrades.status, 'filled'), gte(realTrades.filledAt, since)),
+      columns: { signalId: true, size: true, price: true },
+    });
+    totalRealFills = realFills.length;
+    const realSignalIds = realFills.map((t) => t.signalId).filter(Boolean) as string[];
+    const realLinked: Array<{ id: string; strategyId: string }> = [];
+    for (const ids of chunkArray(realSignalIds)) {
+      const batch = await db.query.signals.findMany({
+        where: inArray(signals.id, ids),
+        columns: { id: true, strategyId: true },
+      });
+      realLinked.push(...batch);
+    }
+    const realSignalStrategyMap = Object.fromEntries(realLinked.map((s) => [s.id, s.strategyId]));
+    for (const fill of realFills) {
+      const strategyId = fill.signalId ? realSignalStrategyMap[fill.signalId] : null;
+      if (strategyId && byStrategy[strategyId]) {
+        byStrategy[strategyId].realFills++;
+        byStrategy[strategyId].notionalUsd += parseFloat(fill.size) * parseFloat(fill.price);
+      }
+    }
+
+    const pnlWindows = await computeStrategyPnlWindows(stratRows.map((s) => s.id), days * 24);
+    for (const [id, stats] of pnlWindows) {
+      if (byStrategy[id]) byStrategy[id].estimatedPnlUsd = stats.estimatedPnl;
+    }
+
+    const liveAttr = await analyzeLiveRoundTrips(Math.min(days * 24, 168));
+    const primaryLive = stratRows.find((s) => s.isActive && s.paperOnly === false);
+    if (primaryLive && byStrategy[primaryLive.id]) {
+      byStrategy[primaryLive.id].estimatedPnlUsd = liveAttr.totalPnlUsd;
+    }
+
+    return {
+      periodDays: days,
+      mode: 'live' as const,
+      totalSignals: recentSignals.length,
+      totalPaperFills: 0,
+      totalRealFills,
+      liveRoundTrips: liveAttr.roundTrips,
+      liveWinRatePct: liveAttr.winRatePct,
+      liveTotalPnlUsd: liveAttr.totalPnlUsd,
+      byStrategy,
+      activeStrategies: stratRows.filter((s) => s.isActive).length,
+    };
+  }
+
+  const runStart = await getPaperRunStartedAt();
+  const paperSince = runStart && runStart > since ? runStart : since;
+  const recentPaper = await db.query.paperTrades.findMany({
+    where: gte(paperTrades.filledAt, paperSince),
+    columns: { signalId: true, size: true, price: true },
+  });
+  totalPaperFills = recentPaper.length;
 
   const signalIds = recentPaper.map((t) => t.signalId).filter(Boolean) as string[];
   const linkedSignals: Array<{ id: string; strategyId: string }> = [];
@@ -92,16 +143,21 @@ export async function getStrategyPerformance(days = 7) {
 
   const pnlWindows = await computeStrategyPnlWindows(stratRows.map((s) => s.id), days * 24);
   for (const [id, stats] of pnlWindows) {
-    if (byStrategy[id]) {
-      byStrategy[id].estimatedPnlUsd = stats.estimatedPnl;
-    }
+    if (byStrategy[id]) byStrategy[id].estimatedPnlUsd = stats.estimatedPnl;
   }
+
+  const recentReal = await db.query.realTrades.findMany({
+    where: gte(realTrades.filledAt, since),
+    columns: { id: true },
+  });
+  totalRealFills = recentReal.length;
 
   return {
     periodDays: days,
+    mode: 'paper' as const,
     totalSignals: recentSignals.length,
-    totalPaperFills: recentPaper.length,
-    totalRealFills: recentReal.length,
+    totalPaperFills,
+    totalRealFills,
     byStrategy,
     activeStrategies: stratRows.filter((s) => s.isActive).length,
   };

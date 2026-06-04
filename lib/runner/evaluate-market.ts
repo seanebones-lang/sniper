@@ -152,6 +152,36 @@ export async function evaluateMarketForStrategy(
     return null;
   }
 
+  const isQuickFlip = config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
+  const isLiveEntry =
+    process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
+    stratRow.paperOnly === false &&
+    signal.action === 'BUY' &&
+    !isExitSignal &&
+    isQuickFlip;
+
+  if (isLiveEntry && book) {
+    const ask = book.asks?.[0]?.price ?? signal.price;
+    const bid = book.bids?.[0]?.price ?? signal.price * 0.98;
+    const stakeUsd = Math.min(
+      config.maxSizeUsd ?? 1,
+      liveBalanceUsd != null && liveBalanceUsd > 0 ? liveBalanceUsd * 0.92 : 1,
+    );
+    const targetMultiple =
+      config.targetProfitMultiple > 0 ? config.targetProfitMultiple : 1.2;
+    const { checkLiveEntryGates } = await import('@/lib/execution/live-entry-gates');
+    const gate = await checkLiveEntryGates({
+      market,
+      book,
+      config,
+      ask,
+      bid,
+      stakeUsd,
+      targetMultiple,
+    });
+    if (!gate.allowed) return null;
+  }
+
   const cooldownKey = `${stratRow.id}:${market.platform}:${market.externalId}`;
   const cooldownMs = (config.cooldownSeconds ?? 300) * 1000;
   if (signal.action === 'BUY' && !isExitSignal) {
@@ -166,8 +196,6 @@ export async function evaluateMarketForStrategy(
     orderSize = Math.min(orderSize, Math.floor(openPos.netSize));
     if (orderSize <= 0) return null;
   }
-
-  const isQuickFlip = config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
 
   let finalSize: number;
   let sizeReason = '';

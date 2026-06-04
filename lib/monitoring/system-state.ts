@@ -29,7 +29,10 @@ export type SystemStateKey =
   | 'polymarket_http_proxy'
   | 'polymarket_browser_session'
   | 'paper_budget_settings'
-  | 'live_self_heal';
+  | 'live_self_heal'
+  | 'live_intelligence'
+  | 'live_trade_outcomes'
+  | 'live_gate_stats';
 
 export interface KillSwitchState {
   disabled: boolean;

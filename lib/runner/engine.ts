@@ -28,7 +28,10 @@ import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
 import { riskModeManager } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { loadPaperRiskState } from '@/lib/paper/risk-state';
-import { computeStrategyPnlWindows, statsToPerformanceWindow } from '@/lib/paper/strategy-pnl';
+import {
+  computeStrategyPnlWindows,
+  statsToPerformanceWindow,
+} from '@/lib/research/strategy-attribution';
 import { CycleBookCache } from '@/lib/runner/book-cache';
 import { getRunnerBookHub } from '@/lib/runner/book-hub';
 import { 
@@ -548,8 +551,6 @@ export async function runOnce() {
     console.warn(`   Evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s).`);
   }
 
-  const allAllocations = await getDynamicAllocations(activeStrategies.map((s) => s.id));
-
   const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
   const liveRealActive =
     realEnabled && activeStrategies.some((s) => !s.paperOnly);
@@ -703,6 +704,29 @@ export async function runOnce() {
       paperRisk.ledger.realizedPnLUsd,
     );
   }
+
+  const { resolveLiveBankrollUsd } = await import('@/lib/research/live-bankroll');
+  const cycleBankrollUsd = liveRealActive
+    ? await resolveLiveBankrollUsd(cycleLiveBalanceUsd)
+    : 25;
+
+  if (liveRealActive) {
+    const { primeRunnerLiveFilterSnapshot } = await import('@/lib/monitoring/live-filter-cache');
+    await primeRunnerLiveFilterSnapshot();
+    if (getCurrentRunCount() % 10 === 0) {
+      const { runLiveLearningCycle } = await import('@/lib/monitoring/live-learning');
+      const learn = await runLiveLearningCycle(cycleBankrollUsd);
+      if (learn.patched) {
+        console.warn(`[Runner] Live learning applied: ${learn.reasons.join('; ')}`);
+        await primeRunnerLiveFilterSnapshot();
+      }
+    }
+  }
+
+  const allAllocations = await getDynamicAllocations(
+    activeStrategies.map((s) => s.id),
+    cycleBankrollUsd,
+  );
 
   const activeProfiles: ActiveStrategyProfile[] = activeStrategies.map((s) => {
     const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
@@ -1052,6 +1076,34 @@ export async function runOnce() {
             continue;
           }
 
+          if (q.signal.action === 'BUY') {
+            const ask = q.book?.asks?.[0]?.price ?? q.signal.price;
+            const bid = q.book?.bids?.[0]?.price ?? q.signal.price * 0.98;
+            const targetMultiple =
+              q.config.targetProfitMultiple > 0
+                ? q.config.targetProfitMultiple
+                : 1.2;
+            const { checkLiveEntryGates } = await import('@/lib/execution/live-entry-gates');
+            const gate = await checkLiveEntryGates({
+              market: q.market,
+              book: q.book,
+              config: q.config,
+              ask,
+              bid,
+              stakeUsd: estimatedUsd,
+              targetMultiple,
+            });
+            if (!gate.allowed) {
+              void logAudit('runner_real_skipped_entry_gate', {
+                strategy: q.stratRow.name,
+                market: q.market.externalId,
+                code: gate.code,
+                reason: gate.reason,
+              });
+              continue;
+            }
+          }
+
           const { placeRealOrder } = await import('@/lib/execution/real-executor');
           const result = await placeRealOrder({
             market: q.market,
@@ -1172,6 +1224,13 @@ export async function runOnce() {
 
   portfolioRiskManager.clearCycleCache();
 
+  if (liveRealActive) {
+    const { flushLiveGateStats } = await import('@/lib/monitoring/live-gate-stats');
+    const { clearRunnerLiveFilterSnapshot } = await import('@/lib/monitoring/live-filter-cache');
+    await flushLiveGateStats();
+    clearRunnerLiveFilterSnapshot();
+  }
+
   if (signalsThisRun > 0) {
     console.log(`[Runner] Run complete. Signals: ${signalsThisRun}, Fills: ${fillsThisRun}`);
   }
@@ -1194,7 +1253,7 @@ export async function runOnce() {
   }
 
   for (const strat of activeStrategies) {
-    const decay = edgeDecayMonitor.isDecaying(strat.id);
+    const decay = edgeDecayMonitor.isDecaying(strat.id, cycleBankrollUsd);
     if (decay.decaying) {
       console.warn(`[Runner] EDGE DECAY on ${strat.name}: ${decay.reason}`);
       await logAudit('edge_decay_detected', {
@@ -1260,8 +1319,19 @@ export async function runOnce() {
   // === Automated Intelligence Layer: Periodic Grok Analysis with Concrete Actions ===
   const { getGrokResearchEnabled } = await import('@/lib/settings/keys');
   const grokResearchEnabled = await getGrokResearchEnabled();
-  const shouldRunGrokAnalysis = grokResearchEnabled &&
-    (Math.random() < 0.008 || (Date.now() % (6 * 60 * 60 * 1000) < 120000)); // ~every 6h or on lucky runs
+  let forceGrokLive = false;
+  if (liveRealActive) {
+    const { analyzeLiveRoundTrips } = await import('@/lib/execution/real-strategy-pnl');
+    const liveAttr = await analyzeLiveRoundTrips(48);
+    forceGrokLive =
+      liveAttr.losses >= 3 && liveAttr.totalPnlUsd < -0.06 * cycleBankrollUsd;
+  }
+  const shouldRunGrokAnalysis =
+    grokResearchEnabled &&
+    (forceGrokLive ||
+      getCurrentRunCount() % 120 === 0 ||
+      Math.random() < 0.008 ||
+      Date.now() % (6 * 60 * 60 * 1000) < 120_000);
 
   if (shouldRunGrokAnalysis) {
     try {
@@ -1310,14 +1380,19 @@ Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
 
         const liveStrategyActive = allowedStrategies.some((s) => s.paperOnly === false);
         if (liveStrategyActive) {
-          console.warn(
-            '[Runner] Grok auto-apply skipped — live strategy active (manual review only)',
-          );
-          await logAudit('grok_auto_skipped_live', {
-            parsedCount: stored.parsedActions.length,
+          const { applySafeGrokActionsForLive } = await import('@/lib/monitoring/live-intelligence');
+          const { analyzeLiveRoundTrips } = await import('@/lib/execution/real-strategy-pnl');
+          const liveAttr = await analyzeLiveRoundTrips(48);
+          const applied = await applySafeGrokActionsForLive(stored.parsedActions, {
+            systemHealth,
+            recentPnlUsd: liveAttr.totalPnlUsd,
+            bankrollUsd: cycleBankrollUsd,
           });
+          if (applied.length > 0) {
+            console.warn(`[Runner] Grok live-safe applied: ${applied.join(', ')}`);
+          }
         } else {
-        // Auto-apply safe recommendations and create temporary adjustments
+        // Auto-apply safe recommendations and create temporary adjustments (paper only)
         for (const action of stored.parsedActions) {
           const a = action.action.toLowerCase().replace(/_/g, ' ');
           const target = action.target;

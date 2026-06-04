@@ -123,6 +123,56 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   const performance = await getStrategyPerformance(Math.ceil(lookback / 24));
 
+  const { isLiveExecutionEnabled } = await import('@/lib/research/strategy-attribution');
+  let liveAttribution: Record<string, unknown> | null = null;
+  let recentOutcomes: unknown[] = [];
+  let liveFilters: Record<string, unknown> | null = null;
+  if (isLiveExecutionEnabled()) {
+    const [{ analyzeLiveRoundTrips }, { getRecentLiveOutcomes }, { getLiveFilterOverrides }] =
+      await Promise.all([
+        import('@/lib/execution/real-strategy-pnl'),
+        import('@/lib/monitoring/live-trade-outcomes'),
+        import('@/lib/monitoring/live-intelligence'),
+      ]);
+    liveAttribution = (await analyzeLiveRoundTrips(lookback)) as unknown as Record<
+      string,
+      unknown
+    >;
+    recentOutcomes = await getRecentLiveOutcomes(15);
+    liveFilters = await getLiveFilterOverrides();
+
+    const liveStrats = await import('@/lib/db').then((m) =>
+      m.db.query.strategies.findMany({
+        where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+        columns: { id: true },
+      }),
+    );
+    if (liveStrats.length > 0) {
+      const { getRealOpenPositionsByStrategy } = await import('@/lib/execution/real-positions');
+      const { fetchPolymarketPrice } = await import('@/lib/clients/polymarket');
+      const byStrategy = await getRealOpenPositionsByStrategy(liveStrats.map((s) => s.id));
+      const openWithMarks: Array<Record<string, unknown>> = [];
+      for (const positions of byStrategy.values()) {
+        for (const p of positions) {
+          const mark = await fetchPolymarketPrice(p.marketExternalId).catch(() => null);
+          const unrealizedPct =
+            mark != null && p.avgEntryPrice > 0
+              ? ((mark - p.avgEntryPrice) / p.avgEntryPrice) * 100
+              : null;
+          openWithMarks.push({
+            tokenId: p.marketExternalId.slice(0, 16),
+            netSize: p.netSize,
+            avgEntry: p.avgEntryPrice,
+            mark,
+            unrealizedPct,
+            openedAt: p.openedAt,
+          });
+        }
+      }
+      (liveAttribution as Record<string, unknown>).openPositions = openWithMarks;
+    }
+  }
+
   let snapshots: Record<string, unknown>[] = [];
   if (query.platform && query.marketExternalId) {
     snapshots = await getSnapshotsForReplay(
@@ -135,9 +185,13 @@ async function gatherResearchContext(query: ResearchQuery) {
 
   return {
     performance,
+    liveAttribution,
+    recentLiveOutcomes: recentOutcomes,
+    liveFilterOverrides: liveFilters,
     recentSnapshots: snapshots.slice(-40),
     snapshotCount: snapshots.length,
     lookbackHours: lookback,
+    since: since.toISOString(),
   };
 }
 
@@ -154,8 +208,10 @@ Be extremely practical and data-driven. Focus on small, consistent edges rather 
     return base + `
 Analyze strategy "${query.strategyId}" over the last ${context.lookbackHours} hours.
 
-Performance:
+Performance (paper + real fills when live):
 ${JSON.stringify(context.performance, null, 2)}
+
+${context.liveAttribution ? `Live round-trip attribution (${context.lookbackHours}h):\n${JSON.stringify(context.liveAttribution, null, 2)}\n\nRecent closed live outcomes:\n${JSON.stringify((context as Record<string, unknown>).recentLiveOutcomes ?? [], null, 2)}\n\nActive live filter overrides:\n${JSON.stringify((context as Record<string, unknown>).liveFilterOverrides ?? {}, null, 2)}\n` : ''}
 
 Recent snapshot features (with regimes):
 ${JSON.stringify((context.recentSnapshots as unknown[] | undefined)?.slice(-12) || [], null, 2)}

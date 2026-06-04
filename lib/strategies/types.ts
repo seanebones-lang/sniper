@@ -26,6 +26,9 @@ export interface StrategyConfig {
   /** Durable size multiplier (e.g. 0.5 = half allocation until cleared) */
   allocationDownweight?: number;
 
+  /** Live: min (target-entry)/entry minus spread fraction (percent points, e.g. 6 = 6%) */
+  minEdgeAfterSpreadPct?: number;
+
   // Strategy-specific
   minSpreadPct?: number;       // for spread-scalper
   entryThreshold?: number;     // for threshold strategy

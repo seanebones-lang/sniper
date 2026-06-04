@@ -32,30 +32,52 @@ export class EdgeDecayMonitor {
   /**
    * Returns true if the strategy shows clear degradation over recent windows.
    */
-  isDecaying(strategyId: string): { decaying: boolean; severity: number; reason: string } {
+  isDecaying(
+    strategyId: string,
+    bankrollUsd?: number,
+  ): { decaying: boolean; severity: number; reason: string } {
     const history = this.windows.get(strategyId) || [];
+    if (history.length < 3) {
+      return { decaying: false, severity: 0, reason: 'Insufficient history' };
+    }
+
+    const recent = history.slice(-3);
+    const older = history.slice(-6, -3);
+
+    const recentPnl = recent.reduce((sum, w) => sum + w.estimatedPnl, 0);
+    const olderPnl = older.length > 0 ? older.reduce((sum, w) => sum + w.estimatedPnl, 0) : 0;
+
+    const bankroll = bankrollUsd != null && bankrollUsd > 0 ? bankrollUsd : 100;
+    const microLive = bankroll < 150;
+
+    if (microLive && recentPnl < -0.08 * bankroll) {
+      return {
+        decaying: true,
+        severity: Math.min(1, Math.abs(recentPnl) / bankroll),
+        reason: `Live micro decay: recent window PnL $${recentPnl.toFixed(2)} (< 8% of $${bankroll.toFixed(0)} bankroll)`,
+      };
+    }
+
     if (history.length < 4) {
       return { decaying: false, severity: 0, reason: 'Insufficient history' };
     }
 
-    const recent = history.slice(-4);
-    const older = history.slice(-8, -4);
-
-    if (older.length === 0) {
+    const recent4 = history.slice(-4);
+    const older4 = history.slice(-8, -4);
+    if (older4.length === 0) {
       return { decaying: false, severity: 0, reason: 'Insufficient history' };
     }
 
-    const recentPnl = recent.reduce((sum, w) => sum + w.estimatedPnl, 0) / recent.length;
-    const olderPnl = older.reduce((sum, w) => sum + w.estimatedPnl, 0) / older.length;
+    const recentAvg = recent4.reduce((sum, w) => sum + w.estimatedPnl, 0) / recent4.length;
+    const olderAvg = older4.reduce((sum, w) => sum + w.estimatedPnl, 0) / older4.length;
+    const degradation = olderAvg - recentAvg;
+    const severity = Math.max(0, degradation / Math.max(0.5, Math.abs(olderAvg)));
 
-    const degradation = olderPnl - recentPnl;
-    const severity = Math.max(0, degradation / Math.max(1, Math.abs(olderPnl)));
-
-    if (severity > 0.6 && recentPnl < olderPnl * 0.5) {
+    if (severity > 0.5 && recentAvg < olderAvg * 0.5) {
       return {
         decaying: true,
         severity: Math.min(1, severity),
-        reason: `Significant performance degradation (recent ${recentPnl.toFixed(2)} vs older ${olderPnl.toFixed(2)})`,
+        reason: `Performance degradation (recent ${recentAvg.toFixed(2)} vs older ${olderAvg.toFixed(2)})`,
       };
     }
 

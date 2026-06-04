@@ -61,6 +61,36 @@ interface LiveOpsSnapshot {
     openedAt: string;
   }>;
   clobOpenOrders: unknown[];
+  attribution?: {
+    windowHours: number;
+    roundTrips: number;
+    wins: number;
+    losses: number;
+    breakeven: number;
+    totalPnlUsd: number;
+    winRatePct: number;
+    byKind: Record<string, { trips: number; pnlUsd: number; wins: number; losses: number }>;
+  };
+  liveFilters?: {
+    minMarketScore: number;
+    maxSpreadPct: number;
+    allowedKinds: string[] | null;
+  };
+  recentOutcomes?: Array<{
+    closedAt: string;
+    marketExternalId: string;
+    kind: string;
+    pnlUsd: number;
+    holdSec: number;
+  }>;
+  intelligence?: {
+    blockedKinds?: string[];
+    minMarketScore?: number;
+    maxSpreadPct?: number;
+    lastLearningAt?: string;
+    lastGrokApplyAt?: string;
+  };
+  gateStats?: { byCode: Record<string, number> };
 }
 
 export default function RealExecutionPage() {
@@ -446,6 +476,93 @@ export default function RealExecutionPage() {
             {Array.isArray(ops.clobOpenOrders) && ops.clobOpenOrders.length > 0 && (
               <div className="text-xs text-zinc-500">
                 CLOB open orders: {ops.clobOpenOrders.length} (see Polymarket UI for details)
+              </div>
+            )}
+
+            {ops.attribution && (
+              <div className="rounded-lg border border-white/5 bg-black/30 p-3">
+                <div className="text-zinc-400 text-xs font-medium mb-2">
+                  Closed trips ({ops.attribution.windowHours}h)
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                  <div>
+                    <span className="text-zinc-500">Trips </span>
+                    {ops.attribution.roundTrips}
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">W/L </span>
+                    <span className="text-emerald-400">{ops.attribution.wins}</span>/
+                    <span className="text-red-400">{ops.attribution.losses}</span>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">Win% </span>
+                    {ops.attribution.winRatePct.toFixed(0)}%
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">PnL </span>
+                    <span
+                      className={
+                        ops.attribution.totalPnlUsd >= 0 ? 'text-emerald-400' : 'text-red-400'
+                      }
+                    >
+                      ${ops.attribution.totalPnlUsd.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                {Object.keys(ops.attribution.byKind ?? {}).length > 0 && (
+                  <div className="mt-2 text-[10px] text-zinc-500 space-y-0.5">
+                    {Object.entries(ops.attribution.byKind).map(([kind, k]) => (
+                      <div key={kind}>
+                        {kind}: {k.trips} trips, ${k.pnlUsd.toFixed(2)} ({k.wins}W/{k.losses}L)
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {ops.liveFilters && (
+              <div className="text-[10px] text-zinc-500">
+                Entry filters: score ≥{ops.liveFilters.minMarketScore}, spread ≤
+                {ops.liveFilters.maxSpreadPct}%
+                {ops.liveFilters.allowedKinds?.length
+                  ? `, kinds: ${ops.liveFilters.allowedKinds.join(', ')}`
+                  : ''}
+                {ops.intelligence?.blockedKinds && ops.intelligence.blockedKinds.length > 0 && (
+                  <span className="text-amber-400">
+                    {' '}
+                    | blocked: {ops.intelligence.blockedKinds.join(', ')}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {ops.gateStats && Object.keys(ops.gateStats.byCode ?? {}).length > 0 && (
+              <div className="text-[10px] text-zinc-500">
+                Gate blocks:{' '}
+                {Object.entries(ops.gateStats.byCode)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 6)
+                  .map(([k, v]) => `${k}:${v}`)
+                  .join(' · ')}
+              </div>
+            )}
+
+            {ops.recentOutcomes && ops.recentOutcomes.length > 0 && (
+              <div>
+                <div className="text-zinc-500 text-xs mb-2">Recent closed</div>
+                {ops.recentOutcomes.slice(0, 6).map((o) => (
+                  <div
+                    key={`${o.closedAt}-${o.marketExternalId}`}
+                    className="font-mono text-[10px] text-zinc-500 mb-1"
+                  >
+                    {o.kind} {o.marketExternalId.slice(0, 10)}…{' '}
+                    <span className={o.pnlUsd >= 0 ? 'text-emerald-500' : 'text-red-400'}>
+                      ${o.pnlUsd.toFixed(2)}
+                    </span>{' '}
+                    ({o.holdSec}s)
+                  </div>
+                ))}
               </div>
             )}
           </div>

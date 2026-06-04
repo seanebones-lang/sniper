@@ -617,6 +617,10 @@ export async function recordRealFill(params: {
     filledPrice,
     platform: trade.platform,
   });
+
+  void import('@/lib/execution/live-round-trip-hook').then((m) =>
+    m.onRealFillRecorded(tradeId).catch(() => {}),
+  );
 }
 
 // Simple audit helper (can be centralized later)

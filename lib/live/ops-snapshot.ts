@@ -9,6 +9,11 @@ import { loadKillSwitchState, loadSystemState } from '@/lib/monitoring/system-st
 import { loadRunnerControlState } from '@/lib/monitoring/runner-control';
 import { getPolymarketPrivateKey, getPolymarketOpenOrders, getPolymarketTokenBalance } from '@/lib/clients/polymarket-trading';
 import { fetchPolymarketMarketByTokenId, fetchPolymarketPrice } from '@/lib/clients/polymarket';
+import { analyzeLiveRoundTrips, type LiveAttributionSummary } from '@/lib/execution/real-strategy-pnl';
+import { getLiveFilterOverrides } from '@/lib/monitoring/live-intelligence';
+import { getRecentLiveOutcomes, type StoredLiveOutcome } from '@/lib/monitoring/live-trade-outcomes';
+import { loadLiveIntelligenceState } from '@/lib/monitoring/live-intelligence';
+import { getLiveGateStats, type LiveGateStatsState } from '@/lib/monitoring/live-gate-stats';
 
 export interface LiveOpsPosition {
   marketExternalId: string;
@@ -31,6 +36,11 @@ export interface LiveOpsSnapshot {
   pendingOrders: Array<{ id: string; side: string; size: string; price: string; marketExternalId: string; createdAt: string; txHash: string | null }>;
   openPositions: LiveOpsPosition[];
   clobOpenOrders: unknown[];
+  attribution: LiveAttributionSummary;
+  liveFilters: Awaited<ReturnType<typeof getLiveFilterOverrides>>;
+  recentOutcomes: StoredLiveOutcome[];
+  intelligence: Awaited<ReturnType<typeof loadLiveIntelligenceState>>;
+  gateStats: LiveGateStatsState;
 }
 
 const ENRICH_TIMEOUT_MS = 8_000;
@@ -101,6 +111,11 @@ export async function getLiveOpsSnapshot(): Promise<LiveOpsSnapshot> {
     killSwitch,
     runnerLock,
     clobOpenOrders,
+    attribution,
+    liveFilters,
+    recentOutcomes,
+    intelligence,
+    gateStats,
   ] = await Promise.all([
     ids.length > 0 ? getRealOpenPositionsByStrategy(ids) : Promise.resolve(new Map()),
     db.query.realTrades.findMany({
@@ -140,6 +155,11 @@ export async function getLiveOpsSnapshot(): Promise<LiveOpsSnapshot> {
     pk
       ? getPolymarketOpenOrders(pk).catch(() => [] as unknown[])
       : Promise.resolve([] as unknown[]),
+    analyzeLiveRoundTrips(24),
+    getLiveFilterOverrides(),
+    getRecentLiveOutcomes(12),
+    loadLiveIntelligenceState(),
+    getLiveGateStats(),
   ]);
 
   const flatPositions = ids.flatMap((strategyId) => positionsByStrategy.get(strategyId) ?? []);
@@ -161,5 +181,10 @@ export async function getLiveOpsSnapshot(): Promise<LiveOpsSnapshot> {
     })),
     openPositions,
     clobOpenOrders,
+    attribution,
+    liveFilters,
+    recentOutcomes,
+    intelligence,
+    gateStats,
   };
 }
