@@ -29,6 +29,8 @@ describe('roundTripsFromEvents', () => {
     ]);
     expect(trips).toHaveLength(1);
     expect(trips[0].pnlUsd).toBeCloseTo(0.99, 2);
+    expect(trips[0].avgEntry).toBeCloseTo(0.4, 3);
+    expect(trips[0].avgExit).toBeCloseTo(0.5, 3);
     expect(trips[0].holdMs).toBe(5 * 60 * 1000);
     expect(trips[0].buyCount).toBe(1);
     expect(trips[0].sellCount).toBe(1);

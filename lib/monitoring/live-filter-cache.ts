@@ -14,7 +14,9 @@ export {
   defaultLiveFilterSnapshot,
 } from '@/lib/monitoring/live-filter-snapshot';
 
-export async function primeRunnerLiveFilterSnapshot(): Promise<RunnerLiveFilterSnapshot> {
+export async function primeRunnerLiveFilterSnapshot(
+  microBankrollUsd = 25,
+): Promise<RunnerLiveFilterSnapshot> {
   const { getLiveFilterOverrides, loadLiveIntelligenceState } = await import(
     '@/lib/monitoring/live-intelligence'
   );
@@ -30,6 +32,10 @@ export async function primeRunnerLiveFilterSnapshot(): Promise<RunnerLiveFilterS
     minMarketScore,
     blockedKinds: state.blockedKinds ?? [],
     minEdgeAfterSpreadPct: state.minEdgeAfterSpreadPct ?? 6,
+    tokenCooldownUntil: state.tokenCooldownUntil ?? {},
+    entriesPaused: state.entriesPaused ?? false,
+    entriesPausedReason: state.entriesPausedReason,
+    microBankrollUsd,
   };
   setRunnerLiveFilterSnapshot(snap);
   return snap;

@@ -81,8 +81,10 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
     const allAllowedBlocked =
       allowed.length > 0 && allowed.every((k) => blocked.has(k));
     if (allAllowedBlocked) {
-      patches.allowedKinds = null;
-      reasons.push('expand allowedKinds (all allow-listed kinds blocked)');
+      patches.entriesPaused = true;
+      patches.entriesPausedReason =
+        'All allow-listed market kinds blocked — exit-only until manual review';
+      reasons.push('pause new entries (all allow-listed kinds blocked)');
     }
   }
 

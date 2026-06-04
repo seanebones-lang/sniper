@@ -548,6 +548,19 @@ export async function runOnce() {
         );
       }
     }
+
+    const { evaluateLiveMicroGuards } = await import('@/lib/monitoring/live-micro-guards');
+    const microGuards = await evaluateLiveMicroGuards(cycleLiveBalanceUsd, earlyCycleBankrollUsd);
+    if (!microGuards.entriesAllowed) {
+      skipLiveEntryScan = true;
+      console.warn(`[Runner] Micro guard (${microGuards.code}): ${microGuards.reason}`);
+      await logAudit('live_micro_guard', {
+        code: microGuards.code,
+        reason: microGuards.reason,
+        cashBalanceUsd: cycleLiveBalanceUsd,
+        bankrollUsd: earlyCycleBankrollUsd,
+      });
+    }
   }
 
   // === Risk Mode Evaluation ===
@@ -743,7 +756,7 @@ export async function runOnce() {
 
   if (liveRealActive) {
     const { primeRunnerLiveFilterSnapshot } = await import('@/lib/monitoring/live-filter-cache');
-    await primeRunnerLiveFilterSnapshot();
+    await primeRunnerLiveFilterSnapshot(cycleBankrollUsd);
     const { loadLiveIntelligenceState } = await import('@/lib/monitoring/live-intelligence');
     const intelState = await loadLiveIntelligenceState();
     const runLearning =
@@ -754,7 +767,7 @@ export async function runOnce() {
       if (learn.patched) {
         console.warn(`[Runner] Live learning applied: ${learn.reasons.join('; ')}`);
       }
-      await primeRunnerLiveFilterSnapshot();
+      await primeRunnerLiveFilterSnapshot(cycleBankrollUsd);
     }
   }
 
@@ -1127,6 +1140,7 @@ export async function runOnce() {
               bid,
               stakeUsd: estimatedUsd,
               targetMultiple,
+              strategyType: q.stratRow.type,
             });
             if (!gate.allowed) {
               void logAudit('runner_real_skipped_entry_gate', {

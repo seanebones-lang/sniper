@@ -9,6 +9,7 @@ import {
   getLiveFilterOverrides,
   isKindBlockedByIntelligence,
   isTokenOnCooldown,
+  loadLiveIntelligenceState,
   type LiveFilterOverrides,
 } from '@/lib/monitoring/live-intelligence';
 import { getRunnerLiveFilterSnapshot } from '@/lib/monitoring/live-filter-snapshot';
@@ -16,6 +17,7 @@ import { analyzeLiveRoundTrips } from '@/lib/execution/real-strategy-pnl';
 import { isMarketPaused } from '@/lib/monitoring/temporary-adjustments';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { recordLiveGateBlock } from '@/lib/monitoring/live-filter-snapshot';
+import { isMicroKindHardBlocked } from '@/lib/monitoring/live-micro-guards';
 
 export type LiveEntryGateInput = {
   market: Market;
@@ -25,7 +27,16 @@ export type LiveEntryGateInput = {
   bid: number;
   stakeUsd: number;
   targetMultiple: number;
+  /** DB strategy type — quick-flip gates only apply to live-quick-flip / quick-flip goal */
+  strategyType?: string;
 };
+
+export function usesQuickFlipLiveGates(
+  config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
+  strategyType?: string,
+): boolean {
+  return config.tradingGoal === 'quick-flip' || strategyType === 'live-quick-flip';
+}
 
 export type LiveEntryGateResult =
   | { allowed: true }
@@ -66,41 +77,82 @@ function deny(code: string, reason: string): LiveEntryGateResult {
 export async function checkLiveEntryGates(
   input: LiveEntryGateInput,
 ): Promise<LiveEntryGateResult> {
-  const { market, book, config, ask, bid, stakeUsd, targetMultiple } = input;
+  const { market, book, config, ask, bid, stakeUsd, targetMultiple, strategyType } = input;
+  const quickFlipProfile = usesQuickFlipLiveGates(config, strategyType);
 
   if (isMarketPaused(market.externalId)) {
     return deny('market_paused', 'Market paused by intelligence layer');
   }
 
+  const snap = getRunnerLiveFilterSnapshot();
+  const intel = snap ? null : await loadLiveIntelligenceState();
+  if (snap?.entriesPaused || intel?.entriesPaused) {
+    return deny(
+      'entries_paused',
+      snap?.entriesPausedReason ?? intel?.entriesPausedReason ?? 'Live entries paused',
+    );
+  }
+
   if (await isTokenOnCooldown(market.externalId)) {
-    return deny('token_cooldown', 'Token cooldown after recent losing exit');
+    return deny('token_cooldown', 'Token cooldown after recent round-trip');
   }
 
   const filters = await resolveFilters();
-  const assessment = assessFastMovingMarket(market);
+  const bankrollUsd = snap?.microBankrollUsd ?? 25;
 
-  if (assessment.kind === 'none') {
-    return deny('not_fast_moving', 'Market not classified as fast-moving');
-  }
+  if (quickFlipProfile) {
+    const assessment = assessFastMovingMarket(market);
 
-  const kind = assessment.kind;
+    if (assessment.kind === 'none') {
+      return deny('not_fast_moving', 'Market not classified as fast-moving');
+    }
 
-  if (isKindBlockedByIntelligence(kind, filters)) {
-    return deny(
-      'kind_blocked',
-      `Market kind "${kind}" blocked by live intelligence`,
-    );
-  }
+    const kind = assessment.kind;
 
-  if (SPORTS_KINDS.includes(kind) && (await shouldBlockSportsLive())) {
-    return deny('sports_win_rate', 'Sports live entries blocked — 24h win rate below 25%');
-  }
+    if (isMicroKindHardBlocked(kind, bankrollUsd, filters.blockedKinds)) {
+      return deny('micro_kind_blocked', `Kind "${kind}" blocked on micro live account`);
+    }
 
-  if (assessment.score < filters.minMarketScore) {
-    return deny(
-      'low_market_score',
-      `Market score ${assessment.score} < min ${filters.minMarketScore}`,
-    );
+    if (isKindBlockedByIntelligence(kind, filters)) {
+      return deny(
+        'kind_blocked',
+        `Market kind "${kind}" blocked by live intelligence`,
+      );
+    }
+
+    if (SPORTS_KINDS.includes(kind) && (await shouldBlockSportsLive())) {
+      return deny('sports_win_rate', 'Sports live entries blocked — 24h win rate below 25%');
+    }
+
+    if (assessment.score < filters.minMarketScore) {
+      return deny(
+        'low_market_score',
+        `Market score ${assessment.score} < min ${filters.minMarketScore}`,
+      );
+    }
+
+    const mid = book?.mid ?? (ask + bid) / 2;
+    const spread = book?.spread ?? ask - bid;
+    if (mid > 0) {
+      const spreadPct = (spread / mid) * 100;
+      if (spreadPct > filters.maxSpreadPct) {
+        return deny(
+          'spread_too_wide',
+          `Spread ${spreadPct.toFixed(1)}% > max ${filters.maxSpreadPct}%`,
+        );
+      }
+
+      const grossEdge = (ask * targetMultiple - ask) / ask;
+      const edgeAfterSpread = grossEdge - spreadPct / 100;
+      const minEdgePct = filters.minEdgeAfterSpreadPct ?? config.minEdgeAfterSpreadPct ?? 6;
+      const minEdge = minEdgePct / 100;
+      if (edgeAfterSpread < minEdge) {
+        return deny(
+          'insufficient_edge',
+          `Edge after spread ${(edgeAfterSpread * 100).toFixed(1)}% < min ${minEdgePct}%`,
+        );
+      }
+    }
   }
 
   const execHealth = executionManager.getMarketHealth(market.externalId);
@@ -109,29 +161,6 @@ export async function checkLiveEntryGates(
       'adverse_execution',
       `Poor execution health (${(execHealth.healthScore * 100).toFixed(0)}%) on this market`,
     );
-  }
-
-  const mid = book?.mid ?? (ask + bid) / 2;
-  const spread = book?.spread ?? ask - bid;
-  if (mid > 0) {
-    const spreadPct = (spread / mid) * 100;
-    if (spreadPct > filters.maxSpreadPct) {
-      return deny(
-        'spread_too_wide',
-        `Spread ${spreadPct.toFixed(1)}% > max ${filters.maxSpreadPct}%`,
-      );
-    }
-
-    const grossEdge = (ask * targetMultiple - ask) / ask;
-    const edgeAfterSpread = grossEdge - spreadPct / 100;
-    const minEdgePct = filters.minEdgeAfterSpreadPct ?? config.minEdgeAfterSpreadPct ?? 6;
-    const minEdge = minEdgePct / 100;
-    if (edgeAfterSpread < minEdge) {
-      return deny(
-        'insufficient_edge',
-        `Edge after spread ${(edgeAfterSpread * 100).toFixed(1)}% < min ${minEdgePct}%`,
-      );
-    }
   }
 
   const bidSize = book?.bids?.[0]?.size ?? 0;

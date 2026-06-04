@@ -3,9 +3,18 @@
  */
 import { db, realTrades, signals } from '@/lib/db';
 import { eq, and, gte, inArray } from 'drizzle-orm';
-import { roundTripsFromEvents } from '@/lib/execution/real-strategy-pnl';
+import {
+  roundTripsFromEvents,
+  loadMarketQuestionsForRoundTrips,
+} from '@/lib/execution/real-strategy-pnl';
 import { appendLiveTradeOutcome } from '@/lib/monitoring/live-trade-outcomes';
-import { recordTokenLossCooldown, getLiveFilterOverrides } from '@/lib/monitoring/live-intelligence';
+import {
+  recordTokenTripCooldown,
+  getLiveFilterOverrides,
+} from '@/lib/monitoring/live-intelligence';
+import { LIVE_MICRO_TOKEN_COOLDOWN_MS } from '@/lib/monitoring/live-micro-guards';
+
+const TRIP_MATCH_MS = 5 * 60 * 1000;
 
 export async function onRealFillRecorded(tradeId: string): Promise<void> {
   const trade = await db.query.realTrades.findFirst({
@@ -46,18 +55,28 @@ export async function onRealFillRecorded(tradeId: string): Promise<void> {
     }))
     .filter((e) => Number.isFinite(e.size));
 
-  const trips = roundTripsFromEvents(events);
+  const marketQuestions = await loadMarketQuestionsForRoundTrips([
+    trade.marketExternalId,
+  ]);
+  const trips = roundTripsFromEvents(events, marketQuestions);
   const closedAt = trade.filledAt ?? new Date();
   const matching = trips.filter(
-    (t) => Math.abs(t.closedAt.getTime() - closedAt.getTime()) < 120_000,
+    (t) =>
+      t.marketExternalId === trade.marketExternalId &&
+      Math.abs(t.closedAt.getTime() - closedAt.getTime()) < TRIP_MATCH_MS,
   );
-  if (matching.length === 0) return;
 
-  const trip = matching[matching.length - 1];
+  const trip = matching.length > 0 ? matching[matching.length - 1] : trips.at(-1);
+  if (!trip || Math.abs(trip.closedAt.getTime() - closedAt.getTime()) >= TRIP_MATCH_MS) {
+    return;
+  }
+
   await appendLiveTradeOutcome(trip);
 
-  if (trip.pnlUsd < -0.05) {
-    const { tokenCooldownMs } = await getLiveFilterOverrides();
-    await recordTokenLossCooldown(trade.marketExternalId, tokenCooldownMs);
-  }
+  const { tokenCooldownMs } = await getLiveFilterOverrides();
+  await recordTokenTripCooldown(
+    trade.marketExternalId,
+    tokenCooldownMs ?? LIVE_MICRO_TOKEN_COOLDOWN_MS,
+    `round-trip closed pnl=$${trip.pnlUsd.toFixed(3)}`,
+  );
 }

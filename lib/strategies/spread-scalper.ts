@@ -19,13 +19,13 @@ export const SpreadScalper: Strategy = {
 
     if (spreadPct >= minSpread) {
       // Snipe the cheaper side (slightly better than mid for taker edge)
-      const targetPrice = book.bids[0].price * 0.998; // slight discount to get filled
-      const size = Math.min(config.maxSizeUsd / targetPrice, 500); // conservative size
+      const targetPrice = book.bids[0].price * 0.998;
+      const maxShares = Math.max(1, Math.ceil(config.maxSizeUsd / targetPrice));
 
       return {
         action: 'BUY',
         price: targetPrice,
-        size: Math.max(10, Math.floor(size)),
+        size: maxShares,
         reason: `Wide spread ${spreadPct.toFixed(2)}% (>= ${minSpread}%)`,
         confidence: Math.min(0.9, spreadPct / 5),
         edge: Math.min(0.08, spreadPct / 100),

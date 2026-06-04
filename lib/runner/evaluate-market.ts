@@ -178,6 +178,7 @@ export async function evaluateMarketForStrategy(
       bid,
       stakeUsd,
       targetMultiple,
+      strategyType: stratRow.type,
     });
     if (!gate.allowed) return null;
   }

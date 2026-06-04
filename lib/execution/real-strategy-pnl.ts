@@ -157,6 +157,12 @@ function buildEventsFromFills(
     .sort((a, b) => a.at.getTime() - b.at.getTime());
 }
 
+export async function loadMarketQuestionsForRoundTrips(
+  externalIds: string[],
+): Promise<Map<string, string>> {
+  return loadMarketQuestionsByExternalIds(externalIds);
+}
+
 async function loadMarketQuestionsByExternalIds(
   externalIds: string[],
 ): Promise<Map<string, string>> {
@@ -198,6 +204,8 @@ export function roundTripsFromEvents(
     let sellCount = 0;
     let buyNotional = 0;
     let sellNotional = 0;
+    let buyShares = 0;
+    let sellShares = 0;
     const strategyId = marketEvents[0]?.strategyId ?? null;
     const platform = marketEvents[0]?.platform ?? 'polymarket';
     const marketExternalId = marketEvents[0]?.marketExternalId ?? '';
@@ -212,11 +220,14 @@ export function roundTripsFromEvents(
           sellCount = 0;
           buyNotional = 0;
           sellNotional = 0;
+          buyShares = 0;
+          sellShares = 0;
         }
         net += e.size;
         cost += e.size * e.price + e.fee;
         buyCount++;
         buyNotional += e.size * e.price;
+        buyShares += e.size;
       } else {
         const avg = net > 0.01 ? cost / net : e.price;
         tripPnl += (e.price - avg) * e.size - e.fee;
@@ -224,6 +235,7 @@ export function roundTripsFromEvents(
         cost -= avg * e.size;
         sellCount++;
         sellNotional += e.size * e.price;
+        sellShares += e.size;
         if (net <= 0.01 && tripOpen && openedAt) {
           const question =
             marketQuestions?.get(marketExternalId) ?? marketExternalId.slice(0, 80);
@@ -246,8 +258,8 @@ export function roundTripsFromEvents(
             sellCount,
             openedAt,
             closedAt: e.at,
-            avgEntry: buyCount > 0 ? buyNotional / buyCount : 0,
-            avgExit: sellCount > 0 ? sellNotional / sellCount : e.price,
+            avgEntry: buyShares > 0 ? buyNotional / buyShares : 0,
+            avgExit: sellShares > 0 ? sellNotional / sellShares : e.price,
           });
           tripOpen = false;
           net = 0;

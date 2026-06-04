@@ -31,12 +31,22 @@ export async function PATCH(req: Request) {
     allowedKinds?: string[] | null;
     blockedKinds?: string[];
     clearTokenCooldown?: string;
+    clearEntriesPaused?: boolean;
+    entriesPaused?: boolean;
     resetFilters?: boolean;
   };
 
   if (body.clearTokenCooldown) {
     await clearTokenCooldown(body.clearTokenCooldown);
     return NextResponse.json({ ok: true, cleared: body.clearTokenCooldown });
+  }
+
+  if (body.clearEntriesPaused || body.entriesPaused === false) {
+    await saveLiveIntelligenceState(
+      { entriesPaused: false, entriesPausedReason: undefined },
+      'manual entries resume via API',
+    );
+    return NextResponse.json({ ok: true, entriesPaused: false });
   }
 
   if (body.resetFilters) {
@@ -47,6 +57,8 @@ export async function PATCH(req: Request) {
         minEdgeAfterSpreadPct: undefined,
         allowedKinds: ['short-crypto'],
         blockedKinds: [],
+        entriesPaused: false,
+        entriesPausedReason: undefined,
       },
       'manual reset via API',
     );

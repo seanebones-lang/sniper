@@ -31,6 +31,7 @@ export type SystemStateKey =
   | 'paper_budget_settings'
   | 'live_self_heal'
   | 'live_intelligence'
+  | 'live_session_bankroll'
   | 'live_trade_outcomes'
   | 'live_gate_stats';
 
