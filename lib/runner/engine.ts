@@ -896,6 +896,9 @@ export async function runOnce() {
       // double SELLs while reconciliation is still confirming the prior order.
       const pendingBuyMarkets = new Set<string>();
       const pendingSellMarkets = new Set<string>();
+      /** Micro live account: one open position — exit before stacking new entries. */
+      let liveBuysThisCycle = 0;
+      const LIVE_MICRO_MAX_OPEN_POSITIONS = 1;
       if (realSignalQueued) {
         try {
           const pendingRows = await db.query.realTrades.findMany({
@@ -939,6 +942,24 @@ export async function runOnce() {
               action: q.signal.action,
             });
             continue;
+          }
+          if (q.signal.action === 'BUY') {
+            const openForStrat = openPositionsByStrategy.get(q.stratRow.id) ?? [];
+            if (openForStrat.length >= LIVE_MICRO_MAX_OPEN_POSITIONS) {
+              void logAudit('runner_real_skipped_position_cap', {
+                strategy: q.stratRow.name,
+                openCount: openForStrat.length,
+                market: q.market.externalId,
+              });
+              continue;
+            }
+            if (liveBuysThisCycle >= 1) {
+              void logAudit('runner_real_skipped_one_buy_per_cycle', {
+                strategy: q.stratRow.name,
+                market: q.market.externalId,
+              });
+              continue;
+            }
           }
           if (q.signal.action === 'SELL' && pendingSellMarkets.has(marketKey)) {
             void logAudit('runner_real_skipped_in_flight', {
@@ -1013,6 +1034,7 @@ export async function runOnce() {
             fillsThisRun++;
             if (q.signal.action === 'BUY') {
               realCashRemaining -= estimatedUsd;
+              liveBuysThisCycle++;
             }
             pendingBuyMarkets.add(marketKey);
             lastSignalAtByKey.set(q.cooldownKey, Date.now());
