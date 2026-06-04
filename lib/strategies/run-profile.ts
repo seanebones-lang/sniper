@@ -46,16 +46,16 @@ const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
 export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.5;
 
 /** Minimum fast-moving score for live quick-flip entries (filters dead tails). */
-export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 22;
+export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 15;
 
 /** Live entries below this price are lottery tickets with no exit liquidity. */
 export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.015;
 
-/** Live max ask — must leave room to 1.5× before 0.99 cap (~$0.45 on micro flips). */
-export const LIVE_QUICK_FLIP_MAX_ENTRY_PRICE = 0.45;
+/** Live max ask — room for 1.5× exit; 0.48 allows active 47–48¢ up/down markets. */
+export const LIVE_QUICK_FLIP_MAX_ENTRY_PRICE = 0.48;
 
-/** Max spread (mid %) for live entries — wide spreads trap exits. */
-export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 35;
+/** Max spread (mid %) for live entries — crypto up/down books can run wide briefly. */
+export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 45;
 
 /** Bid notional must cover at least this fraction of stake USD. */
 export const LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO = 1;

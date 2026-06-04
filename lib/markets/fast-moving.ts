@@ -36,6 +36,9 @@ const SPORTS_PATTERNS: Array<{ re: RegExp; label: string }> = [
 const SHORT_CRYPTO_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\b(5m|15m|30m|1h|hour|minute)\b.*\b(bitcoin|btc|ethereum|eth|sol|crypto|price)\b/i, label: 'short crypto window' },
   { re: /\b(bitcoin|btc|ethereum|eth|solana|sol)\b.*\b(5m|15m|30m|1h|hour|minute|above|below)\b/i, label: 'short crypto window' },
+  { re: /\b(bitcoin|btc|ethereum|eth|sol|xrp|crypto)\b.*\bup or down\b/i, label: 'crypto up/down' },
+  { re: /\bup or down\b.*\b(bitcoin|btc|ethereum|eth|sol|xrp)\b/i, label: 'crypto up/down' },
+  { re: /\bup or down\b.*\d{1,2}:\d{2}\s*(AM|PM)/i, label: 'intraday up/down window' },
 ];
 
 const SHORT_EVENT_PATTERNS: Array<{ re: RegExp; label: string }> = [
