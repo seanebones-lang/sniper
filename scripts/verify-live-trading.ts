@@ -48,7 +48,7 @@ async function main() {
     if (!setup.ready) failures.push(setup.message ?? 'Polymarket trading not ready');
     else console.log(`OK  Trading ready, balance $${setup.balanceUsd?.toFixed(2)}`);
 
-    const bal = await getPolymarketUsdcBalance(pk, { syncFirst: true });
+    const bal = await getPolymarketUsdcBalance(pk, { syncFirst: false });
     console.log(`    CLOB balance: $${bal?.toFixed(2) ?? '?'}`);
     if (bal != null && bal < 0.5) failures.push(`Balance too low: $${bal}`);
   }

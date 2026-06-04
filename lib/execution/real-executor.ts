@@ -23,6 +23,11 @@ import {
   persistKillSwitchDisabled,
   persistKillSwitchEnabled,
 } from '@/lib/monitoring/system-state';
+import { isDeadMarketToken } from '@/lib/execution/dead-market-tokens';
+
+function isTakeProfitExitReason(reason: string): boolean {
+  return /× hit|value target \$|Take profit \+/i.test(reason);
+}
 
 const REAL_ENABLED = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 
@@ -202,20 +207,36 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       return { success: false, error: formatGeoblockMessage(geo) };
     }
 
+    if (isDeadMarketToken(req.market.externalId)) {
+      await logAudit('real_order_skipped_dead_market', {
+        market: req.market.externalId,
+        side: req.side,
+      });
+      return { success: false, error: 'Dead/delisted market — skipped' };
+    }
+
     const pk = getPolymarketPrivateKey();
     if (pk) {
-      const { getPolymarketUsdcBalance } = await import('@/lib/clients/polymarket-trading');
+      const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
       const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
-      const balanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
+      const balanceUsd = await resolveLiveUsdcBalance(pk);
       if (balanceUsd != null && balanceUsd > 0) {
         portfolioRiskManager.applyMicroRealBudget(balanceUsd);
-        const realRisk = await loadRealRiskSnapshot(balanceUsd);
+        const liveStrats = await db.query.strategies.findMany({
+          where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+          columns: { id: true },
+        });
+        const realRisk = await loadRealRiskSnapshot(
+          balanceUsd,
+          liveStrats.map((s) => s.id),
+        );
         portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
       }
     }
   }
 
-  const { usdCapToShares, minRealOrderUsd } = await import('@/lib/risk/sizing');
+  const { usdCapToShares, minRealOrderUsd, POLYMARKET_MIN_MARKET_BUY_USD, POLYMARKET_MIN_SHARES, roundPolymarketShares } =
+    await import('@/lib/risk/sizing');
   const bankrollUsd = portfolioRiskManager.getCurrentBankroll();
   const minOrderUsd = minRealOrderUsd(bankrollUsd);
   const requestedUsd = req.price * req.size;
@@ -223,19 +244,24 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   let finalSize: number;
   let usdValue: number;
 
-  // Micro live (~$7): trust strategy cap ($1) instead of paper-era Kelly ($5 min).
+  // Micro live: trust strategy $1 cap (skip Kelly) for small accounts and
+  // small-stake strategies even after the bankroll grows past the initial soak.
+  const strategyCap = req.maxNotionalUsd ?? 1;
   const microLive =
     !req.isExit &&
     bankrollUsd > 0 &&
-    bankrollUsd <= 25 &&
+    bankrollUsd <= 100 &&
+    strategyCap <= 1.5 &&
     req.market.platform === 'polymarket';
-  const strategyCap = req.maxNotionalUsd ?? 1;
-  const microCapUsd = Math.min(requestedUsd, strategyCap, bankrollUsd * 0.9);
+  let microCapUsd = Math.min(requestedUsd, strategyCap, bankrollUsd * 0.9);
+  if (microLive && req.takeLiquidity && req.side === 'BUY') {
+    microCapUsd = Math.max(POLYMARKET_MIN_MARKET_BUY_USD, microCapUsd);
+  }
 
   if (req.isExit) {
     // Exits must liquidate the full open position — never re-shrink an exit
     // through Kelly/bankroll sizing (that would strand residual inventory).
-    finalSize = Math.max(0, Math.floor(req.size));
+    finalSize = roundPolymarketShares(req.size);
     usdValue = req.price * finalSize;
     if (finalSize <= 0) {
       await logAudit('real_order_blocked_exit_zero_size', { ...req });
@@ -247,14 +273,17 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       if (pk) {
         const { getPolymarketTokenBalance } = await import('@/lib/clients/polymarket-trading');
         const onChain = await getPolymarketTokenBalance(pk, req.market.externalId);
-        if (onChain != null && onChain > 0 && onChain < finalSize) {
-          finalSize = Math.floor(onChain);
+        if (onChain != null && onChain > 0) {
+          finalSize = roundPolymarketShares(Math.min(finalSize, onChain));
           usdValue = req.price * finalSize;
         }
       }
     }
   } else if (microLive && microCapUsd >= minOrderUsd) {
     finalSize = usdCapToShares(microCapUsd, req.price, 1);
+    if (req.takeLiquidity && req.side === 'BUY' && req.price * finalSize < POLYMARKET_MIN_MARKET_BUY_USD) {
+      finalSize = Math.ceil(POLYMARKET_MIN_MARKET_BUY_USD / req.price);
+    }
     usdValue = req.price * finalSize;
   } else {
     const safeSizing = await portfolioRiskManager.calculateSafeSize({
@@ -335,7 +364,34 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       '@/lib/clients/polymarket-trading-setup'
     );
     const setup = await ensurePolymarketTradingReady();
-    if (!setup.ready && req.side === 'BUY') {
+    let balanceUsd = setup.balanceUsd;
+    if (balanceUsd == null) {
+      const pk = getPolymarketPrivateKey();
+      if (pk) {
+        const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
+        balanceUsd = await resolveLiveUsdcBalance(pk);
+      }
+    }
+    if (
+      req.side === 'BUY' &&
+      balanceUsd != null &&
+      balanceUsd < usdValue * 0.95
+    ) {
+      await logAudit('real_order_blocked_insufficient_balance', {
+        balanceUsd,
+        requiredUsd: usdValue,
+        market: req.market.externalId,
+      });
+      return {
+        success: false,
+        error: `Insufficient Polymarket collateral ($${balanceUsd.toFixed(2)} available, need ~$${usdValue.toFixed(2)})`,
+      };
+    }
+    if (
+      !setup.ready &&
+      req.side === 'BUY' &&
+      (balanceUsd == null || balanceUsd < usdValue * 0.95)
+    ) {
       await logAudit('real_order_blocked_trading_not_ready', {
         ...setup,
         requiredUsd: usdValue,
@@ -344,21 +400,6 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       return {
         success: false,
         error: setup.message ?? 'Polymarket trading not ready (balance/approvals)',
-      };
-    }
-    if (
-      req.side === 'BUY' &&
-      setup.balanceUsd != null &&
-      setup.balanceUsd < usdValue * 0.95
-    ) {
-      await logAudit('real_order_blocked_insufficient_balance', {
-        balanceUsd: setup.balanceUsd,
-        requiredUsd: usdValue,
-        market: req.market.externalId,
-      });
-      return {
-        success: false,
-        error: `Insufficient Polymarket collateral ($${setup.balanceUsd.toFixed(2)} available, need ~$${usdValue.toFixed(2)})`,
       };
     }
   }
@@ -440,7 +481,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       : req.price;
     const postOnly = decision.type === 'POST_PASSIVE';
 
-    const { placePolymarketLimitOrder, placePolymarketMarketOrder } = await import(
+    const { placePolymarketLimitOrder, placePolymarketMarketOrder, getPolymarketOrderOptions } = await import(
       '@/lib/clients/polymarket-trading'
     );
     const { isPolymarketGeoblockOrderError } = await import('@/lib/clients/polymarket-geoblock');
@@ -449,12 +490,24 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     const bestAsk = book?.asks?.[0]?.price;
     const sellHasBidDepth = (book?.bids?.length ?? 0) > 0 && (book?.bids?.[0]?.size ?? 0) > 0;
 
-    // Polymarket market orders: BUY `amount` = USD to spend; SELL `amount` =
-    // shares to sell. Entries use FOK (all-or-nothing); exits use FAK when
-    // bids exist. Ask-only books need a limit sell (join the ask side).
+    const orderOpts = await getPolymarketOrderOptions(req.market.externalId);
+    const minShares = orderOpts.minOrderSize;
+
+    const takeProfitExit =
+      isAggressiveExit && req.side === 'SELL' && isTakeProfitExitReason(req.reason);
+
+    // Polymarket market orders: BUY `amount` = USD; SELL `amount` = shares.
+    // Take-profit: post limit at target (don't dump into a penny bid via FAK).
     const useMarketOrder =
-      (req.takeLiquidity && req.side === 'BUY') ||
-      (isAggressiveExit && sellHasBidDepth);
+      !takeProfitExit &&
+      ((req.takeLiquidity && req.side === 'BUY') ||
+        (isAggressiveExit && (sellHasBidDepth || finalSize < minShares)) ||
+        (!req.takeLiquidity && finalSize < minShares));
+
+    const limitPrice =
+      req.side === 'SELL' && takeProfitExit
+        ? Math.max(bestBid ?? 0.001, Math.min(0.99, execPrice))
+        : Math.max(0.001, Math.min(0.99, execPrice));
 
     let result = useMarketOrder
       ? await placePolymarketMarketOrder({
@@ -465,16 +518,42 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
               ? Math.min(usdValue, req.maxNotionalUsd ?? usdValue)
               : finalSize,
           side: req.side,
-          orderType: req.side === 'BUY' ? 'FOK' : 'FAK',
+          orderType: req.side === 'BUY' ? 'FAK' : 'FAK',
         })
       : await placePolymarketLimitOrder({
           privateKey,
           tokenId: req.market.externalId,
-          price: Math.max(0.001, Math.min(0.99, execPrice)),
+          price: limitPrice,
           size: finalSize,
           side: req.side,
           postOnly,
         });
+
+    // Locked shares (ghost resting sell) — cancel and retry once.
+    if (
+      !result.success &&
+      isAggressiveExit &&
+      /active orders|not enough balance \/ allowance/i.test(result.error ?? '')
+    ) {
+      const { cancelPolymarketMarketOrders } = await import('@/lib/clients/polymarket-trading');
+      await cancelPolymarketMarketOrders(privateKey, req.market.externalId);
+      result = useMarketOrder
+        ? await placePolymarketMarketOrder({
+            privateKey,
+            tokenId: req.market.externalId,
+            amountUsd: finalSize,
+            side: 'SELL',
+            orderType: 'FAK',
+          })
+        : await placePolymarketLimitOrder({
+            privateKey,
+            tokenId: req.market.externalId,
+            price: Math.max(0.001, Math.min(0.99, execPrice)),
+            size: finalSize,
+            side: 'SELL',
+            postOnly: false,
+          });
+    }
 
     // Ask-only / thin bid: market SELL fails with "no match" — list at best ask.
     if (

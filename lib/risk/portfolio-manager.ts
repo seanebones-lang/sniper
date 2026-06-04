@@ -86,12 +86,46 @@ export class PortfolioRiskManager {
     this.cycleStateCache = null;
   }
 
+  /** Read current cycle state without falling back to paper (for logging after clear). */
+  peekCyclePortfolioState(): PortfolioState | null {
+    if (!this.cycleStateCache) return null;
+    return { ...this.cycleStateCache, maxDrawdown: this.currentDrawdownPct };
+  }
+
   async getCurrentPortfolioState(): Promise<PortfolioState> {
     if (this.cycleStateCache) {
       return { ...this.cycleStateCache, maxDrawdown: this.currentDrawdownPct };
     }
 
-    // Fallback: try paper ledger when positions table is empty (paper mode)
+    if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
+      try {
+        const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
+          '@/lib/clients/polymarket-trading'
+        );
+        const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
+        const pk = getPolymarketPrivateKey();
+        if (pk) {
+          const bal = await getPolymarketUsdcBalance(pk, { syncFirst: false });
+          if (bal != null && bal > 0) {
+            const liveStrats = await import('@/lib/db').then((m) =>
+              m.db.query.strategies.findMany({
+                where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+                columns: { id: true },
+              }),
+            );
+            const realRisk = await loadRealRiskSnapshot(
+              bal,
+              liveStrats.map((s) => s.id),
+            );
+            return { ...realRisk.state, maxDrawdown: this.currentDrawdownPct };
+          }
+        }
+      } catch {
+        // fall through
+      }
+    }
+
+    // Fallback: paper ledger when positions table is empty (paper mode)
     try {
       const { loadPaperRiskState } = await import('@/lib/paper/risk-state');
       const paper = await loadPaperRiskState();

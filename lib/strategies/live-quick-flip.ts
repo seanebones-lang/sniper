@@ -1,6 +1,6 @@
 import type { Strategy, StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
-import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_SPREAD_PCT, LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO } from './run-profile';
+import { QUICK_FLIP_MAX_ENTRY_MULTIPLE, LIVE_QUICK_FLIP_MIN_MARKET_SCORE, LIVE_QUICK_FLIP_MIN_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_ENTRY_PRICE, LIVE_QUICK_FLIP_MAX_SPREAD_PCT, LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO } from './run-profile';
 import { assessFastMovingMarket, isQuickFlipCandidate } from '../markets/fast-moving';
 
 function asResolved(config: Parameters<Strategy['evaluate']>[1]): ResolvedStrategyConfig {
@@ -52,7 +52,9 @@ export const LiveQuickFlip: Strategy = {
 
     const stakeUsd = config.maxSizeUsd ?? 1;
     const exitMult = config.targetProfitMultiple ?? 1.5;
-    const maxEntry = maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE);
+    const maxEntry = isLive
+      ? Math.min(maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE), LIVE_QUICK_FLIP_MAX_ENTRY_PRICE)
+      : maxQuickFlipEntryPrice(QUICK_FLIP_MAX_ENTRY_MULTIPLE);
 
     if (ask > maxEntry) {
       return null;

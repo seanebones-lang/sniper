@@ -12,6 +12,7 @@ import type { Strategy, StrategySignal } from '@/lib/strategies/types';
 import type { Market } from '@/lib/types';
 import type { CycleBookCache } from '@/lib/runner/book-cache';
 import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
+import { resolveExitMarkPrice } from '@/lib/markets/exit-mark-price';
 
 export interface QueuedRunnerSignal {
   stratRow: { id: string; name: string; type: string; paperOnly: boolean | null };
@@ -73,10 +74,16 @@ export async function evaluateMarketForStrategy(
   } = ctx;
 
   const book = bookCache.getBook(market.platform, market.externalId);
+  const posKey = `${market.platform}:${market.externalId}`;
+  const openPos = openByMarket.get(posKey);
+
   const markFromBook =
     book?.bids?.[0]?.price ?? book?.mid ?? book?.asks?.[0]?.price ?? undefined;
-  const currentPrice =
+  const fallbackPrice =
     markFromBook ?? bookCache.getMarkPrice(market.platform, market.externalId) ?? market.lastPrice;
+  const currentPrice = openPos
+    ? resolveExitMarkPrice(book, fallbackPrice)
+    : fallbackPrice;
 
   const recentSnaps = snapshotBatch.get(`${market.platform}:${market.externalId}`) ?? [];
   const advanced = extractFeaturesFromRecentSnapshots(recentSnaps);
@@ -108,9 +115,6 @@ export async function evaluateMarketForStrategy(
       },
     } as unknown as Parameters<typeof saveBookSnapshot>[0]);
   }
-
-  const posKey = `${market.platform}:${market.externalId}`;
-  const openPos = openByMarket.get(posKey);
 
   let signal: StrategySignal | null = null;
   let isExitSignal = false;
@@ -201,9 +205,11 @@ export async function evaluateMarketForStrategy(
 
     const isLiveMicroBuy =
       isQuickFlip && signal.action === 'BUY' && stratRow.paperOnly === false;
+    // Use strategy max ($1) capped by spendable cash — not a % haircut that
+    // drops FOK market BUYs below Polymarket's $1 minimum.
     const liveStakeCap =
       isLiveMicroBuy && liveBalanceUsd != null && liveBalanceUsd > 0
-        ? Math.min(config.maxSizeUsd ?? 1, Math.max(0.5, liveBalanceUsd * 0.12))
+        ? Math.min(config.maxSizeUsd ?? 1, liveBalanceUsd * 0.92)
         : (config.maxSizeUsd ?? 1);
     const buyCapUsd = isLiveMicroBuy
       ? Math.min(liveStakeCap, riskCapUsd)

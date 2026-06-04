@@ -177,6 +177,19 @@ export function spendersNeedingApproval(
   });
 }
 
+function isTransientRelayerError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('504') ||
+    lower.includes('502') ||
+    lower.includes('503') ||
+    lower.includes('timeout') ||
+    lower.includes('gateway') ||
+    lower.includes('econnreset') ||
+    lower.includes('network')
+  );
+}
+
 export async function executeGaslessApprovals(
   privateKey: string,
   spenders: string[],
@@ -195,8 +208,15 @@ export async function executeGaslessApprovals(
   }
 
   const funder = process.env.POLYMARKET_FUNDER_ADDRESS?.trim();
+  const signatureType = parseInt(process.env.POLYMARKET_SIGNATURE_TYPE ?? '', 10);
   const derived = await getDerivedRelayerProxyAddress(privateKey);
-  if (funder && derived && !funderMatchesRelayerProxy(funder, derived)) {
+  // Type-3 deposit wallets use POLYMARKET_FUNDER_ADDRESS directly — not CREATE2 proxy.
+  if (
+    signatureType !== 3 &&
+    funder &&
+    derived &&
+    !funderMatchesRelayerProxy(funder, derived)
+  ) {
     return {
       ok: false,
       error:
@@ -208,15 +228,28 @@ export async function executeGaslessApprovals(
   try {
     const client = createRelayClient(privateKey);
     const txns = spenders.map((s) => buildPusdApprovalTransaction(s));
-    const response = await client.execute(
-      txns,
-      `Sniper: approve pUSD for ${spenders.length} exchange(s)`,
-    );
-    const result = await response.wait();
-    if (!result) {
-      return { ok: false, error: 'Relayer approval transaction failed or timed out' };
+    let lastError = 'Relayer approval transaction failed or timed out';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await client.execute(
+          txns,
+          `Sniper: approve pUSD for ${spenders.length} exchange(s)`,
+        );
+        const result = await response.wait();
+        if (result) {
+          return { ok: true, txHash: result.transactionHash };
+        }
+        lastError = 'Relayer approval transaction failed or timed out';
+      } catch (err) {
+        lastError = getErrorMessage(err);
+        if (attempt < 2 && isTransientRelayerError(lastError)) {
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        return { ok: false, error: lastError };
+      }
     }
-    return { ok: true, txHash: result.transactionHash };
+    return { ok: false, error: lastError };
   } catch (err) {
     return { ok: false, error: getErrorMessage(err) };
   }

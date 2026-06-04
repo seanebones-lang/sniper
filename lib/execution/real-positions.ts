@@ -1,6 +1,7 @@
 import { db, realTrades, signals } from '@/lib/db';
 import { and, eq, gte, inArray, or, isNotNull, ne, isNull } from 'drizzle-orm';
 import type { StrategyOpenPosition } from '@/lib/strategies/exit-engine';
+import { isDeadMarketToken, isLegacyPennyPosition } from '@/lib/execution/dead-market-tokens';
 
 /**
  * Open REAL positions per strategy, derived from exchange-confirmed or
@@ -73,6 +74,8 @@ export function aggregateRealPositions(
 
   return Array.from(byMarket.values())
     .filter((p) => p.netSize > 0.01 && p.openedAt)
+    .filter((p) => !isDeadMarketToken(p.marketExternalId))
+    .filter((p) => !isLegacyPennyPosition(p.costBasis / p.netSize, p.netSize))
     .map((p) => ({
       platform: p.platform,
       marketExternalId: p.marketExternalId,

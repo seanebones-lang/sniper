@@ -46,16 +46,16 @@ const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
 export const QUICK_FLIP_TAKE_PROFIT_MULTIPLE = 1.5;
 
 /** Minimum fast-moving score for live quick-flip entries (filters dead tails). */
-export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 25;
-
-/** Max concurrent live open markets on micro accounts. */
-export const LIVE_MAX_CONCURRENT_POSITIONS = 3;
+export const LIVE_QUICK_FLIP_MIN_MARKET_SCORE = 22;
 
 /** Live entries below this price are lottery tickets with no exit liquidity. */
-export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.02;
+export const LIVE_QUICK_FLIP_MIN_ENTRY_PRICE = 0.015;
+
+/** Live max ask — must leave room to 1.5× before 0.99 cap (~$0.45 on micro flips). */
+export const LIVE_QUICK_FLIP_MAX_ENTRY_PRICE = 0.45;
 
 /** Max spread (mid %) for live entries — wide spreads trap exits. */
-export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 25;
+export const LIVE_QUICK_FLIP_MAX_SPREAD_PCT = 35;
 
 /** Bid notional must cover at least this fraction of stake USD. */
 export const LIVE_QUICK_FLIP_MIN_BID_NOTIONAL_RATIO = 1;
@@ -170,12 +170,29 @@ export function normalizeStrategyConfig(
   return next;
 }
 
+/** Resolve which strategy implementation to run (DB `type` can drift from config). */
+export function resolveStrategyImplType(
+  type: string,
+  raw: StrategyConfig | ResolvedStrategyConfig,
+): string {
+  const goal = raw.tradingGoal ?? 'spread-capture';
+  const liveOnly = raw.liveMarketsOnly !== false;
+  if (goal === 'quick-flip' && liveOnly) {
+    return 'live-quick-flip';
+  }
+  if (type === 'live-quick-flip') {
+    return 'live-quick-flip';
+  }
+  return type;
+}
+
 /** Resolve config for a strategy row, applying type-specific normalization first. */
 export function resolveStrategyConfigForType(
   type: string,
   raw: StrategyConfig,
 ): ResolvedStrategyConfig {
-  const normalized = normalizeStrategyConfig(type, raw as unknown as Record<string, unknown>);
+  const implType = resolveStrategyImplType(type, raw);
+  const normalized = normalizeStrategyConfig(implType, raw as unknown as Record<string, unknown>);
   return resolveStrategyConfig(normalized as unknown as StrategyConfig);
 }
 

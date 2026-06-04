@@ -373,16 +373,18 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
       });
     }
 
-    // Alert if real trades remain stuck in needs_review — these are unresolved
-    // real-money orders a human should look at.
+    // Auto force-exit anything still in needs_review; alert only if resolution fails.
     try {
-      const stuck = await db.query.realTrades.findMany({
+      const { resolveNeedsReviewTrades } = await import('@/lib/monitoring/resolve-needs-review');
+      await resolveNeedsReviewTrades();
+
+      const stillStuck = await db.query.realTrades.findMany({
         where: (t, { eq }) => eq(t.status, 'needs_review'),
         columns: { id: true },
         limit: 200,
       });
-      if (stuck.length > 0) {
-        await alertNeedsReview(stuck.length);
+      if (stillStuck.length > 0) {
+        await alertNeedsReview(stillStuck.length);
       }
     } catch {
       // best effort

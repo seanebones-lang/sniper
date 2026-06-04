@@ -97,6 +97,18 @@ describe('LiveQuickFlip', () => {
     expect(signal).toBeNull();
   });
 
+  it('rejects live entries above the 45¢ cap even with headroom to 2× band', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('LoL: Team A vs Team B live'),
+        book: book(0.96, 0.94, 100, 50),
+        currentPrice: 0.95,
+      },
+      config,
+    );
+    expect(signal).toBeNull();
+  });
+
   it('rejects entries above the 2× entry cap', () => {
     const signal = LiveQuickFlip.evaluate(
       {
@@ -110,7 +122,7 @@ describe('LiveQuickFlip', () => {
     expect(maxQuickFlipEntryPrice()).toBeCloseTo(0.495, 2);
   });
 
-  it('rejects asks below the live minimum entry price floor (2¢)', () => {
+  it('rejects asks below the live minimum entry price floor (1.5¢)', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Counter-Strike: Team A vs Team B'),
@@ -122,12 +134,12 @@ describe('LiveQuickFlip', () => {
     expect(signal).toBeNull();
   });
 
-  it('live-quick-flip type normalizes min entry to 2¢', () => {
+  it('live-quick-flip type normalizes min entry to 1.5¢', () => {
     const cfg = resolveStrategyConfigForType('live-quick-flip', {
       maxSizeUsd: 1,
       targetProfitPct: 50,
     });
-    expect(cfg.minEntryPrice).toBe(0.02);
+    expect(cfg.minEntryPrice).toBe(0.015);
     expect(cfg.maxHoldSeconds).toBe(180);
   });
 
@@ -153,7 +165,7 @@ describe('LiveQuickFlip', () => {
     expect(signal).toBeNull();
   });
 
-  it('live mode rejects wide spreads above 25%', () => {
+  it('live mode rejects wide spreads above 35%', () => {
     const signal = LiveQuickFlip.evaluate(
       {
         market: market('Valorant: Team A vs Team B'),
@@ -163,6 +175,18 @@ describe('LiveQuickFlip', () => {
       config,
     );
     expect(signal).toBeNull();
+  });
+
+  it('live mode allows spreads up to 35% when bid depth is sufficient', () => {
+    const signal = LiveQuickFlip.evaluate(
+      {
+        market: market('LoL: Team A vs Team B live'),
+        book: book(0.10, 0.08, 100, 25),
+        currentPrice: 0.09,
+      },
+      config,
+    );
+    expect(signal?.action).toBe('BUY');
   });
 
   it('live mode rejects when bid notional is below stake', () => {

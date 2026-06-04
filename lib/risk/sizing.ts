@@ -13,9 +13,21 @@ export function sharesToUsd(shares: number, price: number): number {
 
 /** Minimum notional for a real order given current bankroll (supports micro accounts). */
 export function minRealOrderUsd(bankrollUsd: number): number {
-  if (bankrollUsd <= 25) return 0.5;
+  if (bankrollUsd <= 25) return 1;
   if (bankrollUsd <= 100) return 1;
   return 5;
+}
+
+/** Polymarket FOK/market BUY minimum notional (exchange rule). */
+export const POLYMARKET_MIN_MARKET_BUY_USD = 1;
+
+/** Polymarket CLOB minimum share size for limit orders on most markets. */
+export const POLYMARKET_MIN_SHARES = 5;
+
+/** Round down to 4 decimal places (CLOB share precision). */
+export function roundPolymarketShares(shares: number): number {
+  if (!Number.isFinite(shares) || shares <= 0) return 0;
+  return Math.floor(shares * 10_000) / 10_000;
 }
 
 /**

@@ -15,14 +15,19 @@ import {
 import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { polygon } from 'viem/chains';
+import axios from 'axios';
 import { getErrorMessage } from '@/lib/error-message';
-import { ensurePolymarketProxyConfigured } from '@/lib/clients/polymarket-http-proxy';
+import {
+  ensurePolymarketProxyConfigured,
+  getClobAxiosAgents,
+} from '@/lib/clients/polymarket-http-proxy';
 
 const CLOB_HOST = 'https://clob.polymarket.com';
 
 let tradingClient: ClobClient | null = null;
 let resolvedSignatureType: number | null = null;
 let proxyDerivedCreds: ApiKeyCreds | null = null;
+let envCredsInvalidated = false;
 
 /** CLOB signature type: 0 EOA, 1 proxy, 2 Safe, 3 deposit wallet (POLY_1271). */
 export function getPolymarketSignatureType(): number {
@@ -111,6 +116,49 @@ export function resetTradingClientCache(): void {
   proxyDerivedCreds = null;
 }
 
+/** Drop cached L2 creds so the next call re-applies env or re-derives. */
+export function invalidatePolymarketApiCreds(): void {
+  proxyDerivedCreds = null;
+  // Sig type 3 must keep Developers-tab env creds — transient 401/504 on balance
+  // sync is not proof the keys are wrong (GitHub clob-client-v2 #66).
+  if (getPolymarketSignatureType() !== 3) {
+    envCredsInvalidated = true;
+  }
+  if (tradingClient) {
+    const typed = tradingClient as ClobClient & { creds?: ApiKeyCreds };
+    typed.creds = undefined;
+  }
+}
+
+function isInvalidApiKeyError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('invalid api key') || lower.includes('unauthorized');
+}
+
+function isTransientOrderError(message: string): boolean {
+  return /504|502|503|timeout|econnreset|gateway|network/i.test(message);
+}
+
+async function postPolymarketOrderWithRetry<T extends { success: boolean; error?: string }>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let last = await fn();
+  for (let attempt = 0; attempt < 2 && !last.success; attempt++) {
+    const err = last.error ?? '';
+    if (!isTransientOrderError(err) && !isInvalidApiKeyError(err)) break;
+    if (isInvalidApiKeyError(err)) {
+      invalidatePolymarketApiCreds();
+    }
+    console.warn(`[Polymarket] ${label} failed (${err.slice(0, 80)}), retry ${attempt + 2}/3…`);
+    const { rotatePolymarketProxy } = await import('@/lib/clients/polymarket-http-proxy');
+    await rotatePolymarketProxy(err.slice(0, 80));
+    await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+    last = await fn();
+  }
+  return last;
+}
+
 export function getPolymarketPrivateKey(): string | undefined {
   const key = process.env.POLYMARKET_PRIVATE_KEY?.trim();
   return key && key.length > 0 ? key : undefined;
@@ -153,84 +201,231 @@ function credsComplete(creds?: ApiKeyCreds | null): creds is ApiKeyCreds {
 }
 
 export async function ensurePolymarketApiCreds(client: ClobClient): Promise<void> {
-  const { resolvePolymarketProxyUrl } = await import('@/lib/clients/polymarket-http-proxy');
-  const proxyUrl = await resolvePolymarketProxyUrl();
+  await ensurePolymarketProxyConfigured();
   const typed = client as ClobClient & { creds?: ApiKeyCreds };
 
-  // Keys created from a US IP are rejected on order POST even when egress is proxied to IE.
-  // Always derive L2 creds through the current egress (proxy) when a proxy is configured.
-  if (proxyUrl) {
-    if (credsComplete(proxyDerivedCreds)) {
-      typed.creds = proxyDerivedCreds;
-      return;
-    }
-    proxyDerivedCreds = null;
+  if (credsComplete(proxyDerivedCreds)) {
+    typed.creds = proxyDerivedCreds;
+    return;
+  }
+  if (credsComplete(typed.creds)) return;
 
+  const envKey = process.env.POLYMARKET_API_KEY?.trim();
+  const envSecret = process.env.POLYMARKET_API_SECRET?.trim();
+  const envPassphrase = process.env.POLYMARKET_API_PASSPHRASE?.trim();
+  const envCreds =
+    envKey && envSecret && envPassphrase
+      ? { key: envKey, secret: envSecret, passphrase: envPassphrase }
+      : null;
+  const preferEnv = process.env.POLYMARKET_PREFER_ENV_API_CREDS === 'true';
+  const sigType = getPolymarketSignatureType();
+
+  // POLY_1271 (sig type 3): SDK createOrDeriveApiKey binds L2 key to EOA, not deposit
+  // wallet — orders fail with "signer must match API KEY". Use Developers-tab creds.
+  // @see https://github.com/Polymarket/clob-client-v2/issues/66
+  if (sigType === 3 && credsComplete(envCreds)) {
+    typed.creds = envCreds;
+    proxyDerivedCreds = envCreds;
+    envCredsInvalidated = false;
+    return;
+  }
+  if (
+    credsComplete(envCreds) &&
+    !envCredsInvalidated &&
+    (sigType === 3 || preferEnv)
+  ) {
+    typed.creds = envCreds;
+    proxyDerivedCreds = envCreds;
+    return;
+  }
+
+  // Types 0/1/2: derive at runtime (official quickstart pattern).
+  try {
     const nonce = Date.now();
     try {
       const created = await client.createApiKey(nonce);
       if (credsComplete(created)) {
         proxyDerivedCreds = created;
         typed.creds = created;
-        console.log('[Polymarket] Fresh L2 API key created via proxy egress');
         return;
       }
     } catch (err) {
-      console.warn(
-        '[Polymarket] createApiKey via proxy failed, trying derive:',
-        getErrorMessage(err),
-      );
+      console.warn('[Polymarket] createApiKey failed, trying derive:', getErrorMessage(err));
     }
-    const derived = await client.deriveApiKey(nonce);
-    if (!credsComplete(derived)) {
+    try {
+      const derived = await client.deriveApiKey(nonce);
+      if (credsComplete(derived)) {
+        proxyDerivedCreds = derived;
+        typed.creds = derived;
+        return;
+      }
+    } catch (err) {
+      console.warn('[Polymarket] deriveApiKey failed, trying createOrDerive:', getErrorMessage(err));
+    }
+    const creds = await client.createOrDeriveApiKey(nonce);
+    if (!credsComplete(creds)) {
       throw new Error(
-        '[Polymarket] deriveApiKey via proxy returned incomplete creds (empty key/secret/passphrase)',
+        '[Polymarket] createOrDeriveApiKey returned incomplete creds (empty key/secret/passphrase)',
       );
     }
-    proxyDerivedCreds = derived;
-    typed.creds = derived;
+    proxyDerivedCreds = creds;
+    typed.creds = creds;
     return;
+  } catch (err) {
+    // Last resort: env creds if derive failed
+    if (credsComplete(envCreds) && !envCredsInvalidated) {
+      typed.creds = envCreds;
+      proxyDerivedCreds = envCreds;
+      return;
+    }
+    throw err;
   }
-
-  if (credsComplete(typed.creds)) return;
-
-  const key = process.env.POLYMARKET_API_KEY?.trim();
-  const secret = process.env.POLYMARKET_API_SECRET?.trim();
-  const passphrase = process.env.POLYMARKET_API_PASSPHRASE?.trim();
-  if (key && secret && passphrase) {
-    typed.creds = { key, secret, passphrase };
-    return;
-  }
-
-  const creds = await client.createOrDeriveApiKey();
-  if (!credsComplete(creds)) {
-    throw new Error(
-      '[Polymarket] createOrDeriveApiKey returned incomplete creds (empty key/secret/passphrase)',
-    );
-  }
-  typed.creds = creds;
 }
 
 export interface PolymarketOrderOptions {
   tickSize: string;
   negRisk: boolean;
+  minOrderSize: number;
+}
+
+/** Per-market constraints from GET /book (docs: min_order_size, tick_size, neg_risk). */
+export async function getPolymarketBookMeta(tokenId: string): Promise<PolymarketOrderOptions> {
+  const fallback: PolymarketOrderOptions = {
+    tickSize: '0.01',
+    negRisk: false,
+    minOrderSize: 5,
+  };
+  try {
+    const book = await clobPublicGet<{
+      tick_size?: string;
+      neg_risk?: boolean;
+      min_order_size?: string;
+    }>('/book', { token_id: tokenId });
+    return {
+      tickSize: book.tick_size ?? '0.01',
+      negRisk: book.neg_risk ?? false,
+      minOrderSize: parseFloat(book.min_order_size ?? '5') || 5,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/** CLOB client internal caches (not exported on the public type). */
+interface ClobClientInternalCache {
+  tickSizes: Record<string, string>;
+  negRisk: Record<string, boolean>;
+  feeInfos: Record<string, { rate: number; exponent: number }>;
+  tokenConditionMap: Record<string, string>;
+}
+
+function clobInternalCache(client: ClobClient): ClobClientInternalCache {
+  return client as unknown as ClobClientInternalCache;
+}
+
+async function clobPublicGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+  await ensurePolymarketProxyConfigured();
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { getNextPublicClobAxiosAgents } = await import('@/lib/clients/polymarket-http-proxy');
+      const agents = await getNextPublicClobAxiosAgents();
+      const res = await axios.get(`${CLOB_HOST}${path}`, {
+        params,
+        timeout: 20_000,
+        ...agents,
+      });
+      const data = res.data as { error?: unknown; status?: number };
+      if (data && typeof data === 'object' && data.error != null) {
+        throw new Error(String(data.error).slice(0, 240));
+      }
+      return res.data as T;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) {
+        const { rotatePolymarketProxy } = await import('@/lib/clients/polymarket-http-proxy');
+        await rotatePolymarketProxy(getErrorMessage(err).slice(0, 80));
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(getErrorMessage(lastErr));
+}
+
+/** Pre-populate CLOB client caches so getTickSize does not crash on proxy error payloads. */
+export async function primePolymarketTokenCache(
+  client: ClobClient,
+  tokenId: string,
+): Promise<void> {
+  const c = clobInternalCache(client);
+  if (c.tickSizes?.[tokenId] && c.negRisk?.[tokenId] !== undefined && c.feeInfos?.[tokenId]) {
+    return;
+  }
+
+  let conditionId = c.tokenConditionMap?.[tokenId];
+  if (!conditionId) {
+    const byToken = await clobPublicGet<{ condition_id?: string }>(
+      `/markets-by-token/${tokenId}`,
+    );
+    const resolved = byToken.condition_id;
+    if (!resolved) {
+      throw new Error(`failed to resolve condition id for token ${tokenId.slice(0, 12)}…`);
+    }
+    conditionId = resolved;
+    c.tokenConditionMap[tokenId] = conditionId;
+  }
+
+  const info = await clobPublicGet<{
+    mts?: number;
+    nr?: boolean;
+    fd?: { r?: number; e?: number };
+    t?: Array<{ t?: string }>;
+  }>(`/clob-markets/${conditionId}`);
+
+  if (info.mts == null) {
+    throw new Error(`failed to fetch market info for condition id ${conditionId}`);
+  }
+
+  const tick = String(info.mts);
+  const nr = info.nr ?? false;
+  const fee = { rate: info.fd?.r ?? 0, exponent: info.fd?.e ?? 0 };
+
+  for (const token of info.t ?? []) {
+    if (!token?.t) continue;
+    c.tokenConditionMap[token.t] = conditionId;
+    c.tickSizes[token.t] = tick;
+    c.negRisk[token.t] = nr;
+    c.feeInfos[token.t] = fee;
+  }
+
+  c.tickSizes[tokenId] = tick;
+  c.negRisk[tokenId] = nr;
+  c.feeInfos[tokenId] = fee;
 }
 
 export async function getPolymarketOrderOptions(tokenId: string): Promise<PolymarketOrderOptions> {
   const privateKey = getPolymarketPrivateKey();
   if (!privateKey) {
-    return { tickSize: '0.01', negRisk: false };
+    return { tickSize: '0.01', negRisk: false, minOrderSize: 5 };
   }
-  const client = getTradingClient(privateKey);
-  await ensurePolymarketApiCreds(client);
-  const [tickSize, negRisk] = await Promise.all([
-    client.getTickSize(tokenId),
-    client.getNegRisk(tokenId),
-  ]);
-  return {
-    tickSize: String(tickSize),
-    negRisk: Boolean(negRisk),
-  };
+  try {
+    const client = getTradingClient(privateKey);
+    await ensurePolymarketApiCreds(client);
+    await primePolymarketTokenCache(client, tokenId);
+    const c = clobInternalCache(client);
+    const bookMeta = await getPolymarketBookMeta(tokenId);
+    return {
+      tickSize: c.tickSizes[tokenId] ?? bookMeta.tickSize,
+      negRisk: c.negRisk[tokenId] ?? bookMeta.negRisk,
+      minOrderSize: bookMeta.minOrderSize,
+    };
+  } catch (err) {
+    console.warn(
+      `[Polymarket] token meta for ${tokenId.slice(0, 12)}… — using defaults:`,
+      getErrorMessage(err),
+    );
+    return { tickSize: '0.01', negRisk: false, minOrderSize: 5 };
+  }
 }
 
 export type PolymarketReconStatus = 'open' | 'filled' | 'cancelled' | 'unknown';
@@ -354,9 +549,14 @@ export async function getPolymarketOpenOrders(privateKey: string): Promise<unkno
     const client = getTradingClient(privateKey);
     await ensurePolymarketApiCreds(client);
     const orders = await client.getOpenOrders(undefined, true);
-    return Array.isArray(orders) ? orders : [];
+    if (Array.isArray(orders)) return orders;
+    if (orders && typeof orders === 'object' && 'error' in (orders as object)) {
+      console.warn('[Polymarket] getOpenOrders API error:', getErrorMessage((orders as { error?: unknown }).error));
+      return [];
+    }
+    return [];
   } catch (err) {
-    console.error('[Polymarket] getOpenOrders failed:', err);
+    console.warn('[Polymarket] getOpenOrders failed:', getErrorMessage(err));
     return [];
   }
 }
@@ -368,6 +568,35 @@ export async function cancelPolymarketOrder(privateKey: string, orderId: string)
     await client.cancelOrder({ orderID: orderId });
     return true;
   } catch {
+    return false;
+  }
+}
+
+/** Cancel every open order on this wallet (clears ghost locks getOpenOrders misses). */
+export async function cancelAllPolymarketOrders(privateKey: string): Promise<boolean> {
+  try {
+    const client = getTradingClient(privateKey);
+    await ensurePolymarketApiCreds(client);
+    await client.cancelAll();
+    return true;
+  } catch (err) {
+    console.warn('[Polymarket] cancelAll failed:', getErrorMessage(err));
+    return false;
+  }
+}
+
+/** Cancel all open orders for one outcome token. */
+export async function cancelPolymarketMarketOrders(
+  privateKey: string,
+  tokenId: string,
+): Promise<boolean> {
+  try {
+    const client = getTradingClient(privateKey);
+    await ensurePolymarketApiCreds(client);
+    await client.cancelMarketOrders({ asset_id: tokenId });
+    return true;
+  } catch (err) {
+    console.warn('[Polymarket] cancelMarketOrders failed:', getErrorMessage(err));
     return false;
   }
 }
@@ -420,7 +649,16 @@ export async function getPolymarketTokenBalance(
 export async function syncPolymarketCollateralBalance(privateKey: string): Promise<void> {
   const client = getTradingClient(privateKey);
   await ensurePolymarketApiCreds(client);
-  await client.updateBalanceAllowance(collateralBalanceParams());
+  const res = await client.updateBalanceAllowance(collateralBalanceParams());
+  throwIfClobErrorResponse(res, 'updateBalanceAllowance');
+}
+
+function throwIfClobErrorResponse(res: unknown, label: string): void {
+  if (!res || typeof res !== 'object') return;
+  const r = res as { error?: unknown; status?: number };
+  if (r.error == null || r.error === '') return;
+  const status = r.status != null ? ` (${r.status})` : '';
+  throw new Error(`${label}: ${String(r.error).slice(0, 240)}${status}`);
 }
 
 function parseCollateralBalanceUsd(raw: string | undefined | null): number | null {
@@ -438,20 +676,31 @@ export async function getPolymarketUsdcBalance(
   privateKey: string,
   options?: { syncFirst?: boolean },
 ): Promise<number | null> {
-  try {
-    await resolvePolymarketSignatureType(privateKey);
-    const client = getTradingClient(privateKey);
-    await ensurePolymarketApiCreds(client);
-    const params = collateralBalanceParams();
-    if (options?.syncFirst !== false) {
-      await client.updateBalanceAllowance(params);
+  let lastErr: string | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await resolvePolymarketSignatureType(privateKey);
+      const client = getTradingClient(privateKey);
+      await ensurePolymarketApiCreds(client);
+      const params = collateralBalanceParams();
+      if (options?.syncFirst !== false) {
+        const sync = await client.updateBalanceAllowance(params);
+        throwIfClobErrorResponse(sync, 'updateBalanceAllowance');
+      }
+      const bal = await client.getBalanceAllowance(params);
+      throwIfClobErrorResponse(bal, 'getBalanceAllowance');
+      const usd = parseCollateralBalanceUsd((bal as { balance?: string })?.balance);
+      if (usd != null) return usd;
+      throw new Error('getBalanceAllowance returned empty balance');
+    } catch (err) {
+      lastErr = getErrorMessage(err);
+      if (attempt < 4) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      }
     }
-    const bal = await client.getBalanceAllowance(params);
-    return parseCollateralBalanceUsd((bal as { balance?: string })?.balance);
-  } catch (err) {
-    console.warn('[Polymarket] getBalanceAllowance failed:', getErrorMessage(err));
-    return null;
   }
+  console.warn('[Polymarket] getBalanceAllowance failed:', lastErr);
+  return null;
 }
 
 /** CLOB order ids are long hex/uuid strings — not the placeholder "submitted". */
@@ -553,13 +802,11 @@ export async function placePolymarketMarketOrder(params: {
   orderType?: 'FOK' | 'FAK';
 }): Promise<{ success: boolean; orderId?: string; error?: string; rawStatus?: string; raw?: unknown }> {
   try {
-    const { bootstrapPolymarketHttp } = await import('@/lib/clients/polymarket-http-proxy');
-    await bootstrapPolymarketHttp();
-    const { ensurePolymarketTradingReady } = await import('@/lib/clients/polymarket-trading-setup');
-    await ensurePolymarketTradingReady();
+    await ensurePolymarketProxyConfigured();
 
     const client = getTradingClient(params.privateKey);
     await ensurePolymarketApiCreds(client);
+    await primePolymarketTokenCache(client, params.tokenId);
     await client.updateBalanceAllowance(collateralBalanceParams());
     if (params.side === 'SELL') {
       await client.updateBalanceAllowance(conditionalBalanceParams(params.tokenId));
@@ -568,21 +815,24 @@ export async function placePolymarketMarketOrder(params: {
     const options = await getPolymarketOrderOptions(params.tokenId);
     const orderType = params.orderType === 'FAK' ? OrderType.FAK : OrderType.FOK;
 
-    const order = await client.createAndPostMarketOrder(
-      {
-        tokenID: params.tokenId,
-        amount: params.amountUsd,
-        side: params.side === 'BUY' ? Side.BUY : Side.SELL,
+    const parsed = await postPolymarketOrderWithRetry('Market order', async () => {
+      await ensurePolymarketApiCreds(client);
+      const order = await client.createAndPostMarketOrder(
+        {
+          tokenID: params.tokenId,
+          amount: params.amountUsd,
+          side: params.side === 'BUY' ? Side.BUY : Side.SELL,
+          orderType,
+        },
+        {
+          tickSize: options.tickSize as '0.01',
+          negRisk: options.negRisk,
+        },
         orderType,
-      },
-      {
-        tickSize: options.tickSize as '0.01',
-        negRisk: options.negRisk,
-      },
-      orderType,
-    );
+      );
+      return parsePolymarketPostOrderResult(order);
+    });
 
-    const parsed = parsePolymarketPostOrderResult(order);
     if (!parsed.success) {
       console.warn('[Polymarket] Market order failed:', parsed.error, parsed.raw ? JSON.stringify(parsed.raw).slice(0, 400) : '');
     }
@@ -603,15 +853,11 @@ export async function placePolymarketLimitOrder(params: {
   postOnly?: boolean;
 }): Promise<{ success: boolean; orderId?: string; error?: string; rawStatus?: string; raw?: unknown }> {
   try {
-    const { bootstrapPolymarketHttp } = await import('@/lib/clients/polymarket-http-proxy');
-    await bootstrapPolymarketHttp();
-    const { ensurePolymarketTradingReady } = await import(
-      '@/lib/clients/polymarket-trading-setup'
-    );
-    await ensurePolymarketTradingReady();
+    await ensurePolymarketProxyConfigured();
 
     const client = getTradingClient(params.privateKey);
     await ensurePolymarketApiCreds(client);
+    await primePolymarketTokenCache(client, params.tokenId);
     await client.updateBalanceAllowance(collateralBalanceParams());
     if (params.side === 'SELL') {
       await client.updateBalanceAllowance(conditionalBalanceParams(params.tokenId));
@@ -619,22 +865,32 @@ export async function placePolymarketLimitOrder(params: {
 
     const options = await getPolymarketOrderOptions(params.tokenId);
 
-    const order = await client.createAndPostOrder(
-      {
-        tokenID: params.tokenId,
-        price: params.price,
-        size: params.size,
-        side: params.side === 'BUY' ? Side.BUY : Side.SELL,
-      },
-      {
-        tickSize: options.tickSize as '0.01',
-        negRisk: options.negRisk,
-      },
-      OrderType.GTC,
-      params.postOnly ?? false,
-    );
+    if (params.size < options.minOrderSize) {
+      return {
+        success: false,
+        error: `Size (${params.size}) lower than the minimum: ${options.minOrderSize}`,
+      };
+    }
 
-    const parsed = parsePolymarketPostOrderResult(order);
+    const parsed = await postPolymarketOrderWithRetry('Limit order', async () => {
+      await ensurePolymarketApiCreds(client);
+      const order = await client.createAndPostOrder(
+        {
+          tokenID: params.tokenId,
+          price: params.price,
+          size: params.size,
+          side: params.side === 'BUY' ? Side.BUY : Side.SELL,
+        },
+        {
+          tickSize: options.tickSize as '0.01',
+          negRisk: options.negRisk,
+        },
+        OrderType.GTC,
+        params.postOnly ?? false,
+      );
+      return parsePolymarketPostOrderResult(order);
+    });
+
     if (!parsed.success) {
       console.warn(
         '[Polymarket] Order failed:',

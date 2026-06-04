@@ -146,6 +146,21 @@ export function evaluateExitSignal(
     }
   }
 
+  // Quick-flip: time stop — don't bag-hold past maxHoldSeconds (e.g. 90–180s).
+  if (isQuickFlip && maxHold > 0 && holdSeconds >= maxHold) {
+    return {
+      action: 'SELL',
+      price: currentPrice,
+      size: Math.floor(position.netSize),
+      reason:
+        profitPct >= 0
+          ? `Quick-flip max hold ${Math.round(maxHold)}s — lock +${profitPct.toFixed(2)}%`
+          : `Quick-flip max hold ${Math.round(maxHold)}s — cut at ${profitPct.toFixed(2)}%`,
+      confidence: 0.82,
+      edge: (currentPrice - entry) / entry,
+    };
+  }
+
   // Non-quick-flip: time-based exits
   if (!isQuickFlip && holdSeconds >= maxHold) {
     if (profitPct > 0.05) {

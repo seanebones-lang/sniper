@@ -13,7 +13,7 @@ import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
 import type { StrategyConfig } from '@/lib/strategies/types';
-import { resolveStrategyConfigForType, shouldUseImmediateFill, type ResolvedStrategyConfig, LIVE_MAX_CONCURRENT_POSITIONS } from '@/lib/strategies/run-profile';
+import { resolveStrategyConfigForType, resolveStrategyImplType, shouldUseImmediateFill, type ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { getOpenPositionsByStrategy, hydratePaperSimulatorFromDb } from '@/lib/paper/strategy-positions';
 import { persistPaperFill } from '@/lib/paper/record-fill';
 import { countRunnerSessionStats } from '@/lib/runner/session-counters';
@@ -281,9 +281,18 @@ export async function startRunner(intervalMs = 15000) {
     if (lastRisk) {
       console.log(`[Runner] Recovered risk snapshot from ${lastRisk.snapshotAt}: Exposure $${lastRisk.totalExposureUsd.toFixed(0)} | Mode: ${lastRisk.currentRiskMode} | Health: ${(lastRisk.systemHealthScore * 100).toFixed(1)}%`);
 
-      portfolioRiskManager.restoreDrawdownState(lastRisk.currentBankroll, lastRisk.maxDrawdown);
+      const liveAtStart = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+      if (liveAtStart && lastRisk.totalExposureUsd > 500) {
+        // Ignore paper-era snapshot on live micro accounts.
+        portfolioRiskManager.resetDrawdown();
+      } else {
+        portfolioRiskManager.restoreDrawdownState(lastRisk.currentBankroll, lastRisk.maxDrawdown);
+      }
 
-      if (lastRisk.systemHealthScore < 0.55 || lastRisk.totalExposureUsd > 1200) {
+      if (
+        lastRisk.systemHealthScore < 0.55 ||
+        (!liveAtStart && lastRisk.totalExposureUsd > 1200)
+      ) {
         console.warn('⚠️ [Runner] STARTUP WARNING: Last known risk state was elevated. Starting with extra caution.');
         riskModeManager.escalateAtLeast('DEFENSIVE', 'Recovered elevated risk posture');
         await logAudit('startup_elevated_risk_state', {
@@ -529,24 +538,11 @@ export async function runOnce() {
   let skipLiveEntryScan = false;
 
   if (liveRealActive) {
-    const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
-      '@/lib/clients/polymarket-trading'
-    );
+    const { getPolymarketPrivateKey } = await import('@/lib/clients/polymarket-trading');
+    const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
     const pk = getPolymarketPrivateKey();
     if (pk) {
-      cycleLiveBalanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: false });
-      if (cycleLiveBalanceUsd == null) {
-        const snap = (await import('@/lib/clients/polymarket-trading-setup'))
-          .getPolymarketSetupSnapshot();
-        cycleLiveBalanceUsd = snap?.balanceUsd ?? null;
-      }
-      if (cycleLiveBalanceUsd == null) {
-        cycleLiveBalanceUsd = await getPolymarketUsdcBalance(pk, { syncFirst: true });
-      }
-    }
-    if (cycleLiveBalanceUsd == null || cycleLiveBalanceUsd <= 0) {
-      const snap = (await import('@/lib/clients/polymarket-trading-setup')).getPolymarketSetupSnapshot();
-      cycleLiveBalanceUsd = snap?.balanceUsd ?? cycleLiveBalanceUsd;
+      cycleLiveBalanceUsd = await resolveLiveUsdcBalance(pk);
     }
     if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
       const { minRealOrderUsd } = await import('@/lib/risk/sizing');
@@ -665,16 +661,17 @@ export async function runOnce() {
     const { loadRealRiskSnapshot } = await import('@/lib/risk/real-bankroll');
     if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
       portfolioRiskManager.applyMicroRealBudget(cycleLiveBalanceUsd);
-      const realRisk = await loadRealRiskSnapshot(cycleLiveBalanceUsd);
+      const realRisk = await loadRealRiskSnapshot(cycleLiveBalanceUsd, realStrategyIds);
       portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
     } else {
-      console.warn('[Runner] Live mode: could not read Polymarket balance — using paper risk caps (orders may be blocked)');
-      const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
-      portfolioRiskManager.setCyclePortfolioState(
-        paperRisk.state,
-        paperRisk.equityUsd,
-        paperRisk.ledger.realizedPnLUsd,
+      const snap = (await import('@/lib/clients/polymarket-trading-setup')).getPolymarketSetupSnapshot();
+      const fallbackBal = snap?.balanceUsd && snap.balanceUsd > 0 ? snap.balanceUsd : 25;
+      console.warn(
+        `[Runner] Live mode: CLOB balance read failed — sizing with cached $${fallbackBal.toFixed(2)} (real exposure, not paper caps)`,
       );
+      portfolioRiskManager.applyMicroRealBudget(fallbackBal);
+      const realRisk = await loadRealRiskSnapshot(fallbackBal, realStrategyIds);
+      portfolioRiskManager.setCyclePortfolioState(realRisk.state, realRisk.equityUsd);
     }
   } else {
     const paperRisk = await loadPaperRiskState(bookCache.toMarkPriceMap());
@@ -716,10 +713,9 @@ export async function runOnce() {
   let fillsThisRun = 0;
 
   for (const stratRow of allowedStrategies) {
-    const strategyImpl = getStrategy(stratRow.type);
-    if (!strategyImpl) continue;
-
     const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
+    const strategyImpl = getStrategy(resolveStrategyImplType(stratRow.type, config));
+    if (!strategyImpl) continue;
     const openPositions = openPositionsByStrategy.get(stratRow.id) ?? [];
     const openByMarket = new Map(
       openPositions.map((p) => [`${p.platform}:${p.marketExternalId}`, p]),
@@ -877,16 +873,21 @@ export async function runOnce() {
       const realBuyQueued =
         realSignalQueued && queuedSignals.some((q) => q.signal.action === 'BUY');
       if (realBuyQueued) {
-        try {
-          const { getPolymarketPrivateKey, getPolymarketUsdcBalance } = await import(
-            '@/lib/clients/polymarket-trading'
-          );
-          const pk = getPolymarketPrivateKey();
-          realCashRemaining = pk
-            ? (await getPolymarketUsdcBalance(pk, { syncFirst: false })) ?? 0
-            : 0;
-        } catch {
-          realCashRemaining = Number.POSITIVE_INFINITY;
+        if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
+          realCashRemaining = cycleLiveBalanceUsd;
+        } else {
+          try {
+            const { getPolymarketPrivateKey } = await import('@/lib/clients/polymarket-trading');
+            const { resolveLiveUsdcBalance } = await import(
+              '@/lib/clients/polymarket-trading-setup'
+            );
+            const pk = getPolymarketPrivateKey();
+            const resolved = pk ? await resolveLiveUsdcBalance(pk) : null;
+            realCashRemaining =
+              resolved != null && resolved > 0 ? resolved : Number.POSITIVE_INFINITY;
+          } catch {
+            realCashRemaining = Number.POSITIVE_INFINITY;
+          }
         }
       }
 
@@ -912,9 +913,6 @@ export async function runOnce() {
         }
       }
 
-      const liveOpenCount =
-        stratRow.paperOnly === false ? openPositions.length : 0;
-
       for (let i = 0; i < queuedSignals.length; i++) {
         const q = queuedSignals[i];
         const signalId = inserted[i]?.id;
@@ -929,19 +927,6 @@ export async function runOnce() {
 
         const isRealAllowed =
           process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' && !q.stratRow.paperOnly;
-
-        if (
-          isRealAllowed &&
-          q.signal.action === 'BUY' &&
-          liveOpenCount >= LIVE_MAX_CONCURRENT_POSITIONS
-        ) {
-          void logAudit('runner_real_skipped_max_positions', {
-            strategy: q.stratRow.name,
-            market: q.market.externalId,
-            liveOpenCount,
-          });
-          continue;
-        }
 
         if (isRealAllowed) {
           const marketKey = `${q.market.platform}:${q.market.externalId}`;
@@ -969,23 +954,31 @@ export async function runOnce() {
           let orderSize = q.finalSize;
           let orderMaxNotional = q.config.maxSizeUsd ?? 1;
           if (q.signal.action === 'BUY') {
-            const slotsLeft = Math.max(1, LIVE_MAX_CONCURRENT_POSITIONS - liveOpenCount);
+            const { POLYMARKET_MIN_MARKET_BUY_USD } = await import('@/lib/risk/sizing');
             const dynamicStake = Number.isFinite(realCashRemaining)
-              ? Math.min(orderMaxNotional, (realCashRemaining / slotsLeft) * 0.92)
+              ? Math.min(orderMaxNotional, realCashRemaining * 0.92)
               : orderMaxNotional;
-            if (dynamicStake < 0.5) {
+            if (realCashRemaining < POLYMARKET_MIN_MARKET_BUY_USD) {
               void logAudit('runner_real_skipped_low_stake', {
                 strategy: q.stratRow.name,
                 market: q.market.externalId,
-                dynamicStake,
+                dynamicStake: dynamicStake,
                 realCashRemaining,
+                reason: 'below_polymarket_min_buy',
               });
               continue;
             }
-            orderMaxNotional = dynamicStake;
-            const cappedShares = Math.max(1, Math.floor(dynamicStake / q.signal.price));
+            orderMaxNotional = Math.max(
+              POLYMARKET_MIN_MARKET_BUY_USD,
+              Math.min(dynamicStake, orderMaxNotional),
+            );
+            const cappedShares = Math.max(1, Math.floor(orderMaxNotional / q.signal.price));
             if (cappedShares < orderSize) {
               orderSize = cappedShares;
+            }
+            // Ensure FOK market BUY meets Polymarket $1 floor after share rounding.
+            if (q.signal.price * orderSize < POLYMARKET_MIN_MARKET_BUY_USD) {
+              orderSize = Math.ceil(POLYMARKET_MIN_MARKET_BUY_USD / q.signal.price);
             }
           }
 
@@ -1115,6 +1108,8 @@ export async function runOnce() {
   };
   persistStatus();
 
+  const cyclePortfolioSnapshot = portfolioRiskManager.peekCyclePortfolioState();
+
   portfolioRiskManager.clearCycleCache();
 
   if (signalsThisRun > 0) {
@@ -1152,7 +1147,8 @@ export async function runOnce() {
 
   // Periodic portfolio health log (every ~10 runs on average)
   if (Math.random() < 0.1) {
-    const state = await portfolioRiskManager.getCurrentPortfolioState();
+    const state =
+      cyclePortfolioSnapshot ?? (await portfolioRiskManager.getCurrentPortfolioState());
     console.log(`[Runner] Portfolio health: Exposure $${state.totalExposureUsd.toFixed(0)} | Open positions: ${state.openPositions}`);
 
     // Persist rich risk snapshot (durability + risk exposure) for 24/7 resilience
@@ -1191,7 +1187,9 @@ export async function runOnce() {
       const { checkStalePendingSells } = await import('@/lib/monitoring/pending-sells');
       const { checkRunnerStall } = await import('@/lib/monitoring/runner-stall');
       const { repriceStalePendingSells } = await import('@/lib/monitoring/reprice-stale-sells');
+      const { resolveNeedsReviewTrades } = await import('@/lib/monitoring/resolve-needs-review');
       await repriceStalePendingSells();
+      await resolveNeedsReviewTrades();
       await checkStalePendingSells();
       await checkRunnerStall();
     } catch {

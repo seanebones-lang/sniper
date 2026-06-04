@@ -60,7 +60,7 @@ Restored (not just logged) from `system_state`:
 
 - Polls both `pending` **and** `needs_review` (cap 200/cycle) so a backlog can drain.
 - `recordRealFill` is **idempotent** (won't double-apply a fill to `positions`) and records an **accurate fee** on the filled notional. Partial FAK fills record the actually-filled quantity.
-- Any trades stuck in `needs_review` raise a **throttled critical alert** (every ≤15 min).
+- Trades in `needs_review` are **auto force-sold** each cycle (`resolveNeedsReviewTrades`: cancel stuck CLOB orders, submit fresh SELL). A throttled critical alert fires only if resolution still fails (every ≤15 min).
 - **Pending SELL monitor:** alerts when limit exits unfilled >30m (`checkStalePendingSells`).
 - **Runner stall alert:** no cycle within 2.5× interval while `running=true`.
 - `positions` + durable risk snapshots are the source of truth for exposure after reconciliation.

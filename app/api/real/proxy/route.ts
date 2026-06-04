@@ -18,10 +18,12 @@ export async function GET() {
   const fromEnv = getPolymarketProxyUrlFromEnv();
   const fromDb = await getPolymarketProxyFromDb();
   const active = await resolvePolymarketProxyUrl();
+  const { getPolymarketProxyPoolSize } = await import('@/lib/clients/polymarket-http-proxy');
   return NextResponse.json({
     configured: !!active,
     fromEnv: !!fromEnv,
     fromDb: !!fromDb,
+    poolSize: getPolymarketProxyPoolSize(),
     source: fromDb && active === fromDb ? 'db' : fromEnv && active === fromEnv ? 'env' : active ? 'unknown' : null,
     maskedUrl: active ? maskProxyUrl(active) : null,
     railwayUrl: 'https://sniper-production-e817.up.railway.app',

@@ -1,6 +1,7 @@
 import type { OrderBook } from '@/lib/types';
 import type { MarkPriceMap } from '@/lib/paper/mark-to-market';
 import { getRunnerBookHub } from '@/lib/runner/book-hub';
+import { runPool } from '@/lib/runner/parallel-pool';
 
 export type BookKey = `${string}:${string}`;
 
@@ -28,6 +29,27 @@ export class CycleBookCache {
       this.books.set(key, book);
       const mark = book?.mid ?? book?.bids[0]?.price ?? book?.asks[0]?.price ?? null;
       this.markPrices.set(key, mark);
+    }
+
+    // Hub watchlist may not have WS snapshots yet — direct REST backfill (no WS code changes).
+    const restBackfill = unique.filter((m) => {
+      if (m.platform !== 'polymarket') return false;
+      const b = this.books.get(bookKey(m.platform, m.externalId));
+      return !b?.bids?.length && !b?.asks?.length;
+    });
+    if (restBackfill.length > 0) {
+      const { fetchPolymarketOrderBook } = await import('@/lib/clients/polymarket');
+      await runPool(restBackfill, Math.min(12, concurrency), async (m) => {
+        try {
+          const book = await fetchPolymarketOrderBook(m.externalId);
+          const key = bookKey(m.platform, m.externalId);
+          this.books.set(key, book);
+          const mark = book.mid ?? book.bids[0]?.price ?? book.asks[0]?.price ?? null;
+          this.markPrices.set(key, mark);
+        } catch {
+          // keep hub/null entry
+        }
+      });
     }
 
     return stats.restFetched;

@@ -19,6 +19,7 @@ interface ZenData {
   unrealizedPnLUsd: number;
   fillCount: number;
   clobCashUsd?: number | null;
+  openExposureUsd?: number;
   points: CurvePoint[];
 }
 
@@ -636,10 +637,8 @@ export function ZenView() {
 
         <footer className="relative px-6 pb-10">
           <div
-            className={`mx-auto max-w-3xl grid gap-3 sm:gap-4 ${
-              isLive && data?.clobCashUsd != null
-                ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
-                : 'grid-cols-2 sm:grid-cols-4'
+            className={`mx-auto max-w-4xl grid gap-3 sm:gap-4 ${
+              isLive ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6' : 'grid-cols-2 sm:grid-cols-4'
             }`}
           >
             <StatOrb
@@ -654,30 +653,40 @@ export function ZenView() {
               positive={(data?.unrealizedPnLUsd ?? 0) >= 0}
               delay="120ms"
             />
-            {isLive && data?.clobCashUsd != null && (
+            {isLive && (
               <StatOrb
                 label="CLOB cash"
-                value={`$${formatUsd(data.clobCashUsd)}`}
+                value={
+                  data?.clobCashUsd != null ? `$${formatUsd(data.clobCashUsd)}` : '—'
+                }
                 sub="spendable USDC"
                 delay="240ms"
               />
             )}
+            {isLive && (data?.openExposureUsd ?? 0) > 0.001 && (
+              <StatOrb
+                label="Open marks"
+                value={`$${formatUsd(data!.openExposureUsd!)}`}
+                sub="position value"
+                delay="300ms"
+              />
+            )}
             <StatOrb
-              label={isLive ? 'Session start' : 'Starting'}
+              label={isLive ? 'Start balance' : 'Starting'}
               value={`$${formatUsd(starting, isLive ? 2 : 0)}`}
-              sub={isLive ? 'inferred deposit' : 'paper budget'}
-              delay="240ms"
+              sub={isLive ? 'inferred from wallet + fills' : 'paper budget'}
+              delay="360ms"
             />
             <StatOrb
               label="Fills"
               value={(data?.fillCount ?? 0).toLocaleString()}
-              sub={isLive ? 'real trades' : 'this run'}
-              delay="360ms"
+              sub={isLive ? 'filled real trades' : 'this run'}
+              delay="480ms"
             />
           </div>
           <p className="text-center text-[10px] text-zinc-700 mt-6 tracking-wide">
             {isLive
-              ? 'Real Polymarket wallet + open positions · updates every few seconds'
+              ? 'Equity = CLOB USDC + open positions at live mid · P&L reconciles to wallet'
               : 'Paper mark-to-market · updates every few seconds'}
           </p>
         </footer>

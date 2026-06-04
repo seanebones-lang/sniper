@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeStrategyConfig,
   resolveStrategyConfigForType,
+  resolveStrategyImplType,
 } from './run-profile';
 
 describe('normalizeStrategyConfigForType', () => {
@@ -13,9 +14,28 @@ describe('normalizeStrategyConfigForType', () => {
     });
     expect(normalized.tradingGoal).toBe('quick-flip');
     expect(normalized.tradingStyle).toBe('aggressive');
-    expect(normalized.minEntryPrice).toBe(0.02);
+    expect(normalized.minEntryPrice).toBe(0.015);
     expect(normalized.maxHoldSeconds).toBe(180);
     expect(normalized.liveMarketsOnly).toBe(true);
+  });
+
+  it('maps orderbook-imbalance + quick-flip config to live-quick-flip impl', () => {
+    const impl = resolveStrategyImplType('orderbook-imbalance', {
+      tradingGoal: 'quick-flip',
+      liveMarketsOnly: true,
+      maxSizeUsd: 1,
+    });
+    expect(impl).toBe('live-quick-flip');
+    const resolved = resolveStrategyConfigForType('orderbook-imbalance', {
+      tradingGoal: 'quick-flip',
+      tradingStyle: 'aggressive',
+      liveMarketsOnly: true,
+      maxSizeUsd: 1,
+      targetProfitMultiple: 2.5,
+      maxHoldSeconds: 90,
+    });
+    expect(resolved.tradingGoal).toBe('quick-flip');
+    expect(resolved.aggressiveEntryFills).toBe(true);
   });
 
   it('resolveStrategyConfigForType yields aggressive entry fills for live-quick-flip', () => {
@@ -26,7 +46,7 @@ describe('normalizeStrategyConfigForType', () => {
     });
     expect(resolved.tradingGoal).toBe('quick-flip');
     expect(resolved.aggressiveEntryFills).toBe(true);
-    expect(resolved.minEntryPrice).toBe(0.02);
+    expect(resolved.minEntryPrice).toBe(0.015);
     expect(resolved.maxHoldSeconds).toBe(180);
     expect(resolved.targetProfitMultiple).toBe(1.5);
     expect(resolved.stopLossPct).toBe(30);

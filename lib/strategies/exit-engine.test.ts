@@ -104,7 +104,7 @@ describe('evaluateExitSignal quick-flip', () => {
     expect(QUICK_FLIP_RESOLUTION_EXIT_MINUTES).toBe(30);
   });
 
-  it('does not time-exit quick-flip when flat and young', () => {
+  it('max-hold exits quick-flip after maxHoldSeconds even when flat', () => {
     const signal = evaluateExitSignal(
       { ...basePosition, netSize: 10 },
       0.1,
@@ -113,6 +113,7 @@ describe('evaluateExitSignal quick-flip', () => {
       config,
       Date.parse('2026-01-01T00:10:00Z'),
     );
-    expect(signal).toBeNull();
+    expect(signal?.action).toBe('SELL');
+    expect(signal?.reason).toMatch(/max hold/);
   });
 });

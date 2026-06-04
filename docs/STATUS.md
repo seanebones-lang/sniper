@@ -15,7 +15,7 @@ The real-money path was hardened so it is safe to soak with tiny capital. Change
 - **Readiness:** `GET /api/health/ready` — DB, runner cycle age, `needs_review` backlog, kill switch, alert channel when live.
 - **API auth:** `SNIPER_API_SECRET` bearer token on mutating routes (`POST /api/runner`, strategy PATCH, settings, `/api/real/*` POST).
 - **Grok live guard:** auto-apply skipped when any active strategy is `paperOnly:false`.
-- **Micro cap:** max 3 concurrent live open markets (`LIVE_MAX_CONCURRENT_POSITIONS`).
+- **Micro sizing:** entries capped by `maxSizeUsd`, spendable USDC, and total exposure (~95% of bankroll) — no fixed position-count limit.
 - **Zen PnL:** live equity uses `filled` real trades only (excludes `needs_review`).
 
 **Live mode:** `live-quick-flip` can run with `paperOnly:false` when `SNIPER_ENABLE_REAL_EXECUTION=true`. Runner auto-starts on deploy (watchdog restarts if stopped). Complete the [soak gate](runbooks/real-execution.md#soak-gate-before-scaling-capital) before scaling capital.
