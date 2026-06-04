@@ -249,10 +249,10 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
   const strategyCap = req.maxNotionalUsd ?? 1;
   const microLive =
     !req.isExit &&
-    bankrollUsd > 0 &&
-    bankrollUsd <= 100 &&
+    req.market.platform === 'polymarket' &&
     strategyCap <= 1.5 &&
-    req.market.platform === 'polymarket';
+    bankrollUsd > 0 &&
+    bankrollUsd <= 150;
   let microCapUsd = Math.min(requestedUsd, strategyCap, bankrollUsd * 0.9);
   if (microLive && req.takeLiquidity && req.side === 'BUY') {
     microCapUsd = Math.max(POLYMARKET_MIN_MARKET_BUY_USD, microCapUsd);
@@ -284,7 +284,8 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     if (req.takeLiquidity && req.side === 'BUY' && req.price * finalSize < POLYMARKET_MIN_MARKET_BUY_USD) {
       finalSize = Math.ceil(POLYMARKET_MIN_MARKET_BUY_USD / req.price);
     }
-    usdValue = req.price * finalSize;
+    finalSize = roundPolymarketShares(finalSize);
+    usdValue = Math.min(microCapUsd, req.price * finalSize, bankrollUsd * 0.9);
   } else {
     const safeSizing = await portfolioRiskManager.calculateSafeSize({
       platform: req.market.platform,
@@ -537,17 +538,57 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         ? Math.max(bestBid ?? clobMinPrice, Math.min(0.99, execPrice))
         : Math.max(clobMinPrice, Math.min(0.99, execPrice));
 
+    let collateralUsd = bankrollUsd;
+    try {
+      const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
+      const liveBal = await resolveLiveUsdcBalance(privateKey);
+      if (liveBal != null && liveBal > 0) collateralUsd = liveBal;
+    } catch {
+      // use bankrollUsd
+    }
+
     let result = useMarketOrder
-      ? await placePolymarketMarketOrder({
-          privateKey,
-          tokenId: req.market.externalId,
-          amountUsd:
-            req.side === 'BUY'
-              ? Math.min(usdValue, req.maxNotionalUsd ?? usdValue)
-              : finalSize,
-          side: req.side,
-          orderType: req.side === 'BUY' ? 'FAK' : 'FAK',
-        })
+      ? await (async () => {
+          if (req.side === 'BUY') {
+            const buyUsd = Math.round(
+              Math.min(
+                usdValue,
+                req.maxNotionalUsd ?? usdValue,
+                collateralUsd > 0 ? collateralUsd * 0.92 : usdValue,
+              ) * 100,
+            ) / 100;
+            if (
+              buyUsd < POLYMARKET_MIN_MARKET_BUY_USD ||
+              buyUsd > 25 ||
+              (collateralUsd > 0 && buyUsd > collateralUsd * 1.05)
+            ) {
+              await db.update(realTrades).set({ status: 'rejected' }).where(eq(realTrades.id, trade.id));
+              await logAudit('real_order_blocked_invalid_buy_amount', {
+                tradeId: trade.id,
+                buyUsd,
+                usdValue,
+                finalSize,
+                collateralUsd,
+              });
+              return { success: false, error: `Invalid BUY notional $${buyUsd.toFixed(2)}` };
+            }
+            return placePolymarketMarketOrder({
+              privateKey,
+              tokenId: req.market.externalId,
+              amountUsd: buyUsd,
+              side: 'BUY',
+              orderType: 'FAK',
+            });
+          }
+          const sellShares = roundPolymarketShares(finalSize);
+          return placePolymarketMarketOrder({
+            privateKey,
+            tokenId: req.market.externalId,
+            amountUsd: sellShares,
+            side: 'SELL',
+            orderType: 'FAK',
+          });
+        })()
       : await placePolymarketLimitOrder({
           privateKey,
           tokenId: req.market.externalId,

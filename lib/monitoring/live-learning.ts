@@ -38,6 +38,11 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
   const patches: Partial<LiveIntelligenceState> = {};
   const blocked = new Set<FastMovingKind>(prev.blockedKinds ?? []);
 
+  if ((prev.maxSpreadPct ?? 25) < 18) {
+    patches.maxSpreadPct = 18;
+    reasons.push('floor maxSpreadPct at 18 (was over-tightened)');
+  }
+
   for (const [kind, k] of Object.entries(attr.byKind)) {
     if (k.trips < MIN_KIND_TRIPS) continue;
     const winRate = k.trips > 0 ? k.wins / k.trips : 0;
@@ -59,7 +64,7 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
   }
 
   if (attr.roundTrips >= 5 && attr.winRatePct < 20) {
-    patches.maxSpreadPct = Math.min(22, (prev.maxSpreadPct ?? 25) - 2);
+    patches.maxSpreadPct = Math.max(18, Math.min(22, (prev.maxSpreadPct ?? 25) - 2));
     reasons.push(`tighten maxSpreadPct → ${patches.maxSpreadPct}`);
   }
 

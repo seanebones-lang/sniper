@@ -83,28 +83,29 @@ export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
     merged.push(m);
   };
 
-  // Primary: near-term window on Polymarket + Kalshi in parallel
-  const [nearTermPoly, nearTermKalshi] = await Promise.allSettled([
-    withTimeout(
+  const liveOnly = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+
+  // Primary: near-term Polymarket (Kalshi skipped on live — 429s slow the runner)
+  try {
+    const nearTermPoly = await withTimeout(
       fetchPolymarketMarketsResolvingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
       'Polymarket near-term',
-    ),
-    withTimeout(
-      fetchKalshiMarketsClosingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
-      'Kalshi near-term',
-    ),
-  ]);
-
-  if (nearTermPoly.status === 'fulfilled') {
-    for (const m of nearTermPoly.value) add(m);
-  } else {
-    console.warn('[markets] Polymarket near-term fetch failed (non-fatal):', nearTermPoly.reason);
+    );
+    for (const m of nearTermPoly) add(m);
+  } catch (err) {
+    console.warn('[markets] Polymarket near-term fetch failed (non-fatal):', err);
   }
 
-  if (nearTermKalshi.status === 'fulfilled') {
-    for (const m of nearTermKalshi.value) add(m);
-  } else {
-    console.warn('[markets] Kalshi near-term fetch failed (non-fatal):', nearTermKalshi.reason);
+  if (!liveOnly) {
+    try {
+      const nearTermKalshi = await withTimeout(
+        fetchKalshiMarketsClosingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
+        'Kalshi near-term',
+      );
+      for (const m of nearTermKalshi) add(m);
+    } catch (err) {
+      console.warn('[markets] Kalshi near-term fetch failed (non-fatal):', err);
+    }
   }
 
   // Secondary: live sports search (tennis, in-play — may lack endDate on some rows)
@@ -115,12 +116,14 @@ export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
     console.warn('[markets] Live sports fetch failed (non-fatal):', err);
   }
 
-  // Tertiary: volume leaderboard + Kalshi for breadth
-  try {
-    const base = await getAllMarkets(force);
-    for (const m of base) add(m);
-  } catch (err) {
-    console.warn('[markets] Base market fetch failed (non-fatal):', err);
+  // Tertiary: volume leaderboard (skip on live micro runner — saves ~15s/cycle)
+  if (!liveOnly) {
+    try {
+      const base = await getAllMarkets(force);
+      for (const m of base) add(m);
+    } catch (err) {
+      console.warn('[markets] Base market fetch failed (non-fatal):', err);
+    }
   }
 
   cachedQuickFlip = merged;

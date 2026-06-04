@@ -396,7 +396,11 @@ export async function startRunner(intervalMs = 15000) {
     persistStatus();
     if (!status.running) return;
     const baseInterval = await getRunnerIntervalMs();
-    const delay = Math.max(baseInterval, status.lastCycleDurationMs ?? baseInterval);
+    const rawDelay = Math.max(baseInterval, status.lastCycleDurationMs ?? baseInterval);
+    const liveCap = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' ? 55_000 : rawDelay;
+    const delay = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true'
+      ? Math.min(liveCap, rawDelay)
+      : rawDelay;
     cycleTimeout = setTimeout(() => void scheduleNextCycle(), delay);
   };
 
