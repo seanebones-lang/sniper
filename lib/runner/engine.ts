@@ -25,7 +25,7 @@ import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { getRecentSnapshotsBatch } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
 import { edgeDecayMonitor } from '@/lib/monitoring/edge-decay';
-import { riskModeManager } from '@/lib/monitoring/risk-mode';
+import { riskModeManager, type RiskMode } from '@/lib/monitoring/risk-mode';
 import { storeRecommendations } from '@/lib/monitoring/ai-recommendations';
 import { loadPaperRiskState } from '@/lib/paper/risk-state';
 import {
@@ -47,6 +47,13 @@ import {
   type QueuedRunnerSignal,
 } from '@/lib/runner/evaluate-market';
 import { runPool } from '@/lib/runner/parallel-pool';
+
+/** Live quick-flip market sample — smaller in DEFENSIVE/micro to keep cycles fast. */
+function resolveQuickFlipMarketLimit(riskMode: RiskMode, liveMicro: boolean): number {
+  if (riskMode === 'EMERGENCY') return 8;
+  if (riskMode === 'DEFENSIVE') return liveMicro ? 12 : 16;
+  return liveMicro ? 24 : 40;
+}
 
 export interface ActiveStrategyProfile {
   id: string;
@@ -572,6 +579,8 @@ export async function runOnce() {
   const currentRiskMode = riskModeManager.getCurrentMode();
   let marketEvaluationLimit = 25;
   let allowedStrategies = activeStrategies;
+  const liveMicroAccount = liveRealActive && earlyCycleBankrollUsd < 25;
+  const quickFlipLimit = resolveQuickFlipMarketLimit(currentRiskMode.current, liveMicroAccount);
 
   if (currentRiskMode.current === 'DEFENSIVE') {
     marketEvaluationLimit = 12;
@@ -608,7 +617,7 @@ export async function runOnce() {
     const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
     const isQuickFlipStrat =
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
-    const stratLimit = isQuickFlipStrat ? 40 : marketEvaluationLimit;
+    const stratLimit = isQuickFlipStrat ? quickFlipLimit : marketEvaluationLimit;
     const isLiveStrat = realEnabled && stratRow.paperOnly === false;
 
     if (isLiveStrat && skipLiveEntryScan) {
@@ -813,7 +822,7 @@ export async function runOnce() {
     let stratMarketLimit = marketEvaluationLimit;
 
     if (config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip') {
-      stratMarketLimit = 40;
+      stratMarketLimit = quickFlipLimit;
       const candidates = filterQuickFlipMarkets(openPool);
       openPool = candidates.length > 0 ? rankQuickFlipMarkets(candidates) : [];
       if (openPool.length === 0) {
@@ -1264,13 +1273,17 @@ export async function runOnce() {
   // === Edge Decay Monitoring — feed rolling PnL windows (every 5 cycles) ===
   if (getCurrentRunCount() % 5 === 0) {
     try {
+      const decayWindowHours = cycleBankrollUsd < 25 ? 2 : 6;
       const pnlStats = await computeStrategyPnlWindows(
         activeStrategies.map((s) => s.id),
-        6,
+        decayWindowHours,
       );
       for (const [, stats] of pnlStats) {
         if (stats.fills >= 3) {
-          edgeDecayMonitor.recordWindow(stats.strategyId, statsToPerformanceWindow(stats, 6));
+          edgeDecayMonitor.recordWindow(
+            stats.strategyId,
+            statsToPerformanceWindow(stats, decayWindowHours),
+          );
         }
       }
     } catch (e) {
