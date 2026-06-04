@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the DB so exposure/daily-loss logic is deterministic and offline.
+vi.mock('@/lib/execution/real-positions', () => ({
+  getRealOpenPositionsByStrategy: vi.fn().mockResolvedValue(new Map()),
+}));
+
 vi.mock('@/lib/db', () => {
   const chain = {
     values: () => ({
@@ -13,6 +17,7 @@ vi.mock('@/lib/db', () => {
       query: {
         positions: { findMany: vi.fn().mockResolvedValue([]) },
         realTrades: { findMany: vi.fn().mockResolvedValue([]) },
+        strategies: { findMany: vi.fn().mockResolvedValue([{ id: 'live-1' }]) },
       },
       insert: () => chain,
       execute: vi.fn().mockResolvedValue([]),
@@ -92,9 +97,24 @@ describe('riskEngine real-exposure gate', () => {
   });
 
   it('aggregates open positions into per-market exposure', async () => {
-    (db.query.positions.findMany as any).mockResolvedValue([
-      { platform: 'polymarket', marketId: 'mkt-1', sizeShares: '100', avgPrice: '0.5' }, // $50
-    ]);
+    const { getRealOpenPositionsByStrategy } = await import('@/lib/execution/real-positions');
+    vi.mocked(getRealOpenPositionsByStrategy).mockResolvedValue(
+      new Map([
+        [
+          'live-1',
+          [
+            {
+              platform: 'polymarket',
+              marketExternalId: 'mkt-1',
+              netSize: 100,
+              avgEntryPrice: 0.5,
+              openedAt: new Date(),
+              strategyId: 'live-1',
+            },
+          ],
+        ],
+      ]),
+    );
     const exposure = await riskEngine.getRealExposure();
     expect(exposure.totalUsd).toBeCloseTo(50);
     expect(exposure.byMarket['polymarket:mkt-1']).toBeCloseTo(50);
