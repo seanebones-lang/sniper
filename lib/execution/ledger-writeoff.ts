@@ -1,5 +1,6 @@
-import { db, auditEvents, realTrades } from '@/lib/db';
+import { db, auditEvents, positions, realTrades } from '@/lib/db';
 import { and, eq, inArray } from 'drizzle-orm';
+import { ensureMarket } from '@/lib/markets';
 
 async function logWriteOff(action: string, payload: Record<string, unknown>) {
   try {
@@ -46,6 +47,17 @@ export async function writeOffGhostLedgerPosition(
     filledAt: new Date(),
     txHash: 'ledger-sync',
   });
+
+  try {
+    const marketId = await ensureMarket({ platform: 'polymarket', externalId: tokenId });
+    await db
+      .update(positions)
+      .set({ sizeShares: '0', avgPrice: '0', updatedAt: new Date() })
+      .where(and(eq(positions.platform, 'polymarket'), eq(positions.marketId, marketId)));
+  } catch {
+    // positions row may not exist
+  }
+
   await logWriteOff('ghost_ledger_writeoff', {
     tokenId: tokenId.slice(0, 24),
     netSize,

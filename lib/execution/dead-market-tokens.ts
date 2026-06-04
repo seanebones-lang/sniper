@@ -66,7 +66,13 @@ export function isLegacyPennyPosition(avgEntryPrice: number, netSize: number): b
 /** Fractional ledger residue after round-trip — not a real open position. */
 export function isDustOpenPosition(netSize: number, avgEntryPrice: number): boolean {
   const notional = netSize * avgEntryPrice;
-  if (notional < 0.2) return true;
-  if (netSize < 0.25 && notional < 0.5) return true;
+  if (notional < 0.35) return true;
+  if (netSize < 1 && notional < 0.75) return true;
   return false;
+}
+
+/** Counts toward live micro position cap (ignore dust/dead ledger noise). */
+export function isMeaningfulOpenPosition(netSize: number, avgEntryPrice: number): boolean {
+  if (isDustOpenPosition(netSize, avgEntryPrice)) return false;
+  return netSize >= 0.5 || netSize * avgEntryPrice >= 0.5;
 }

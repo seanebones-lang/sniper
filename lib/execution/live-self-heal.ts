@@ -5,7 +5,7 @@
  * Fixes: ghost ledgers, dust, dead books, stale pending orders, rejected-exit storms.
  */
 import { db, auditEvents, realTrades } from '@/lib/db';
-import { and, eq, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm';
 import { getRealOpenPositionsForHeal } from '@/lib/execution/real-positions';
 import { writeOffGhostLedgerPosition } from '@/lib/execution/ledger-writeoff';
 import {
@@ -35,6 +35,48 @@ export interface LiveSelfHealResult {
   deadBooksMarked: number;
   stalePendingCancelled: number;
   rejectStormsCleared: number;
+}
+
+async function logRecentRejectPatterns(): Promise<void> {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+  const recent = await db.query.realTrades.findMany({
+    where: and(eq(realTrades.status, 'rejected'), gte(realTrades.createdAt, since)),
+    orderBy: [desc(realTrades.createdAt)],
+    limit: 15,
+    columns: { side: true },
+  });
+
+  const bySide = { BUY: 0, SELL: 0 };
+  for (const r of recent) {
+    if (r.side === 'BUY' || r.side === 'SELL') bySide[r.side]++;
+  }
+  if (recent.length > 0) {
+    console.log(
+      `[LiveSelfHeal] Last hour: ${recent.length} rejected trades (BUY=${bySide.BUY} SELL=${bySide.SELL})`,
+    );
+  }
+
+  const auditBlocks = await db.query.auditEvents.findMany({
+    orderBy: [desc(auditEvents.createdAt)],
+    limit: 100,
+    columns: { action: true, createdAt: true },
+  });
+  const counts = new Map<string, number>();
+  for (const row of auditBlocks) {
+    if (row.createdAt < since) continue;
+    if (
+      !row.action.includes('blocked') &&
+      !row.action.includes('skipped') &&
+      row.action !== 'real_order_result'
+    ) {
+      continue;
+    }
+    counts.set(row.action, (counts.get(row.action) ?? 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (top.length > 0) {
+    console.log(`[LiveSelfHeal] Top blocks: ${top.map(([k, n]) => `${k}=${n}`).join(', ')}`);
+  }
 }
 
 async function logHeal(action: string, payload: Record<string, unknown>) {
@@ -268,6 +310,8 @@ export async function runLiveSelfHeal(options?: {
     result.deadBooksMarked +
     result.stalePendingCancelled +
     result.rejectStormsCleared;
+
+  await logRecentRejectPatterns();
 
   if (total > 0) {
     console.log(

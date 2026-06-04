@@ -121,15 +121,24 @@ export async function getRealExposure(): Promise<RealExposure> {
   let openCount = 0;
 
   try {
-    const pos = await db.query.positions.findMany({ limit: 1000 });
-    for (const p of pos) {
-      const size = Math.abs(parseFloat(p.sizeShares) || 0);
-      if (size <= 0.0001) continue;
-      const usd = size * (parseFloat(p.avgPrice) || 0);
-      const key = `${p.platform}:${p.marketId}`;
-      byMarket[key] = (byMarket[key] || 0) + usd;
-      totalUsd += usd;
-      openCount++;
+    const liveStrats = await db.query.strategies.findMany({
+      where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+      columns: { id: true },
+    });
+    const ids = liveStrats.map((s) => s.id);
+    if (ids.length > 0) {
+      const { getRealOpenPositionsByStrategy } = await import('@/lib/execution/real-positions');
+      const byStrategy = await getRealOpenPositionsByStrategy(ids);
+      for (const positions of byStrategy.values()) {
+        for (const p of positions) {
+          const usd = p.netSize * p.avgEntryPrice;
+          if (usd <= 0.001) continue;
+          const key = `${p.platform}:${p.marketExternalId}`;
+          byMarket[key] = (byMarket[key] || 0) + usd;
+          totalUsd += usd;
+          openCount++;
+        }
+      }
     }
 
     const pending = await db.query.realTrades.findMany({

@@ -229,6 +229,9 @@ export async function startRunner(intervalMs = 15000) {
     void import('@/lib/execution/dead-market-tokens')
       .then((m) => m.hydrateRuntimeDeadMarketTokens())
       .catch(() => {});
+    void import('@/lib/execution/live-self-heal')
+      .then((m) => m.runLiveSelfHeal({ force: true, intervalMs: 0 }))
+      .catch(() => {});
   }
   getRunnerBookHub().start();
   console.log(
@@ -962,10 +965,15 @@ export async function runOnce() {
           }
           if (q.signal.action === 'BUY') {
             const openForStrat = openPositionsByStrategy.get(q.stratRow.id) ?? [];
-            if (openForStrat.length >= LIVE_MICRO_MAX_OPEN_POSITIONS) {
+            const { isMeaningfulOpenPosition } = await import('@/lib/execution/dead-market-tokens');
+            const meaningfulOpen = openForStrat.filter((p) =>
+              isMeaningfulOpenPosition(p.netSize, p.avgEntryPrice),
+            );
+            if (meaningfulOpen.length >= LIVE_MICRO_MAX_OPEN_POSITIONS) {
               void logAudit('runner_real_skipped_position_cap', {
                 strategy: q.stratRow.name,
-                openCount: openForStrat.length,
+                openCount: meaningfulOpen.length,
+                rawOpenCount: openForStrat.length,
                 market: q.market.externalId,
               });
               continue;
