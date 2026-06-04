@@ -493,21 +493,31 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     const orderOpts = await getPolymarketOrderOptions(req.market.externalId);
     const minShares = orderOpts.minOrderSize;
 
+    const microLiveExit =
+      isAggressiveExit &&
+      req.side === 'SELL' &&
+      ((req.maxNotionalUsd != null && req.maxNotionalUsd <= 35) ||
+        /quick-flip|Quick Flip|live-quick-flip/i.test(req.reason));
+
     const takeProfitExit =
-      isAggressiveExit && req.side === 'SELL' && isTakeProfitExitReason(req.reason);
+      isAggressiveExit &&
+      req.side === 'SELL' &&
+      isTakeProfitExitReason(req.reason) &&
+      !microLiveExit;
 
     // Polymarket market orders: BUY `amount` = USD; SELL `amount` = shares.
-    // Take-profit: post limit at target (don't dump into a penny bid via FAK).
+    // Take-profit on larger accounts: limit at target. Micro live: cross bid (FAK).
     const useMarketOrder =
       !takeProfitExit &&
       ((req.takeLiquidity && req.side === 'BUY') ||
         (isAggressiveExit && (sellHasBidDepth || finalSize < minShares)) ||
         (!req.takeLiquidity && finalSize < minShares));
 
+    const clobMinPrice = 0.01;
     const limitPrice =
       req.side === 'SELL' && takeProfitExit
-        ? Math.max(bestBid ?? 0.001, Math.min(0.99, execPrice))
-        : Math.max(0.001, Math.min(0.99, execPrice));
+        ? Math.max(bestBid ?? clobMinPrice, Math.min(0.99, execPrice))
+        : Math.max(clobMinPrice, Math.min(0.99, execPrice));
 
     let result = useMarketOrder
       ? await placePolymarketMarketOrder({
@@ -548,7 +558,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         : await placePolymarketLimitOrder({
             privateKey,
             tokenId: req.market.externalId,
-            price: Math.max(0.001, Math.min(0.99, execPrice)),
+            price: Math.max(clobMinPrice, Math.min(0.99, execPrice)),
             size: finalSize,
             side: 'SELL',
             postOnly: false,
@@ -567,7 +577,7 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
         result = await placePolymarketLimitOrder({
           privateKey,
           tokenId: req.market.externalId,
-          price: Math.max(0.001, Math.min(0.99, limitPrice)),
+          price: Math.max(clobMinPrice, Math.min(0.99, limitPrice)),
           size: finalSize,
           side: 'SELL',
           postOnly: false,

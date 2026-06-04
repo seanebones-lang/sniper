@@ -53,6 +53,23 @@ describe('aggregateRealPositions', () => {
     expect(positions[0].netSize).toBeCloseTo(4);
   });
 
+  it('filters dust residue when applyFilters is true (default)', () => {
+    const positions = aggregateRealPositions(
+      [row('BUY', 0.2, 0.4, '2026-01-01T00:00:00Z')],
+      's1',
+    );
+    expect(positions).toHaveLength(0);
+  });
+
+  it('includes dust when applyFilters is false (heal path)', () => {
+    const positions = aggregateRealPositions(
+      [row('BUY', 0.2, 0.4, '2026-01-01T00:00:00Z')],
+      's1',
+      { applyFilters: false },
+    );
+    expect(positions).toHaveLength(1);
+  });
+
   it('ignores rows with unparseable numbers', () => {
     const positions = aggregateRealPositions(
       [

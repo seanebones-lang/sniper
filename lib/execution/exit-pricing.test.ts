@@ -23,6 +23,6 @@ describe('exit-pricing', () => {
       bids: [],
     };
     const next = repriceStaleSellLimit(0.004, book, 0.004);
-    expect(next).toBeLessThan(0.004);
+    expect(next).toBe(0.01);
   });
 });

@@ -21,10 +21,11 @@ import {
 } from '../lib/clients/polymarket-trading';
 import { resolveAskOnlySellLimitPrice } from '../lib/execution/exit-pricing';
 import { placeRealOrder } from '../lib/execution/real-executor';
+import { writeOffGhostLedgerPosition } from '../lib/execution/ledger-writeoff';
 import { ensureMarketRecord } from '../lib/markets';
 
 const DRY_RUN = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
-const MIN_LIMIT_PRICE = 0.001;
+const MIN_LIMIT_PRICE = 0.01;
 
 async function cancelOpenSellsOnMarket(privateKey: string, tokenId: string): Promise<number> {
   const open = await getPolymarketOpenOrders(privateKey);
@@ -142,7 +143,16 @@ async function main() {
       console.log(`    on-chain=${onChain ?? '?'} sellSize=${size}`);
 
       if (size <= 0) {
-        console.log('    SKIP — no on-chain balance (already flat?)');
+        console.log('    SKIP — no on-chain balance (ledger ghost)');
+        if (!DRY_RUN && pos.netSize > 0.05) {
+          await writeOffGhostLedgerPosition(
+            tokenId,
+            pos.netSize,
+            pos.avgEntryPrice,
+            'force-flatten on-chain flat',
+          );
+          console.log(`    wrote off ledger ${pos.netSize} shares`);
+        }
         skipped++;
         continue;
       }

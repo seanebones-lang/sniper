@@ -225,6 +225,11 @@ export async function startRunner(intervalMs = 15000) {
 
   status.running = true;
   persistStatus();
+  if (realEnabledAtStart) {
+    void import('@/lib/execution/dead-market-tokens')
+      .then((m) => m.hydrateRuntimeDeadMarketTokens())
+      .catch(() => {});
+  }
   getRunnerBookHub().start();
   console.log(
     `[Runner] Starting 24/7 ${realEnabledAtStart ? 'live' : 'paper'} runner...`,
@@ -406,6 +411,17 @@ export function stopRunner(options?: { manual?: boolean }) {
   alerts.runnerStopped();
 }
 
+async function runLiveSelfHealIfEnabled(): Promise<void> {
+  if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') return;
+  try {
+    const { runLiveSelfHeal } = await import('@/lib/execution/live-self-heal');
+    const intervalMs = Number(process.env.SNIPER_SELF_HEAL_INTERVAL_MS) || undefined;
+    await runLiveSelfHeal({ intervalMs });
+  } catch (e) {
+    console.warn('[Runner] Live self-heal error (non-fatal):', e);
+  }
+}
+
 async function reconcileRealTradesIfEnabled(phase: 'pre' | 'post'): Promise<void> {
   if (process.env.SNIPER_ENABLE_REAL_EXECUTION !== 'true') return;
   try {
@@ -426,6 +442,7 @@ export async function runOnce() {
 
   incrementRunCount();
 
+  await runLiveSelfHealIfEnabled();
   await reconcileRealTradesIfEnabled('pre');
 
   const activeStrategies = await db.query.strategies.findMany({

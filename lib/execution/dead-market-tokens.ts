@@ -9,13 +9,64 @@ export const DEAD_MARKET_TOKENS = new Set([
   '47147095594506692238697896514087867152422362229643774019197234088324196335335',
   // Penny junk BUY @ 0.01 — stuck pending SELL; ledger write-off
   '75462822077155991283832425183355777507517211994653365831437501592509625094792',
+  // Dead-book holds from 2026-06-03 flatten (no bids; min size blocks exit)
+  '70811926991397248719387258769471036542160353290588981197576580940612207510064',
+  '35118054228408586137252795703746404222680776903323171910764298245336074845982',
 ]);
 
+/** Discovered at runtime (empty book / repeated exit failures) — persisted in system_state. */
+const runtimeDeadMarketTokens = new Set<string>();
+
 export function isDeadMarketToken(tokenId: string): boolean {
-  return DEAD_MARKET_TOKENS.has(tokenId);
+  return DEAD_MARKET_TOKENS.has(tokenId) || runtimeDeadMarketTokens.has(tokenId);
+}
+
+export function getRuntimeDeadMarketTokens(): string[] {
+  return [...runtimeDeadMarketTokens];
+}
+
+export async function hydrateRuntimeDeadMarketTokens(): Promise<void> {
+  try {
+    const { loadSystemState } = await import('@/lib/monitoring/system-state');
+    const state = await loadSystemState<{ runtimeDeadTokens?: string[] }>('live_self_heal');
+    if (!state?.runtimeDeadTokens) return;
+    for (const id of state.runtimeDeadTokens) {
+      if (!DEAD_MARKET_TOKENS.has(id)) runtimeDeadMarketTokens.add(id);
+    }
+  } catch {
+    // best effort
+  }
+}
+
+export async function markRuntimeDeadMarketToken(tokenId: string, reason: string): Promise<boolean> {
+  if (isDeadMarketToken(tokenId)) return false;
+  runtimeDeadMarketTokens.add(tokenId);
+  try {
+    const { loadSystemState, persistSystemState } = await import('@/lib/monitoring/system-state');
+    const prev = (await loadSystemState<{ runtimeDeadTokens?: string[]; lastHealAt?: string }>(
+      'live_self_heal',
+    )) ?? { runtimeDeadTokens: [] };
+    const merged = [...new Set([...(prev.runtimeDeadTokens ?? []), tokenId])];
+    await persistSystemState(
+      'live_self_heal',
+      { ...prev, runtimeDeadTokens: merged, lastMarkedDeadAt: new Date().toISOString(), lastMarkReason: reason },
+      reason,
+    );
+  } catch {
+    // in-memory still applies this process
+  }
+  return true;
 }
 
 /** Legacy 1000-lot penny positions from bad paper-era fills. */
 export function isLegacyPennyPosition(avgEntryPrice: number, netSize: number): boolean {
   return avgEntryPrice <= 0.002 && netSize >= 50;
+}
+
+/** Fractional ledger residue after round-trip — not a real open position. */
+export function isDustOpenPosition(netSize: number, avgEntryPrice: number): boolean {
+  const notional = netSize * avgEntryPrice;
+  if (notional < 0.2) return true;
+  if (netSize < 0.25 && notional < 0.5) return true;
+  return false;
 }
