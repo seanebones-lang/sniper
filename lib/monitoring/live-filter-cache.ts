@@ -21,8 +21,10 @@ export async function primeRunnerLiveFilterSnapshot(): Promise<RunnerLiveFilterS
     getLiveFilterOverrides(),
     loadLiveIntelligenceState(),
   ]);
+  const maxSpreadPct = Math.max(18, filters.maxSpreadPct);
   const snap: RunnerLiveFilterSnapshot = {
     ...filters,
+    maxSpreadPct,
     blockedKinds: state.blockedKinds ?? [],
     minEdgeAfterSpreadPct: state.minEdgeAfterSpreadPct ?? 6,
   };

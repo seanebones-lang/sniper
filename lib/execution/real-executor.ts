@@ -324,6 +324,18 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
     }
   }
 
+  if (!req.isExit && (finalSize > 500 || usdValue > 50 || !Number.isFinite(finalSize))) {
+    await logAudit('real_order_blocked_absurd_size', {
+      finalSize,
+      usdValue,
+      bankrollUsd,
+      microLive,
+      price: req.price,
+      reqSize: req.size,
+    });
+    return { success: false, error: `Absurd order size blocked (shares=${finalSize}, usd=${usdValue})` };
+  }
+
   // 1. Legacy risk engine gate (still useful as second layer for daily-loss /
   // exposure breakers). Align its per-trade ceiling with the size we just
   // approved above so it doesn't reject an order the bankroll-aware sizing
