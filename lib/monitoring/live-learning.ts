@@ -71,6 +71,7 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
     return { patched: false, blockedKinds: [...blocked], reasons };
   }
 
+  patches.lastLearningAt = new Date().toISOString();
   await saveLiveIntelligenceState(patches, 'autonomous learning cycle');
   try {
     await db.insert(auditEvents).values({

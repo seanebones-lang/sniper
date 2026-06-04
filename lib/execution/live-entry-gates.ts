@@ -15,7 +15,7 @@ import { getRunnerLiveFilterSnapshot } from '@/lib/monitoring/live-filter-snapsh
 import { analyzeLiveRoundTrips } from '@/lib/execution/real-strategy-pnl';
 import { isMarketPaused } from '@/lib/monitoring/temporary-adjustments';
 import { executionManager } from '@/lib/execution/execution-manager';
-import { recordLiveGateBlock } from '@/lib/monitoring/live-gate-stats';
+import { recordLiveGateBlock } from '@/lib/monitoring/live-filter-snapshot';
 
 export type LiveEntryGateInput = {
   market: Market;

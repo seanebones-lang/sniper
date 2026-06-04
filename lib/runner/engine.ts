@@ -99,6 +99,8 @@ const status: RunnerStatus = {
 let interval: NodeJS.Timeout | null = null;
 let cycleTimeout: ReturnType<typeof setTimeout> | null = null;
 let cycleInFlight = false;
+let cycleInFlightSince = 0;
+const MAX_CYCLE_IN_FLIGHT_MS = 180_000;
 
 /** Stable per-process id used for the single-runner DB lease. */
 const RUNNER_LOCK_TTL_MS = 60_000;
@@ -367,16 +369,27 @@ export async function startRunner(intervalMs = 15000) {
       // transient — keep going; the next cycle will retry the refresh
     }
 
+    if (
+      cycleInFlight &&
+      cycleInFlightSince > 0 &&
+      Date.now() - cycleInFlightSince > MAX_CYCLE_IN_FLIGHT_MS
+    ) {
+      console.warn('[Runner] Prior cycle exceeded max in-flight time — forcing reset');
+      cycleInFlight = false;
+      cycleInFlightSince = 0;
+    }
     if (cycleInFlight) {
       console.warn('[Runner] Skipping cycle — prior run still in flight');
     } else {
       cycleInFlight = true;
+      cycleInFlightSince = Date.now();
       try {
         await runOnce();
       } catch (e) {
         console.error('[Runner] Error in loop:', e);
       } finally {
         cycleInFlight = false;
+        cycleInFlightSince = 0;
       }
     }
     status.lastCycleDurationMs = Date.now() - cycleStart;
@@ -713,13 +726,17 @@ export async function runOnce() {
   if (liveRealActive) {
     const { primeRunnerLiveFilterSnapshot } = await import('@/lib/monitoring/live-filter-cache');
     await primeRunnerLiveFilterSnapshot();
-    if (getCurrentRunCount() % 10 === 0) {
+    const { loadLiveIntelligenceState } = await import('@/lib/monitoring/live-intelligence');
+    const intelState = await loadLiveIntelligenceState();
+    const runLearning =
+      getCurrentRunCount() % 5 === 0 || !intelState.lastLearningAt;
+    if (runLearning) {
       const { runLiveLearningCycle } = await import('@/lib/monitoring/live-learning');
       const learn = await runLiveLearningCycle(cycleBankrollUsd);
       if (learn.patched) {
         console.warn(`[Runner] Live learning applied: ${learn.reasons.join('; ')}`);
-        await primeRunnerLiveFilterSnapshot();
       }
+      await primeRunnerLiveFilterSnapshot();
     }
   }
 
@@ -1316,186 +1333,19 @@ export async function runOnce() {
     }
   }
 
-  // === Automated Intelligence Layer: Periodic Grok Analysis with Concrete Actions ===
-  const { getGrokResearchEnabled } = await import('@/lib/settings/keys');
-  const grokResearchEnabled = await getGrokResearchEnabled();
-  let forceGrokLive = false;
-  if (liveRealActive) {
-    const { analyzeLiveRoundTrips } = await import('@/lib/execution/real-strategy-pnl');
-    const liveAttr = await analyzeLiveRoundTrips(48);
-    forceGrokLive =
-      liveAttr.losses >= 3 && liveAttr.totalPnlUsd < -0.06 * cycleBankrollUsd;
-  }
-  const shouldRunGrokAnalysis =
-    grokResearchEnabled &&
-    (forceGrokLive ||
-      getCurrentRunCount() % 120 === 0 ||
-      Math.random() < 0.008 ||
-      Date.now() % (6 * 60 * 60 * 1000) < 120_000);
-
-  if (shouldRunGrokAnalysis) {
-    try {
-      const { askGrokResearchAgent } = await import('@/lib/research/grok-agent');
-
-      // Build rich context for the agent
-      const recentExec = executionManager.getRecentExecutionQuality(20);
-      const avgSlip = executionManager.getAverageSlippage(30);
-      const unhealthy = executionManager.getUnhealthyMarkets(0.5);
-      const currentRisk = riskModeManager.getCurrentMode();
-
-      const primaryStrategy = activeStrategies[0];
-
-      const analysis = await askGrokResearchAgent({
-        type: 'strategy_analysis',
-        strategyId: primaryStrategy?.id,
-        lookbackHours: 48,
-        extraContext: `Current risk mode: ${currentRisk.current} (${currentRisk.reason}). 
-System health score: ${(systemHealth * 100).toFixed(1)}%. 
-Recent adverse fill rate: ${(adverseRate * 100).toFixed(1)}%. 
-Unhealthy markets: ${unhealthy.length} (${unhealthy.join(', ') || 'none'}). 
-Avg recent slippage: ${avgSlip.toFixed(4)}. 
-Recent execution samples: ${JSON.stringify(recentExec.slice(-8))}`,
-      });
-
-      await logAudit('grok_research_agent', { 
-        fullAnalysis: analysis.analysis.slice(0, 2000),
-        proposals: analysis.proposals || [],
-        riskModeAtTime: currentRisk.current,
-      });
-
-      console.log('[Runner] Grok Research Agent analysis completed.');
-
-      // Parse and surface concrete recommendations
-      if (analysis.analysis.includes('RECOMMENDED ACTIONS')) {
-        const actionsSection = analysis.analysis.split('RECOMMENDED ACTIONS')[1] || '';
-        console.warn(`[Runner] Grok Recommended Actions:\n${actionsSection.trim().slice(0, 1200)}`);
-
-        const stored = storeRecommendations(actionsSection, currentRisk.current);
-
-        await logAudit('grok_recommended_actions', {
-          raw: actionsSection.trim().slice(0, 1500),
-          riskMode: currentRisk.current,
-          parsedCount: stored.parsedActions.length,
-        });
-
-        const liveStrategyActive = allowedStrategies.some((s) => s.paperOnly === false);
-        if (liveStrategyActive) {
-          const { applySafeGrokActionsForLive } = await import('@/lib/monitoring/live-intelligence');
-          const { analyzeLiveRoundTrips } = await import('@/lib/execution/real-strategy-pnl');
-          const liveAttr = await analyzeLiveRoundTrips(48);
-          const applied = await applySafeGrokActionsForLive(stored.parsedActions, {
-            systemHealth,
-            recentPnlUsd: liveAttr.totalPnlUsd,
-            bankrollUsd: cycleBankrollUsd,
-          });
-          if (applied.length > 0) {
-            console.warn(`[Runner] Grok live-safe applied: ${applied.join(', ')}`);
-          }
-        } else {
-        // Auto-apply safe recommendations and create temporary adjustments (paper only)
-        for (const action of stored.parsedActions) {
-          const a = action.action.toLowerCase().replace(/_/g, ' ');
-          const target = action.target;
-          const value = typeof action.value === 'number' ? action.value : 0.7; // default safe reduction
-
-          if ((a.includes('reduce') && a.includes('risk')) || a.includes('defensive')) {
-            if (systemHealth < 0.6 || currentRisk.current !== 'NORMAL') {
-              const expires = 12; // ~12 runs (~2-3 hours depending on frequency)
-              applyTemporaryAdjustment({
-                type: 'global_risk_multiplier',
-                value: Math.max(0.3, value),
-                reason: `Grok auto: ${action.reason}`,
-                expiresAfterRuns: expires,
-                source: 'grok_auto',
-              });
-              console.warn(`[Runner] Auto-applied temporary risk reduction from Grok (expires in ~${expires} runs)`);
-              await logAudit('grok_auto_applied', { 
-                action: action.action, 
-                target, 
-                value: Math.max(0.3, value),
-                expiresAfterRuns: expires 
-              });
-            }
-          }
-
-          const strategyId = target.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
-
-          if (a.includes('pause') && a.includes('strategy') && strategyId) {
-            await db.update(strategies)
-              .set({ isActive: false, updatedAt: new Date() })
-              .where(eq(strategies.id, strategyId));
-            console.warn(`[Runner] Paused strategy ${strategyId} per Grok recommendation`);
-            await logAudit('grok_auto_applied', {
-              action: action.action,
-              target: strategyId,
-              effect: 'isActive=false',
-              reason: action.reason,
-            });
-            continue;
-          }
-
-          if (a.includes('reduce') && a.includes('allocation') && strategyId) {
-            const downweight = Math.max(0.1, Math.min(1, value));
-            const expires = 40;
-            applyTemporaryAdjustment({
-              type: 'strategy_downweight',
-              target: strategyId,
-              value: downweight,
-              reason: `Grok auto: ${action.reason}`,
-              expiresAfterRuns: expires,
-              source: 'grok_auto',
-            });
-            const strat = await db.query.strategies.findFirst({ where: eq(strategies.id, strategyId) });
-            if (strat) {
-              const cfg = (strat.config ?? {}) as Record<string, unknown>;
-              await db.update(strategies)
-                .set({
-                  config: { ...cfg, allocationDownweight: downweight },
-                  updatedAt: new Date(),
-                })
-                .where(eq(strategies.id, strategyId));
-            }
-            console.warn(`[Runner] Reduced allocation for ${strategyId} to ${downweight}x`);
-            await logAudit('grok_auto_applied', {
-              action: action.action,
-              target: strategyId,
-              value: downweight,
-              expiresAfterRuns: expires,
-            });
-            continue;
-          }
-
-          if (a.includes('downweight') || (a.includes('pause') && !strategyId)) {
-            const expires = 20;
-            applyTemporaryAdjustment({
-              type: 'strategy_downweight',
-              target: target,
-              value: a.includes('pause') ? 0.1 : Math.max(0.2, value),
-              reason: `Grok auto: ${action.reason}`,
-              expiresAfterRuns: expires,
-              source: 'grok_auto',
-            });
-            console.warn(`[Runner] Auto-applied temporary strategy adjustment for ${target}`);
-            await logAudit('grok_auto_applied', { action: action.action, target, expiresAfterRuns: expires });
-          }
-        }
-        }
-
-        // Send high-priority recommendations via Telegram
-        if (stored.parsedActions.some(a => 
-            a.action.toLowerCase().includes('pause') || 
-            a.action.toLowerCase().includes('emergency') ||
-            a.action.toLowerCase().includes('reduce'))) {
-          const summary = stored.parsedActions.map(a => 
-            `- ${a.action} on ${a.target}: ${a.reason}`
-          ).join('\n');
-          alerts.error(`Grok Recommendation:\n${summary}`);
-        }
-      }
-    } catch (e) {
-      console.warn('[Runner] Grok Research Agent call failed (non-fatal):', e);
-    }
-  }
+  // Grok + heavy research — background only (must not block the next cycle)
+  const { runPostCycleIntelligence } = await import('@/lib/monitoring/post-cycle-intelligence');
+  runPostCycleIntelligence({
+    liveRealActive,
+    cycleBankrollUsd,
+    systemHealth,
+    adverseRate,
+    activeStrategyIds: activeStrategies.map((s) => s.id),
+    allowedStrategyRows: allowedStrategies.map((s) => ({
+      id: s.id,
+      paperOnly: s.paperOnly,
+    })),
+  });
 
   // === Active Execution Management on Unhealthy Markets (recommendations + simulation) ===
   if (Math.random() < 0.08) {

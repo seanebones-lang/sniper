@@ -95,12 +95,11 @@ export const LiveQuickFlip: Strategy = {
       return null;
     }
 
-    const liveFilters = isLive
-      ? (getRunnerLiveFilterSnapshot() ?? defaultLiveFilterSnapshot())
-      : null;
+    const snap = isLive ? getRunnerLiveFilterSnapshot() : null;
+    const liveFilters = isLive ? (snap ?? defaultLiveFilterSnapshot()) : null;
 
-    if (isLive) {
-      if (checkLiveEntryGatesSync(market, book, ask, bid)) return null;
+    if (isLive && snap && checkLiveEntryGatesSync(market, book, ask, bid)) {
+      return null;
     }
 
     if (hasBid) {

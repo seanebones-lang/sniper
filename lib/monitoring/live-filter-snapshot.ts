@@ -47,22 +47,48 @@ function kindBlocked(kind: FastMovingKind, snap: RunnerLiveFilterSnapshot): bool
   return false;
 }
 
+const cycleGateCounts = new Map<string, number>();
+
+export function recordLiveGateBlock(code: string): void {
+  cycleGateCounts.set(code, (cycleGateCounts.get(code) ?? 0) + 1);
+}
+
+export function drainCycleGateCounts(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [code, n] of cycleGateCounts) out[code] = n;
+  cycleGateCounts.clear();
+  return out;
+}
+
 export function checkLiveEntryGatesSync(
   market: Market,
   book: OrderBook | null | undefined,
   ask: number,
   bid: number,
 ): boolean {
-  const snap = snapshot ?? defaultLiveFilterSnapshot();
+  const snap = snapshot;
+  if (!snap) return false;
   const assessment = assessFastMovingMarket(market);
-  if (assessment.kind === 'none') return true;
-  if (kindBlocked(assessment.kind, snap)) return true;
-  if (assessment.score < snap.minMarketScore) return true;
+  if (assessment.kind === 'none') {
+    recordLiveGateBlock('not_fast_moving');
+    return true;
+  }
+  if (kindBlocked(assessment.kind, snap)) {
+    recordLiveGateBlock('kind_blocked');
+    return true;
+  }
+  if (assessment.score < snap.minMarketScore) {
+    recordLiveGateBlock('low_market_score');
+    return true;
+  }
   const mid = book?.mid ?? (ask + bid) / 2;
   const spread = book?.spread ?? ask - bid;
   if (mid > 0) {
     const spreadPct = (spread / mid) * 100;
-    if (spreadPct > snap.maxSpreadPct) return true;
+    if (spreadPct > snap.maxSpreadPct) {
+      recordLiveGateBlock('spread_too_wide');
+      return true;
+    }
   }
   return false;
 }
