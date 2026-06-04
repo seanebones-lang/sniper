@@ -1,5 +1,13 @@
-import { db, realTrades } from '@/lib/db';
+import { db, auditEvents, realTrades } from '@/lib/db';
 import { and, eq, inArray } from 'drizzle-orm';
+
+async function logWriteOff(action: string, payload: Record<string, unknown>) {
+  try {
+    await db.insert(auditEvents).values({ actor: 'ledger-writeoff', action, payload });
+  } catch {
+    // best effort
+  }
+}
 
 /** Cancel stuck pending/needs_review rows on a token so exits can retry cleanly. */
 export async function cancelPendingRealTradesOnToken(tokenId: string): Promise<number> {
@@ -36,8 +44,14 @@ export async function writeOffGhostLedgerPosition(
     price: String(avgPrice),
     status: 'filled',
     filledAt: new Date(),
-    reason: `[AUTO-HEAL] ${note}`,
     txHash: 'ledger-sync',
+  });
+  await logWriteOff('ghost_ledger_writeoff', {
+    tokenId: tokenId.slice(0, 24),
+    netSize,
+    avgPrice,
+    note,
+    cancelledPending,
   });
   return { cancelledPending };
 }
