@@ -41,8 +41,8 @@ export class EdgeDecayMonitor {
       return { decaying: false, severity: 0, reason: 'Insufficient history' };
     }
 
-    const recent = history.slice(-3);
-    const older = history.slice(-6, -3);
+    const recent = history.slice(-1);
+    const older = history.slice(-4, -1);
 
     const recentPnl = recent.reduce((sum, w) => sum + w.estimatedPnl, 0);
     const olderPnl = older.length > 0 ? older.reduce((sum, w) => sum + w.estimatedPnl, 0) : 0;

@@ -90,8 +90,13 @@ export class RiskModeManager {
       }
     }
 
-    // Recovery to NORMAL
-    if (current !== 'NORMAL' && systemHealthScore > 0.72 && adverseRate < 0.25) {
+    // Recovery to NORMAL — require decay clear so we don't flap every cycle
+    if (
+      current !== 'NORMAL' &&
+      systemHealthScore > 0.72 &&
+      adverseRate < 0.25 &&
+      decayingStrategies === 0
+    ) {
       const reason = `Recovery to NORMAL: Health=${(systemHealthScore*100).toFixed(0)}%, Adverse=${(adverseRate*100).toFixed(0)}%`;
       this._transition('NORMAL', reason);
       return { changed: true, newMode: 'NORMAL', reason };

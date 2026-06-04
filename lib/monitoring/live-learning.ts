@@ -10,6 +10,7 @@ import {
   type LiveIntelligenceState,
 } from '@/lib/monitoring/live-intelligence';
 import { bankrollScaledUsd } from '@/lib/research/live-bankroll';
+import { LIVE_QUICK_FLIP_MIN_MARKET_SCORE } from '@/lib/strategies/run-profile';
 import { db, auditEvents } from '@/lib/db';
 
 export type LiveLearningResult = {
@@ -43,7 +44,13 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
     reasons.push('floor maxSpreadPct at 18 (was over-tightened)');
   }
 
+  if ((prev.minMarketScore ?? LIVE_QUICK_FLIP_MIN_MARKET_SCORE) > 28) {
+    patches.minMarketScore = 28;
+    reasons.push('cap minMarketScore at 28 (was over-tightened)');
+  }
+
   for (const [kind, k] of Object.entries(attr.byKind)) {
+    if (kind === 'none') continue;
     if (k.trips < MIN_KIND_TRIPS) continue;
     const winRate = k.trips > 0 ? k.wins / k.trips : 0;
     if (k.pnlUsd <= KIND_LOSS_BLOCK_PNL && winRate < KIND_MAX_WIN_RATE) {
@@ -58,7 +65,7 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
   const lossStreak = outcomes.filter((o) => o.pnlUsd < -0.03).length;
   const totalLossThreshold = bankrollScaledUsd(bankrollUsd, -0.12);
   if (attr.totalPnlUsd < totalLossThreshold || lossStreak >= 4) {
-    const nextScore = Math.min(45, (prev.minMarketScore ?? 22) + 3);
+    const nextScore = Math.min(28, (prev.minMarketScore ?? LIVE_QUICK_FLIP_MIN_MARKET_SCORE) + 3);
     patches.minMarketScore = nextScore;
     reasons.push(`tighten minMarketScore → ${nextScore} (24h PnL $${attr.totalPnlUsd.toFixed(2)})`);
   }
@@ -70,6 +77,13 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
 
   if (blocked.size > 0) {
     patches.blockedKinds = [...blocked];
+    const allowed = prev.allowedKinds ?? ['short-crypto'];
+    const allAllowedBlocked =
+      allowed.length > 0 && allowed.every((k) => blocked.has(k));
+    if (allAllowedBlocked) {
+      patches.allowedKinds = null;
+      reasons.push('expand allowedKinds (all allow-listed kinds blocked)');
+    }
   }
 
   if (Object.keys(patches).length === 0) {

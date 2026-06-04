@@ -514,8 +514,39 @@ export async function runOnce() {
 
   let globalRiskMultiplier = getEffectiveGlobalRiskMultiplier(1.0);
 
+  const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  const liveRealActive =
+    realEnabled && activeStrategies.some((s) => !s.paperOnly);
+
+  let cycleLiveBalanceUsd: number | null = null;
+  let skipLiveEntryScan = false;
+  let earlyCycleBankrollUsd = 25;
+
+  if (liveRealActive) {
+    const { getPolymarketPrivateKey } = await import('@/lib/clients/polymarket-trading');
+    const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
+    const pk = getPolymarketPrivateKey();
+    if (pk) {
+      cycleLiveBalanceUsd = await resolveLiveUsdcBalance(pk);
+    }
+    const { resolveLiveBankrollUsd } = await import('@/lib/research/live-bankroll');
+    earlyCycleBankrollUsd = await resolveLiveBankrollUsd(cycleLiveBalanceUsd);
+    if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
+      const { minRealOrderUsd } = await import('@/lib/risk/sizing');
+      const minUsd = minRealOrderUsd(Math.max(cycleLiveBalanceUsd, 0.01));
+      skipLiveEntryScan = cycleLiveBalanceUsd < minUsd;
+      if (skipLiveEntryScan) {
+        console.log(
+          `[Runner] Live bankroll $${cycleLiveBalanceUsd.toFixed(2)} < $${minUsd.toFixed(2)} min — exit-only cycle (skipping entry scan)`,
+        );
+      }
+    }
+  }
+
   // === Risk Mode Evaluation ===
-  const decayingCount = activeStrategies.filter(s => edgeDecayMonitor.isDecaying(s.id).decaying).length;
+  const decayingCount = activeStrategies.filter(
+    (s) => edgeDecayMonitor.isDecaying(s.id, earlyCycleBankrollUsd).decaying,
+  ).length;
   const riskModeResult = riskModeManager.evaluate(
     systemHealth,
     adverseRate,
@@ -566,32 +597,6 @@ export async function runOnce() {
       console.warn(`   PAUSED STRATEGIES due to Emergency: ${pausedStrategies.map((s) => s.name).join(', ')}`);
     }
     console.warn(`   Evaluating only ${allowedStrategies.length} strategy(ies) across ${marketEvaluationLimit} market(s).`);
-  }
-
-  const realEnabled = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
-  const liveRealActive =
-    realEnabled && activeStrategies.some((s) => !s.paperOnly);
-
-  let cycleLiveBalanceUsd: number | null = null;
-  let skipLiveEntryScan = false;
-
-  if (liveRealActive) {
-    const { getPolymarketPrivateKey } = await import('@/lib/clients/polymarket-trading');
-    const { resolveLiveUsdcBalance } = await import('@/lib/clients/polymarket-trading-setup');
-    const pk = getPolymarketPrivateKey();
-    if (pk) {
-      cycleLiveBalanceUsd = await resolveLiveUsdcBalance(pk);
-    }
-    if (cycleLiveBalanceUsd != null && cycleLiveBalanceUsd > 0) {
-      const { minRealOrderUsd } = await import('@/lib/risk/sizing');
-      const minUsd = minRealOrderUsd(Math.max(cycleLiveBalanceUsd, 0.01));
-      skipLiveEntryScan = cycleLiveBalanceUsd < minUsd;
-      if (skipLiveEntryScan) {
-        console.log(
-          `[Runner] Live bankroll $${cycleLiveBalanceUsd.toFixed(2)} < $${minUsd.toFixed(2)} min — exit-only cycle (skipping entry scan)`,
-        );
-      }
-    }
   }
 
   const bookCache = new CycleBookCache();

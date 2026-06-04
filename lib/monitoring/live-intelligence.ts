@@ -62,15 +62,30 @@ export async function saveLiveIntelligenceState(
 
 export async function getLiveFilterOverrides(): Promise<LiveFilterOverrides> {
   const s = await loadLiveIntelligenceState();
+  const blockedKinds = s.blockedKinds ?? DEFAULTS.blockedKinds;
+  const rawAllowed =
+    s.allowedKinds === undefined ? DEFAULTS.allowedKinds : s.allowedKinds;
+  const allowedKinds = resolveEffectiveAllowedKinds(rawAllowed, blockedKinds);
+  const rawScore = s.minMarketScore ?? DEFAULTS.minMarketScore;
+  const minMarketScore = Math.min(28, Math.max(LIVE_QUICK_FLIP_MIN_MARKET_SCORE, rawScore));
   return {
-    minMarketScore: s.minMarketScore ?? DEFAULTS.minMarketScore,
+    minMarketScore,
     maxSpreadPct: s.maxSpreadPct ?? DEFAULTS.maxSpreadPct,
-    allowedKinds:
-      s.allowedKinds === undefined ? DEFAULTS.allowedKinds : s.allowedKinds,
-    blockedKinds: s.blockedKinds ?? DEFAULTS.blockedKinds,
+    allowedKinds,
+    blockedKinds,
     minEdgeAfterSpreadPct: s.minEdgeAfterSpreadPct ?? DEFAULTS.minEdgeAfterSpreadPct,
     tokenCooldownMs: s.tokenCooldownMs ?? DEFAULTS.tokenCooldownMs,
   };
+}
+
+/** When every allowed kind is blocked, drop the allow-list so other kinds can trade. */
+export function resolveEffectiveAllowedKinds(
+  allowedKinds: FastMovingKind[] | null,
+  blockedKinds: FastMovingKind[],
+): FastMovingKind[] | null {
+  if (!allowedKinds || allowedKinds.length === 0) return null;
+  const viable = allowedKinds.filter((k) => !blockedKinds.includes(k));
+  return viable.length === 0 ? null : allowedKinds;
 }
 
 export function isKindBlockedByIntelligence(
