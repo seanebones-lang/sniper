@@ -106,7 +106,7 @@ export async function ensurePolymarketTradingReady(options?: {
     const ready = balanceUsd != null && balanceUsd >= MIN_TRADE_BALANCE_USD;
 
     // Background relayer approvals — at most once per 10 minutes, never blocks ready.
-    let approvalsSubmitted = false;
+    const approvalsSubmitted = false;
     if (
       needApproval.length > 0 &&
       relayerMode !== 'none' &&

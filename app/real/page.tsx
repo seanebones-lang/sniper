@@ -84,6 +84,7 @@ export default function RealExecutionPage() {
   const [runnerRunning, setRunnerRunning] = useState<boolean | null>(null);
   const [runnerBusy, setRunnerBusy] = useState(false);
   const [ops, setOps] = useState<LiveOpsSnapshot | null>(null);
+  const [clockMs, setClockMs] = useState(0);
 
   const canEnable = typed.trim().toUpperCase() === 'I ACCEPT FULL RISK AND RESPONSIBILITY';
 
@@ -141,9 +142,11 @@ export default function RealExecutionPage() {
         if (!cancelled) setLoading(false);
       }
     };
+    setClockMs(Date.now());
     void load();
     void loadRunner();
     const id = setInterval(() => {
+      setClockMs(Date.now());
       void load();
       void loadRunner();
     }, 15_000);
@@ -375,8 +378,8 @@ export default function RealExecutionPage() {
               <div>
                 <div className="text-zinc-500">Last cycle</div>
                 <div className="font-mono text-zinc-200">
-                  {ops.runner.lastRun
-                    ? `${Math.round((Date.now() - new Date(ops.runner.lastRun).getTime()) / 1000)}s ago`
+                  {ops.runner.lastRun && clockMs > 0
+                    ? `${Math.round((clockMs - new Date(ops.runner.lastRun).getTime()) / 1000)}s ago`
                     : '—'}
                 </div>
               </div>
