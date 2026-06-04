@@ -289,6 +289,27 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
               continue;
             }
 
+            // Stale resting SELL limits block in-flight guards and fresh market exits.
+            if (
+              trade.side === 'SELL' &&
+              recon?.status === 'open' &&
+              ageMinutes >= 12 &&
+              orderId
+            ) {
+              const { cancelPolymarketOrder } = await import('@/lib/clients/polymarket-trading');
+              await cancelPolymarketOrder(privateKey, orderId);
+              await db.update(realTrades)
+                .set({ status: 'cancelled' })
+                .where(eq(realTrades.id, trade.id));
+              result.updated++;
+              await logAudit('polymarket_stale_open_sell_cancelled', {
+                tradeId: trade.id,
+                orderId,
+                ageMinutes,
+              });
+              continue;
+            }
+
             // Token-balance fallback when order API is ambiguous (common on FOK/limit).
             if (!recon || recon.status === 'unknown' || recon.status === 'open') {
               const { getPolymarketTokenBalance } = await import('@/lib/clients/polymarket-trading');
