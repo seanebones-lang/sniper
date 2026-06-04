@@ -289,6 +289,34 @@ export async function reconcilePendingRealTrades(): Promise<ReconciliationResult
               continue;
             }
 
+            // Unfilled pending BUY: do not strand position-cap / exit loops on ledger-only size.
+            if (trade.side === 'BUY' && ageMinutes >= 5) {
+              const { getPolymarketTokenBalance, cancelPolymarketOrder } = await import(
+                '@/lib/clients/polymarket-trading'
+              );
+              const onChain = await getPolymarketTokenBalance(privateKey, trade.marketExternalId);
+              const expectedSize = parseFloat(trade.size);
+              if (onChain != null && onChain < expectedSize * 0.5) {
+                if (recon?.status === 'open' && orderId) {
+                  await cancelPolymarketOrder(privateKey, orderId);
+                }
+                if (recon?.status !== 'filled') {
+                  await db.update(realTrades)
+                    .set({ status: 'cancelled' })
+                    .where(eq(realTrades.id, trade.id));
+                  result.updated++;
+                  await logAudit('polymarket_stale_pending_buy_cancelled', {
+                    tradeId: trade.id,
+                    orderId,
+                    ageMinutes,
+                    onChain,
+                    expectedSize,
+                  });
+                }
+                continue;
+              }
+            }
+
             // Stale resting SELL limits block in-flight guards and fresh market exits.
             if (
               trade.side === 'SELL' &&

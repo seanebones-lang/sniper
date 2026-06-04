@@ -134,15 +134,9 @@ export async function getRealOpenPositionsByStrategy(
       and(
         inArray(signals.strategyId, strategyIds),
         gte(realTrades.createdAt, since),
-        or(
-          inArray(realTrades.status, ['filled', 'needs_review']),
-          and(
-            eq(realTrades.status, 'pending'),
-            eq(realTrades.side, 'BUY'),
-            isNotNull(realTrades.txHash),
-            ne(realTrades.txHash, 'submitted'),
-          ),
-        ),
+        // Only exchange-confirmed rows count as open inventory (pending BUYs are
+        // tracked separately via runner in-flight guards).
+        inArray(realTrades.status, ['filled', 'needs_review']),
       ),
     )
     .orderBy(realTrades.createdAt);
@@ -183,15 +177,7 @@ export async function getRealOpenPositionsByStrategy(
         and(
           isNull(realTrades.signalId),
           gte(realTrades.createdAt, since),
-          or(
-            inArray(realTrades.status, ['filled', 'needs_review']),
-            and(
-              eq(realTrades.status, 'pending'),
-              eq(realTrades.side, 'BUY'),
-              isNotNull(realTrades.txHash),
-              ne(realTrades.txHash, 'submitted'),
-            ),
-          ),
+          inArray(realTrades.status, ['filled', 'needs_review']),
         ),
       )
       .orderBy(realTrades.createdAt);
@@ -248,15 +234,9 @@ export async function getRealOpenPositionsForHeal(
       and(
         inArray(signals.strategyId, strategyIds),
         gte(realTrades.createdAt, since),
-        or(
-          inArray(realTrades.status, ['filled', 'needs_review']),
-          and(
-            eq(realTrades.status, 'pending'),
-            eq(realTrades.side, 'BUY'),
-            isNotNull(realTrades.txHash),
-            ne(realTrades.txHash, 'submitted'),
-          ),
-        ),
+        // Only exchange-confirmed rows count as open inventory (pending BUYs are
+        // tracked separately via runner in-flight guards).
+        inArray(realTrades.status, ['filled', 'needs_review']),
       ),
     )
     .orderBy(realTrades.createdAt);
@@ -299,15 +279,7 @@ export async function getRealOpenPositionsForHeal(
         and(
           isNull(realTrades.signalId),
           gte(realTrades.createdAt, since),
-          or(
-            inArray(realTrades.status, ['filled', 'needs_review']),
-            and(
-              eq(realTrades.status, 'pending'),
-              eq(realTrades.side, 'BUY'),
-              isNotNull(realTrades.txHash),
-              ne(realTrades.txHash, 'submitted'),
-            ),
-          ),
+          inArray(realTrades.status, ['filled', 'needs_review']),
         ),
       )
       .orderBy(realTrades.createdAt);

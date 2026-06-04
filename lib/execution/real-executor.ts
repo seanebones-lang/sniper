@@ -499,6 +499,24 @@ export async function placeRealOrder(req: RealOrderRequest): Promise<{ success: 
       ((req.maxNotionalUsd != null && req.maxNotionalUsd <= 35) ||
         /quick-flip|Quick Flip|live-quick-flip/i.test(req.reason));
 
+    if (isAggressiveExit) {
+      const { getPolymarketTokenBalance } = await import('@/lib/clients/polymarket-trading');
+      const onChain = await getPolymarketTokenBalance(privateKey, req.market.externalId);
+      if (onChain == null || onChain < finalSize * 0.5) {
+        await db.update(realTrades).set({ status: 'rejected' }).where(eq(realTrades.id, trade.id));
+        await logAudit('real_exit_skipped_no_shares', {
+          tradeId: trade.id,
+          onChain,
+          requestedSize: finalSize,
+          marketExternalId: req.market.externalId,
+        });
+        return {
+          success: false,
+          error: `No on-chain shares to sell (have ${onChain ?? 0}, need ~${finalSize})`,
+        };
+      }
+    }
+
     const takeProfitExit =
       isAggressiveExit &&
       req.side === 'SELL' &&

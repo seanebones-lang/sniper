@@ -19,7 +19,7 @@ import { fetchPolymarketOrderBook } from '@/lib/clients/polymarket';
 import { getPolymarketPrivateKey, getPolymarketTokenBalance } from '@/lib/clients/polymarket-trading';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
-const STALE_BUY_MS = 25 * 60 * 1000;
+const STALE_BUY_MS = 10 * 60 * 1000;
 /** Micro account: unblock exit retries faster when a limit SELL rests unfilled. */
 const STALE_SELL_MS = 15 * 60 * 1000;
 const REJECT_STORM_WINDOW_MS = 60 * 60 * 1000;
