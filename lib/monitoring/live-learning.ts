@@ -77,14 +77,26 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
 
   if (blocked.size > 0) {
     patches.blockedKinds = [...blocked];
-    const allowed = prev.allowedKinds ?? ['short-crypto'];
+    // allowedKinds === null → no kind filter (spread-scalper / all markets). Never
+    // pause entries for kind blocks in that mode — only quick-flip uses allow-lists.
+    const allowed =
+      prev.allowedKinds === undefined ? ['short-crypto'] : prev.allowedKinds;
     const allAllowedBlocked =
-      allowed.length > 0 && allowed.every((k) => blocked.has(k));
+      allowed != null &&
+      allowed.length > 0 &&
+      allowed.every((k) => blocked.has(k));
     if (allAllowedBlocked) {
       patches.entriesPaused = true;
       patches.entriesPausedReason =
         'All allow-listed market kinds blocked — exit-only until manual review';
       reasons.push('pause new entries (all allow-listed kinds blocked)');
+    } else if (
+      prev.entriesPaused &&
+      prev.entriesPausedReason?.includes('allow-listed market kinds blocked')
+    ) {
+      patches.entriesPaused = false;
+      patches.entriesPausedReason = undefined;
+      reasons.push('resume entries (kind allow-list no longer fully blocked)');
     }
   }
 

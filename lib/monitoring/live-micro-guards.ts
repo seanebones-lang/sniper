@@ -111,10 +111,13 @@ export async function evaluateLiveMicroGuards(
   const lossLimit = -sessionStart * LIVE_MICRO_DAILY_LOSS_PCT;
   if (attr.totalPnlUsd <= lossLimit && attr.roundTrips >= 2) {
     const reason = `24h PnL $${attr.totalPnlUsd.toFixed(2)} breached −${(LIVE_MICRO_DAILY_LOSS_PCT * 100).toFixed(0)}% of session start $${sessionStart.toFixed(2)}`;
-    await saveLiveIntelligenceState(
-      { entriesPaused: true, entriesPausedReason: reason },
-      'micro daily loss halt',
-    );
+    // Avoid re-writing pause every runner cycle once already halted.
+    if (!intel.entriesPaused) {
+      await saveLiveIntelligenceState(
+        { entriesPaused: true, entriesPausedReason: reason },
+        'micro daily loss halt',
+      );
+    }
     return {
       entriesAllowed: false,
       code: 'micro_daily_loss_halt',
