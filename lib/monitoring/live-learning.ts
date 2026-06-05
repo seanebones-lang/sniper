@@ -84,7 +84,7 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
     const allAllowedBlocked =
       allowed != null &&
       allowed.length > 0 &&
-      allowed.every((k) => blocked.has(k));
+      allowed.every((k) => blocked.has(k as FastMovingKind));
     if (allAllowedBlocked) {
       patches.entriesPaused = true;
       patches.entriesPausedReason =

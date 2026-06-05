@@ -109,7 +109,12 @@ export async function evaluateLiveMicroGuards(
 
   const attr = await analyzeLiveRoundTrips(24);
   const lossLimit = -sessionStart * LIVE_MICRO_DAILY_LOSS_PCT;
-  if (attr.totalPnlUsd <= lossLimit && attr.roundTrips >= 2) {
+  const unrestrictedKinds = intel.allowedKinds === null;
+  if (
+    !unrestrictedKinds &&
+    attr.totalPnlUsd <= lossLimit &&
+    attr.roundTrips >= 2
+  ) {
     const reason = `24h PnL $${attr.totalPnlUsd.toFixed(2)} breached −${(LIVE_MICRO_DAILY_LOSS_PCT * 100).toFixed(0)}% of session start $${sessionStart.toFixed(2)}`;
     // Avoid re-writing pause every runner cycle once already halted.
     if (!intel.entriesPaused) {

@@ -51,7 +51,11 @@ async function main() {
     state.entriesPaused === true &&
     String(state.entriesPausedReason ?? '').includes('allow-listed market kinds blocked');
 
-  if (FIX && kindPause) {
+  const legacyLossPause =
+    state.entriesPaused === true &&
+    String(state.entriesPausedReason ?? '').includes('breached −');
+
+  if (FIX && (kindPause || legacyLossPause)) {
     const fix = await patchIntelligence({
       clearEntriesPaused: true,
       allowedKinds: null,
