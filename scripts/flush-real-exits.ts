@@ -15,6 +15,8 @@ import type { StrategyConfig } from '../lib/strategies/types';
 import { placeRealOrder } from '../lib/execution/real-executor';
 import { resolveAskOnlySellLimitPrice } from '../lib/execution/exit-pricing';
 import { ensureMarketRecord } from '../lib/markets';
+import { roundPolymarketShares } from '../lib/risk/sizing';
+import { getPolymarketPrivateKey, getPolymarketTokenBalance } from '../lib/clients/polymarket-trading';
 
 const DRY_RUN = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
 
@@ -77,6 +79,7 @@ async function main() {
         config,
         Date.now(),
         market.endDate,
+        market,
       );
 
       const label = market.question?.slice(0, 55) || pos.marketExternalId.slice(0, 14);
@@ -92,7 +95,16 @@ async function main() {
       const sellPrice =
         book?.bids?.[0]?.price ??
         resolveAskOnlySellLimitPrice(book, currentPrice);
-      const size = Math.floor(pos.netSize);
+      let size = roundPolymarketShares(pos.netSize);
+      if (pos.platform === 'polymarket') {
+        const pk = getPolymarketPrivateKey();
+        if (pk) {
+          const onChain = await getPolymarketTokenBalance(pk, pos.marketExternalId);
+          if (onChain != null && onChain > 0) {
+            size = roundPolymarketShares(Math.min(size, onChain));
+          }
+        }
+      }
       if (size <= 0) {
         skipped++;
         continue;
