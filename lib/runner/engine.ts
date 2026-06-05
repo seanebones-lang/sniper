@@ -921,29 +921,24 @@ export async function runOnce() {
         let found = markets.find(
           (m) => m.platform === pos.platform && m.externalId === pos.marketExternalId,
         );
-        if (!found && pos.platform === 'polymarket') {
+        if (pos.platform === 'polymarket') {
           try {
             const { fetchPolymarketMarketByTokenId } = await import('@/lib/clients/polymarket');
-            found =
-              (await fetchPolymarketMarketByTokenId(pos.marketExternalId)) ??
-              ({
-                platform: 'polymarket',
-                externalId: pos.marketExternalId,
-                question: '',
-                status: 'open',
-                volume: 0,
-                updatedAt: new Date().toISOString(),
-              } as Market);
+            const fetched = await fetchPolymarketMarketByTokenId(pos.marketExternalId);
+            if (fetched) found = fetched;
           } catch {
-            found = {
-              platform: 'polymarket',
-              externalId: pos.marketExternalId,
-              question: '',
-              status: 'open',
-              volume: 0,
-              updatedAt: new Date().toISOString(),
-            } as Market;
+            // keep pool row if any
           }
+        }
+        if (!found) {
+          found = {
+            platform: pos.platform,
+            externalId: pos.marketExternalId,
+            question: '',
+            status: 'open',
+            volume: 0,
+            updatedAt: new Date().toISOString(),
+          } as Market;
         }
         if (found) {
           relevantMarkets.push(found);

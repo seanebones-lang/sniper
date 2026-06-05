@@ -13,6 +13,10 @@ import type { Market } from '@/lib/types';
 import type { CycleBookCache } from '@/lib/runner/book-cache';
 import type { PaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { resolveExitMarkPrice } from '@/lib/markets/exit-mark-price';
+import {
+  isLiveResolutionCandidate,
+  LIVE_MAX_RESOLUTION_HOURS,
+} from '@/lib/markets/fast-moving';
 
 export interface QueuedRunnerSignal {
   stratRow: { id: string; name: string; type: string; paperOnly: boolean | null };
@@ -120,17 +124,28 @@ export async function evaluateMarketForStrategy(
   let isExitSignal = false;
 
   if (openPos && currentPrice) {
-    signal = evaluateExitSignal(
-      openPos,
-      currentPrice,
-      book?.spread,
-      book?.mid ?? currentPrice,
-      config,
-      Date.now(),
-      market.endDate,
-      market,
-    );
-    isExitSignal = signal?.action === 'SELL';
+    if (config.tradingGoal === 'spread-capture' && !isLiveResolutionCandidate(market)) {
+      signal = {
+        action: 'SELL',
+        price: currentPrice,
+        size: Math.floor(openPos.netSize),
+        reason: `Policy exit — market outside ${LIVE_MAX_RESOLUTION_HOURS}h resolution window`,
+        confidence: 0.92,
+      };
+      isExitSignal = true;
+    } else {
+      signal = evaluateExitSignal(
+        openPos,
+        currentPrice,
+        book?.spread,
+        book?.mid ?? currentPrice,
+        config,
+        Date.now(),
+        market.endDate,
+        market,
+      );
+      isExitSignal = signal?.action === 'SELL';
+    }
   }
 
   if (!signal) {
