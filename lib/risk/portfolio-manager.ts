@@ -265,7 +265,7 @@ export class PortfolioRiskManager {
     const minUsd = minRealOrderUsd(this.currentBankroll);
     const microAccount = this.currentBankroll <= 25;
     const edgeScore = params.edge * params.confidence;
-    const edgeOk = microAccount ? edgeScore >= 0.01 : edgeScore >= 0.08;
+    const edgeOk = microAccount ? edgeScore >= 0.006 : edgeScore >= 0.08;
     if (
       !params.isExit &&
       finalSize < minUsd &&

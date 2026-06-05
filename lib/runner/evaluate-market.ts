@@ -218,7 +218,14 @@ export async function evaluateMarketForStrategy(
       isExit: false,
     });
 
-    const minAllowedUsd = isQuickFlip ? 0.5 : 5;
+    const isLiveMicroBuy =
+      signal.action === 'BUY' &&
+      stratRow.paperOnly === false &&
+      liveBalanceUsd != null &&
+      liveBalanceUsd > 0 &&
+      liveBalanceUsd <= 25;
+
+    const minAllowedUsd = isQuickFlip ? 0.5 : isLiveMicroBuy ? 1 : 5;
     if (riskDecision.allowedSize < minAllowedUsd) {
       return null;
     }
@@ -232,14 +239,11 @@ export async function evaluateMarketForStrategy(
     const riskCapUsd =
       riskDecision.allowedSize * allocatorMultiplier * healthMultiplier * globalRiskMultiplier;
 
-    const isLiveMicroBuy =
-      isQuickFlip && signal.action === 'BUY' && stratRow.paperOnly === false;
     // Use strategy max ($1) capped by spendable cash — not a % haircut that
     // drops FOK market BUYs below Polymarket's $1 minimum.
-    const liveStakeCap =
-      isLiveMicroBuy && liveBalanceUsd != null && liveBalanceUsd > 0
-        ? Math.min(config.maxSizeUsd ?? 1, liveBalanceUsd * 0.92)
-        : (config.maxSizeUsd ?? 1);
+    const liveStakeCap = isLiveMicroBuy
+      ? Math.min(config.maxSizeUsd ?? 1, liveBalanceUsd! * 0.92)
+      : (config.maxSizeUsd ?? 1);
     const buyCapUsd = isLiveMicroBuy
       ? Math.min(liveStakeCap, riskCapUsd)
       : riskCapUsd;
@@ -249,7 +253,7 @@ export async function evaluateMarketForStrategy(
       riskCapUsd: buyCapUsd,
       price: signal.price,
       isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
-      minSharesUsd: isQuickFlip ? 0.5 : 1,
+      minSharesUsd: isQuickFlip || isLiveMicroBuy ? 0.5 : 1,
     });
 
     if (finalSize <= 0) return null;
