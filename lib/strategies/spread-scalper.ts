@@ -16,10 +16,13 @@ export const SpreadScalper: Strategy = {
     const spreadPct = (spread / mid) * 100;
 
     const minSpread = config.minSpreadPct ?? 1.8;
+    const maxSpread = config.maxSpreadPct ?? 35;
 
-    if (spreadPct >= minSpread) {
-      // Snipe the cheaper side (slightly better than mid for taker edge)
-      const targetPrice = book.bids[0].price * 0.998;
+    if (spreadPct >= minSpread && spreadPct <= maxSpread) {
+      // Live spread-capture crosses at the ask so FOK market BUYs actually fill.
+      // Paper / passive mode posts below the bid for simulation realism.
+      const takerEntry = config.tradingGoal === 'spread-capture';
+      const targetPrice = takerEntry ? book.asks[0].price : book.bids[0].price * 0.998;
       const maxShares = Math.max(1, Math.ceil(config.maxSizeUsd / targetPrice));
 
       return {

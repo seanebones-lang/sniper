@@ -61,6 +61,9 @@ const LIVE_SPORTS_KEYWORDS =
 /** Quick-flip only trades markets resolving within this window (hours). */
 export const QUICK_FLIP_MAX_RESOLUTION_HOURS = 3;
 
+/** All live autonomous entries must resolve within this window (hours). */
+export const LIVE_MAX_RESOLUTION_HOURS = 24;
+
 function matchPatterns(
   text: string,
   patterns: Array<{ re: RegExp; label: string }>,
@@ -124,6 +127,20 @@ export function isQuickFlipCandidate(market: Market): boolean {
   if (!market.endDate) return false;
   if (isLongDatedOutright(market)) return false;
   return resolvesWithinHours(market, QUICK_FLIP_MAX_RESOLUTION_HOURS);
+}
+
+/**
+ * Live entry eligibility: exchange endDate required, not a long-dated outright,
+ * resolves within LIVE_MAX_RESOLUTION_HOURS.
+ */
+export function isLiveResolutionCandidate(market: Market): boolean {
+  if (!market.endDate) return false;
+  if (isLongDatedOutright(market)) return false;
+  return resolvesWithinHours(market, LIVE_MAX_RESOLUTION_HOURS);
+}
+
+export function filterLiveResolutionMarkets(markets: Market[]): Market[] {
+  return markets.filter(isLiveResolutionCandidate);
 }
 
 /**

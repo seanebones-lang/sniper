@@ -128,6 +128,7 @@ export async function evaluateMarketForStrategy(
       config,
       Date.now(),
       market.endDate,
+      market,
     );
     isExitSignal = signal?.action === 'SELL';
   }

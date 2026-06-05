@@ -14,12 +14,15 @@ import {
   fetchKalshiMarketsClosingWithinHours,
 } from './clients/kalshi';
 import { ensureMarketRecord, ensureMarket } from './db/ensure-market';
-import { QUICK_FLIP_MAX_RESOLUTION_HOURS } from './markets/fast-moving';
+import { QUICK_FLIP_MAX_RESOLUTION_HOURS, LIVE_MAX_RESOLUTION_HOURS, filterLiveResolutionMarkets } from './markets/fast-moving';
 
 let cachedMarkets: Market[] | null = null;
 let lastFetch = 0;
 let cachedQuickFlip: Market[] | null = null;
 let lastQuickFlipFetch = 0;
+let cachedLiveNearTerm: Market[] | null = null;
+let lastLiveNearTermFetch = 0;
+const LIVE_NEAR_TERM_CACHE_TTL = 20_000;
 const CACHE_TTL = 25_000; // ~25s
 const QUICK_FLIP_CACHE_TTL = 20_000; // refresh fast markets slightly faster
 const FETCH_TIMEOUT_MS = 15_000;
@@ -129,6 +132,45 @@ export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
   cachedQuickFlip = merged;
   lastQuickFlipFetch = Date.now();
   return merged;
+}
+
+/** Live runner pool: markets resolving within LIVE_MAX_RESOLUTION_HOURS (24h). */
+export async function getMarketsForLiveNearTerm(force = false): Promise<Market[]> {
+  const now = Date.now();
+  if (!force && cachedLiveNearTerm && now - lastLiveNearTermFetch < LIVE_NEAR_TERM_CACHE_TTL) {
+    return cachedLiveNearTerm;
+  }
+
+  const seen = new Set<string>();
+  const merged: Market[] = [];
+
+  const add = (m: Market) => {
+    const key = `${m.platform}:${m.externalId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(m);
+  };
+
+  try {
+    const nearTermPoly = await withTimeout(
+      fetchPolymarketMarketsResolvingWithinHours(LIVE_MAX_RESOLUTION_HOURS, 120),
+      'Polymarket 24h near-term',
+    );
+    for (const m of nearTermPoly) add(m);
+  } catch (err) {
+    console.warn('[markets] Polymarket 24h near-term fetch failed (non-fatal):', err);
+  }
+
+  try {
+    const liveSports = await withTimeout(fetchPolymarketLiveSportsMarkets(), 'Polymarket live sports');
+    for (const m of liveSports) add(m);
+  } catch (err) {
+    console.warn('[markets] Live sports fetch failed (non-fatal):', err);
+  }
+
+  cachedLiveNearTerm = filterLiveResolutionMarkets(merged);
+  lastLiveNearTermFetch = Date.now();
+  return cachedLiveNearTerm;
 }
 
 export async function getMarket(platform: 'polymarket' | 'kalshi', externalId: string) {

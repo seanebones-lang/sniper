@@ -8,7 +8,7 @@
 
 import { db, signals, auditEvents, strategies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
-import { getAllMarkets, getMarketsForQuickFlip } from '@/lib/markets';
+import { getAllMarkets, getMarketsForQuickFlip, getMarketsForLiveNearTerm } from '@/lib/markets';
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
@@ -20,7 +20,7 @@ import { countRunnerSessionStats } from '@/lib/runner/session-counters';
 import { getRealOpenPositionsByStrategy } from '@/lib/execution/real-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
-import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
+import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS, filterLiveResolutionMarkets, LIVE_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { getRecentSnapshotsBatch } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -53,6 +53,31 @@ function resolveQuickFlipMarketLimit(riskMode: RiskMode, liveMicro: boolean): nu
   if (riskMode === 'EMERGENCY') return 8;
   if (riskMode === 'DEFENSIVE') return liveMicro ? 12 : 16;
   return liveMicro ? 24 : 40;
+}
+
+/** Spread-capture scans more markets and prioritizes the widest books. */
+const SPREAD_CAPTURE_EVAL_LIMIT = 50;
+
+function isSpreadCaptureStrategy(
+  config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
+  type: string,
+): boolean {
+  return config.tradingGoal === 'spread-capture' || type === 'spread-scalper';
+}
+
+function rankMarketsBySpreadWidth(markets: Market[], bookCache: CycleBookCache): Market[] {
+  return [...markets]
+    .map((m) => {
+      const book = bookCache.getBook(m.platform, m.externalId);
+      if (!book?.bids?.length || !book?.asks?.length) return { m, spreadPct: -1 };
+      const spread = book.spread ?? book.asks[0].price - book.bids[0].price;
+      const mid = book.mid ?? (book.asks[0].price + book.bids[0].price) / 2;
+      const spreadPct = mid > 0 ? (spread / mid) * 100 : -1;
+      return { m, spreadPct };
+    })
+    .filter((x) => x.spreadPct > 0)
+    .sort((a, b) => b.spreadPct - a.spreadPct)
+    .map((x) => x.m);
 }
 
 export interface ActiveStrategyProfile {
@@ -501,9 +526,20 @@ export async function runOnce() {
     return cfg.tradingGoal === 'quick-flip' || s.type === 'live-quick-flip' || cfg.liveMarketsOnly;
   });
 
+  const realEnabledForPool = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+  const hasLiveSpreadCapture =
+    realEnabledForPool &&
+    activeStrategies.some((s) => {
+      if (s.paperOnly) return false;
+      const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
+      return cfg.tradingGoal === 'spread-capture' || s.type === 'spread-scalper';
+    });
+
   const markets = hasQuickFlipStrategy
     ? await getMarketsForQuickFlip()
-    : await getAllMarkets();
+    : hasLiveSpreadCapture
+      ? await getMarketsForLiveNearTerm()
+      : await getAllMarkets();
 
   // === Calculate global and per-market protection factors upfront ===
   const recentQuality = executionManager.getRecentExecutionQuality(30);
@@ -630,7 +666,12 @@ export async function runOnce() {
     const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
     const isQuickFlipStrat =
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
-    const stratLimit = isQuickFlipStrat ? quickFlipLimit : marketEvaluationLimit;
+    const isSpreadCaptureStrat = isSpreadCaptureStrategy(config, stratRow.type);
+    const stratLimit = isQuickFlipStrat
+      ? quickFlipLimit
+      : isSpreadCaptureStrat
+        ? SPREAD_CAPTURE_EVAL_LIMIT
+        : marketEvaluationLimit;
     const isLiveStrat = realEnabled && stratRow.paperOnly === false;
 
     if (isLiveStrat && skipLiveEntryScan) {
@@ -641,6 +682,8 @@ export async function runOnce() {
     if (isQuickFlipStrat) {
       openPool = filterQuickFlipMarkets(openPool);
       openPool = openPool.length > 0 ? rankQuickFlipMarkets(openPool) : [];
+    } else if (isSpreadCaptureStrat && isLiveStrat) {
+      openPool = filterLiveResolutionMarkets(openPool);
     }
     for (const m of openPool.slice(0, stratLimit)) {
       evalMarketsToFetch.push({ platform: m.platform, externalId: m.externalId });
@@ -841,12 +884,25 @@ export async function runOnce() {
       if (openPool.length === 0) {
         console.warn(`[Runner] Quick-flip "${stratRow.name}": no markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h this cycle`);
       }
+    } else if (isSpreadCaptureStrategy(config, stratRow.type)) {
+      stratMarketLimit = SPREAD_CAPTURE_EVAL_LIMIT;
+      if (realEnabled && stratRow.paperOnly === false) {
+        openPool = filterLiveResolutionMarkets(openPool);
+        if (openPool.length === 0 && !skipReason) {
+          skipReason = `No markets resolving within ${LIVE_MAX_RESOLUTION_HOURS}h (pool: ${markets.length} fetched)`;
+        }
+      }
     }
 
     const relevantMarkets =
       realEnabled && stratRow.paperOnly === false && skipLiveEntryScan
         ? []
-        : openPool.slice(0, stratMarketLimit);
+        : isSpreadCaptureStrategy(config, stratRow.type)
+          ? rankMarketsBySpreadWidth(
+              openPool.slice(0, SPREAD_CAPTURE_EVAL_LIMIT),
+              bookCache,
+            ).slice(0, stratMarketLimit)
+          : openPool.slice(0, stratMarketLimit);
     marketsEvaluatedThisCycle = Math.max(marketsEvaluatedThisCycle, relevantMarkets.length);
 
     if (
@@ -1163,7 +1219,9 @@ export async function runOnce() {
             confidence: q.signal.confidence,
             isExit: q.isExitSignal,
             book: q.book ?? undefined,
-            takeLiquidity: q.isQuickFlip && q.signal.action === 'BUY',
+            takeLiquidity:
+              q.signal.action === 'BUY' &&
+              (q.isQuickFlip || q.config.tradingGoal === 'spread-capture'),
             maxNotionalUsd: orderMaxNotional,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
             signalId,

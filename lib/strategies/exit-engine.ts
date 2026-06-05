@@ -1,6 +1,7 @@
 import type { StrategySignal } from './types';
 import type { ResolvedStrategyConfig } from './run-profile';
-import { hoursUntilResolution } from '../markets/fast-moving';
+import { hoursUntilResolution, isLongDatedOutright, LIVE_MAX_RESOLUTION_HOURS } from '../markets/fast-moving';
+import type { Market } from '../types';
 
 export interface StrategyOpenPosition {
   platform: string;
@@ -40,9 +41,45 @@ export function evaluateExitSignal(
   nowMs: number = Date.now(),
   /** Market resolution time — enables pre-expiry safety exit for quick-flip */
   marketEndDate?: string | Date | null,
+  /** Market metadata for live policy exits (24h resolution cap) */
+  market?: Pick<Market, 'question' | 'endDate'>,
 ): StrategySignal | null {
   if (position.netSize <= 0.01 || !currentPrice || currentPrice <= 0) {
     return null;
+  }
+
+  // Live spread-capture policy: never hold markets outside the 24h resolution window.
+  if (config.tradingGoal === 'spread-capture') {
+    if (market && isLongDatedOutright(market as Market)) {
+      return {
+        action: 'SELL',
+        price: currentPrice,
+        size: Math.floor(position.netSize),
+        reason: 'Policy exit — long-dated market (live max 24h resolution)',
+        confidence: 0.9,
+      };
+    }
+    const endRef = marketEndDate ?? market?.endDate;
+    if (endRef) {
+      const hoursLeft = hoursUntilResolution({ endDate: endRef } as Market, nowMs);
+      if (hoursLeft == null || hoursLeft > LIVE_MAX_RESOLUTION_HOURS) {
+        return {
+          action: 'SELL',
+          price: currentPrice,
+          size: Math.floor(position.netSize),
+          reason: `Policy exit — resolution ${hoursLeft != null ? `${hoursLeft.toFixed(1)}h` : 'unknown'} away (max ${LIVE_MAX_RESOLUTION_HOURS}h)`,
+          confidence: 0.9,
+        };
+      }
+    } else if (market && !market.endDate) {
+      return {
+        action: 'SELL',
+        price: currentPrice,
+        size: Math.floor(position.netSize),
+        reason: 'Policy exit — no resolution date (live max 24h)',
+        confidence: 0.88,
+      };
+    }
   }
 
   const entry = position.avgEntryPrice;

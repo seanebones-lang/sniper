@@ -6,6 +6,12 @@ import type { ResolvedStrategyConfig } from '@/lib/strategies/run-profile';
 import { assessFastMovingMarket } from '@/lib/markets/fast-moving';
 import type { FastMovingKind } from '@/lib/markets/fast-moving';
 import {
+  hoursUntilResolution,
+  isLiveResolutionCandidate,
+  isLongDatedOutright,
+  LIVE_MAX_RESOLUTION_HOURS,
+} from '@/lib/markets/fast-moving';
+import {
   getLiveFilterOverrides,
   isKindBlockedByIntelligence,
   isTokenOnCooldown,
@@ -36,6 +42,13 @@ export function usesQuickFlipLiveGates(
   strategyType?: string,
 ): boolean {
   return config.tradingGoal === 'quick-flip' || strategyType === 'live-quick-flip';
+}
+
+export function usesSpreadCaptureLiveGates(
+  config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
+  strategyType?: string,
+): boolean {
+  return config.tradingGoal === 'spread-capture' || strategyType === 'spread-scalper';
 }
 
 export type LiveEntryGateResult =
@@ -95,6 +108,19 @@ export async function checkLiveEntryGates(
 
   if (await isTokenOnCooldown(market.externalId)) {
     return deny('token_cooldown', 'Token cooldown after recent round-trip');
+  }
+
+  if (!isLiveResolutionCandidate(market)) {
+    const hrs = hoursUntilResolution(market);
+    let detail = 'missing endDate';
+    if (isLongDatedOutright(market)) detail = 'long-dated outright';
+    else if (hrs != null && hrs > LIVE_MAX_RESOLUTION_HOURS) {
+      detail = `resolves in ${hrs.toFixed(1)}h`;
+    } else if (hrs != null && hrs <= 0) detail = 'already closed';
+    return deny(
+      'resolution_too_far',
+      `Live entries require resolution within ${LIVE_MAX_RESOLUTION_HOURS}h — ${detail}`,
+    );
   }
 
   const filters = await resolveFilters();
@@ -164,6 +190,17 @@ export async function checkLiveEntryGates(
   }
 
   const bidSize = book?.bids?.[0]?.size ?? 0;
+  const spreadCaptureProfile = usesSpreadCaptureLiveGates(config, strategyType);
+
+  // Spread-capture buys the cheap side on wide books — quick-flip bid-depth rules
+  // (priced vs ask) reject almost every wide-spread candidate.
+  if (spreadCaptureProfile) {
+    if (bid <= 0 || bidSize < 1) {
+      return deny('no_bid', 'No bid to exit');
+    }
+    return { allowed: true };
+  }
+
   const sharesNeeded = Math.max(1, Math.ceil(stakeUsd / ask));
   if (bid <= 0 || bidSize < sharesNeeded) {
     return deny('no_bid_depth', 'Insufficient bid depth for exit');

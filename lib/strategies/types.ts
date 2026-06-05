@@ -31,6 +31,7 @@ export interface StrategyConfig {
 
   // Strategy-specific
   minSpreadPct?: number;       // for spread-scalper
+  maxSpreadPct?: number;       // for spread-scalper — skip broken books
   entryThreshold?: number;     // for threshold strategy
   referenceType?: 'mid' | 'last' | 'vwap';
 }
