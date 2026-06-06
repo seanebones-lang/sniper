@@ -51,7 +51,8 @@ export async function evaluateBtcSniper(
 
   const bid = book.bids?.[0]?.price ?? 0;
   const bidSize = book.bids?.[0]?.size ?? 0;
-  if (bid <= 0 || bidSize < sharesNeeded) return null;
+  // Micro: require any bid to exit; don't demand full share depth pre-entry
+  if (bid <= 0 || bidSize < 1) return null;
 
   const closes = await fetchBtcUsdtCloses(30);
   if (!closes || closes.length < 8) return null;
@@ -78,10 +79,12 @@ export async function evaluateBtcSniper(
 
   const signalParams: BtcSignalParams = {
     rsiPeriod: config.rsiPeriod ?? 7,
-    rsiBuyUpMax: config.rsiBuyUpMax ?? 35,
-    rsiBuyDownMin: config.rsiBuyDownMin ?? 65,
-    minMomentumPct: config.minMomentumPct ?? 0.4,
-    maxImpliedPrice: config.maxImpliedPrice ?? 0.5,
+    rsiBuyUpMax: config.rsiBuyUpMax ?? 45,
+    rsiBuyDownMin: config.rsiBuyDownMin ?? 55,
+    minMomentumPct: config.minMomentumPct ?? 0.12,
+    maxImpliedPrice: config.maxImpliedPrice ?? 0.58,
+    cheapImpliedMax: config.cheapImpliedMax ?? 0.42,
+    cheapMinMomentumPct: config.cheapMinMomentumPct ?? 0.04,
   };
 
   const parent = getOrComputeParentSignal(
@@ -96,14 +99,14 @@ export async function evaluateBtcSniper(
   if (parent.signal === 'BUY_DOWN' && market.outcome !== 'Down') return null;
   if (!parent.signal) return null;
 
-  const targetPct = config.targetProfitPct ?? 12;
+  const targetPct = config.targetProfitPct ?? 8;
   const targetPrice = Math.min(0.99, ask * (1 + targetPct / 100));
 
   return {
     action: 'BUY',
     price: ask,
     size: sharesNeeded,
-    reason: `BTC sniper ${parent.signal} RSI=${parent.rsi?.toFixed(1) ?? '?'} mom=${parent.momentum?.toFixed(2) ?? '?'}% up=${upPrice.toFixed(3)} ${windowMin}m`,
+    reason: `BTC sniper ${parent.signal} [${parent.tier}] RSI=${parent.rsi?.toFixed(1) ?? '?'} mom=${parent.momentum?.toFixed(2) ?? '?'}% up=${upPrice.toFixed(3)} ${windowMin}m`,
     confidence: Math.min(0.88, 0.55 + Math.abs((parent.rsi ?? 50) - 50) / 100),
     edge: (targetPrice - ask) / ask,
   };

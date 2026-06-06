@@ -26,6 +26,8 @@ export interface ResolvedStrategyConfig extends StrategyConfig {
   rsiBuyDownMin?: number;
   minMomentumPct?: number;
   maxImpliedPrice?: number;
+  cheapImpliedMax?: number;
+  cheapMinMomentumPct?: number;
 }
 
 const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
@@ -107,22 +109,24 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
   },
   'btc-momentum': {
     maxSizeUsd: 1,
-    targetProfitPct: 12,
-    stopLossPct: 8,
-    maxHoldSeconds: 120,
-    minEdgeAfterSpreadPct: 4,
+    targetProfitPct: 8,
+    stopLossPct: 6,
+    maxHoldSeconds: 60,
+    minEdgeAfterSpreadPct: 2,
     allowScaleIn: false,
-    cooldownSeconds: 10,
+    cooldownSeconds: 5,
     liveMarketsOnly: true,
     minFillProbability: 0.4,
     aggressiveEntryFills: true,
     aggressiveExitFills: true,
     btcWindowFilter: 'both',
     rsiPeriod: 7,
-    rsiBuyUpMax: 35,
-    rsiBuyDownMin: 65,
-    minMomentumPct: 0.4,
-    maxImpliedPrice: 0.5,
+    rsiBuyUpMax: 45,
+    rsiBuyDownMin: 55,
+    minMomentumPct: 0.12,
+    maxImpliedPrice: 0.58,
+    cheapImpliedMax: 0.42,
+    cheapMinMomentumPct: 0.04,
   },
 };
 
@@ -203,17 +207,19 @@ export function normalizeStrategyConfig(
     next.tradingStyle = 'aggressive';
     next.liveMarketsOnly = true;
     next.maxSizeUsd = next.maxSizeUsd ?? 1;
-    next.targetProfitPct = next.targetProfitPct ?? 12;
-    next.stopLossPct = next.stopLossPct ?? 8;
-    next.maxHoldSeconds = next.maxHoldSeconds ?? 120;
-    next.cooldownSeconds = next.cooldownSeconds ?? 10;
-    next.minEdgeAfterSpreadPct = 4;
+    next.targetProfitPct = next.targetProfitPct ?? 8;
+    next.stopLossPct = next.stopLossPct ?? 6;
+    next.maxHoldSeconds = next.maxHoldSeconds ?? 60;
+    next.cooldownSeconds = next.cooldownSeconds ?? 5;
+    next.minEdgeAfterSpreadPct = 2;
     next.btcWindowFilter = next.btcWindowFilter ?? 'both';
     next.rsiPeriod = next.rsiPeriod ?? 7;
-    next.rsiBuyUpMax = next.rsiBuyUpMax ?? 35;
-    next.rsiBuyDownMin = next.rsiBuyDownMin ?? 65;
-    next.minMomentumPct = next.minMomentumPct ?? 0.4;
-    next.maxImpliedPrice = next.maxImpliedPrice ?? 0.5;
+    next.rsiBuyUpMax = next.rsiBuyUpMax ?? 45;
+    next.rsiBuyDownMin = next.rsiBuyDownMin ?? 55;
+    next.minMomentumPct = next.minMomentumPct ?? 0.12;
+    next.maxImpliedPrice = next.maxImpliedPrice ?? 0.58;
+    next.cheapImpliedMax = next.cheapImpliedMax ?? 0.42;
+    next.cheapMinMomentumPct = next.cheapMinMomentumPct ?? 0.04;
   }
   return next;
 }

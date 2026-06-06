@@ -36,8 +36,8 @@ export interface StrategyConfig {
   rsiBuyDownMin?: number;
   minMomentumPct?: number;
   maxImpliedPrice?: number;
-
-  // Strategy-specific
+  cheapImpliedMax?: number;
+  cheapMinMomentumPct?: number;
   minSpreadPct?: number;       // for spread-scalper
   maxSpreadPct?: number;       // for spread-scalper — skip broken books
   entryThreshold?: number;     // for threshold strategy

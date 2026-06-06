@@ -12,17 +12,19 @@ const BTC_SNIPER_CONFIG = normalizeStrategyConfig('btc-sniper', {
   tradingStyle: 'aggressive',
   liveMarketsOnly: true,
   maxSizeUsd: 1,
-  targetProfitPct: 12,
-  stopLossPct: 8,
-  maxHoldSeconds: 120,
-  cooldownSeconds: 10,
+  targetProfitPct: 8,
+  stopLossPct: 6,
+  maxHoldSeconds: 60,
+  cooldownSeconds: 5,
   btcWindowFilter: 'both',
   rsiPeriod: 7,
-  rsiBuyUpMax: 35,
-  rsiBuyDownMin: 65,
-  minMomentumPct: 0.4,
-  maxImpliedPrice: 0.5,
-  minEdgeAfterSpreadPct: 4,
+  rsiBuyUpMax: 45,
+  rsiBuyDownMin: 55,
+  minMomentumPct: 0.12,
+  maxImpliedPrice: 0.58,
+  cheapImpliedMax: 0.42,
+  cheapMinMomentumPct: 0.04,
+  minEdgeAfterSpreadPct: 2,
 });
 
 async function main() {
@@ -47,8 +49,8 @@ async function main() {
         paperOnly: false,
         config: BTC_SNIPER_CONFIG,
         maxSizeUsd: '1',
-        targetProfitPct: '12',
-        cooldownSeconds: 10,
+        targetProfitPct: '8',
+        cooldownSeconds: 5,
         updatedAt: new Date(),
       })
       .where(eq(strategies.id, existing.id));
@@ -63,8 +65,8 @@ async function main() {
         paperOnly: false,
         config: BTC_SNIPER_CONFIG,
         maxSizeUsd: '1',
-        targetProfitPct: '12',
-        cooldownSeconds: 10,
+        targetProfitPct: '8',
+        cooldownSeconds: 5,
       })
       .returning({ id: strategies.id });
     rowId = inserted!.id;
@@ -76,7 +78,7 @@ async function main() {
       blockedKinds: [],
       entriesPaused: false,
       entriesPausedReason: undefined,
-      tokenCooldownMs: 10 * 60 * 1000,
+      tokenCooldownMs: 3 * 60 * 1000,
     },
     'enable btc sniper live',
   );

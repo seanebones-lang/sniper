@@ -159,7 +159,7 @@ export async function checkLiveEntryGates(
       return deny('sports_win_rate', 'Sports live entries blocked — 24h win rate below 25%');
     }
 
-    if (assessment.score < filters.minMarketScore) {
+    if (assessment.score < filters.minMarketScore && !btcSniperProfile) {
       return deny(
         'low_market_score',
         `Market score ${assessment.score} < min ${filters.minMarketScore}`,
@@ -213,6 +213,13 @@ export async function checkLiveEntryGates(
   }
 
   const sharesNeeded = Math.max(1, Math.ceil(stakeUsd / ask));
+  if (btcSniperProfile) {
+    if (bid <= 0 || bidSize < 1) {
+      return deny('no_bid', 'No bid to exit');
+    }
+    return { allowed: true };
+  }
+
   if (bid <= 0 || bidSize < sharesNeeded) {
     return deny('no_bid_depth', 'Insufficient bid depth for exit');
   }
