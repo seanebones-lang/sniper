@@ -129,8 +129,19 @@ export function evaluateExitSignal(
     };
   }
 
-  // Take profit (percentage — used by non-quick-flip goals)
-  if (!isQuickFlip && profitPct >= target) {
+  // BTC momentum: hard stop — cut fast (cycles can be 30–90s on micro)
+  if (isBtcMomentum && profitPct <= -Math.min(stop, 4)) {
+    return {
+      action: 'SELL',
+      price: currentPrice,
+      size: Math.floor(position.netSize),
+      reason: `BTC sniper stop ${profitPct.toFixed(2)}% (limit -${Math.min(stop, 4)}%)`,
+      confidence: 0.92,
+    };
+  }
+
+  // BTC momentum: take profit
+  if (isBtcMomentum && profitPct >= target) {
     return {
       action: 'SELL',
       price: currentPrice,

@@ -62,6 +62,9 @@ function resolveQuickFlipMarketLimit(riskMode: RiskMode, liveMicro: boolean): nu
 /** Spread-capture scans more markets and prioritizes the widest books. */
 const SPREAD_CAPTURE_EVAL_LIMIT = 50;
 
+/** BTC sniper: small pool, fast cycles (slug windows only). */
+const BTC_SNIPER_EVAL_LIMIT = 10;
+
 function isBtcSniperStrategy(
   config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
   type: string,
@@ -691,9 +694,11 @@ export async function runOnce() {
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
     const isBtcSniperStrat = isBtcSniperStrategy(config, stratRow.type);
     const isSpreadCaptureStrat = isSpreadCaptureStrategy(config, stratRow.type);
-    const stratLimit = isQuickFlipStrat || isBtcSniperStrat
+    const stratLimit = isQuickFlipStrat
       ? quickFlipLimit
-      : isSpreadCaptureStrat
+      : isBtcSniperStrat
+        ? BTC_SNIPER_EVAL_LIMIT
+        : isSpreadCaptureStrat
         ? SPREAD_CAPTURE_EVAL_LIMIT
         : marketEvaluationLimit;
     const isLiveStrat = realEnabled && stratRow.paperOnly === false;
@@ -916,7 +921,7 @@ export async function runOnce() {
         console.warn(`[Runner] Quick-flip "${stratRow.name}": no markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h this cycle`);
       }
     } else if (isBtcSniperStrategy(config, stratRow.type)) {
-      stratMarketLimit = quickFlipLimit;
+      stratMarketLimit = BTC_SNIPER_EVAL_LIMIT;
       openPool = rankBtcSniperMarkets(filterBtcSniperMarkets(openPool));
       if (openPool.length === 0 && !skipReason) {
         skipReason = `BTC sniper "${stratRow.name}": 0 active 5m/15m windows this cycle`;
