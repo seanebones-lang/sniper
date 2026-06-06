@@ -155,10 +155,18 @@ export async function evaluateMarketForStrategy(
     if (skipEntryScan) {
       return null;
     }
-    signal = strategyImpl.evaluate(
-      { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
-      config,
-    );
+    if (stratRow.type === 'btc-sniper') {
+      const { evaluateBtcSniper } = await import('@/lib/strategies/btc-sniper');
+      signal = await evaluateBtcSniper(
+        { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
+        config,
+      );
+    } else {
+      signal = strategyImpl.evaluate(
+        { market, book: book ?? undefined, currentPrice, regime: advanced.regime },
+        config,
+      );
+    }
     if (signal?.action === 'SELL') {
       isExitSignal = true;
     }
@@ -169,12 +177,13 @@ export async function evaluateMarketForStrategy(
   }
 
   const isQuickFlip = config.tradingGoal === 'quick-flip' || stratRow.type === 'live-quick-flip';
+  const isBtcSniper = stratRow.type === 'btc-sniper' || config.tradingGoal === 'btc-momentum';
   const isLiveEntry =
     process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
     stratRow.paperOnly === false &&
     signal.action === 'BUY' &&
     !isExitSignal &&
-    isQuickFlip;
+    (isQuickFlip || isBtcSniper);
 
   if (isLiveEntry && book) {
     const ask = book.asks?.[0]?.price ?? signal.price;
@@ -299,7 +308,7 @@ export async function evaluateMarketForStrategy(
     advancedRegime: advanced.regime,
     finalSize,
     isExitSignal,
-    isQuickFlip,
+    isQuickFlip: isQuickFlip || isBtcSniper,
     marketDbId,
     cooldownKey,
     healthMultiplier,

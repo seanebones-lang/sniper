@@ -37,6 +37,10 @@ const STRATEGY_DESCRIPTIONS: Record<string, { summary: string; when: string }> =
     summary: 'Looks for strong directional pressure near the end of short-term markets (5m–1h).',
     when: 'Best on short-duration crypto or event markets close to resolution.',
   },
+  'btc-sniper': {
+    summary: 'BTC Up/Down 5m/15m — Binance RSI(7) + momentum vs cheap Polymarket odds.',
+    when: 'Live on Polymarket BTC windows; $1 stake, 12% take-profit, 120s max hold.',
+  },
   'live-quick-flip': {
     summary: 'Buys ~$1 on markets resolving within 3 hours and sells at 2.5× (~$2.50).',
     when: 'Best on live tennis, in-play sports, and other markets with exchange end time under 3h.',

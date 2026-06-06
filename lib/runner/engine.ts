@@ -8,7 +8,7 @@
 
 import { db, signals, auditEvents, strategies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
-import { getAllMarkets, getMarketsForQuickFlip, getMarketsForLiveNearTerm } from '@/lib/markets';
+import { getAllMarkets, getMarketsForQuickFlip, getMarketsForLiveNearTerm, getMarketsForBtcSniper } from '@/lib/markets';
 import { getStrategy } from '@/lib/strategies';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import type { Market } from '@/lib/types';
@@ -21,6 +21,10 @@ import { getRealOpenPositionsByStrategy } from '@/lib/execution/real-positions';
 import { alerts } from '@/lib/alerts/telegram';
 import { portfolioRiskManager } from '@/lib/risk/portfolio-manager';
 import { rankQuickFlipMarkets, filterQuickFlipMarkets, QUICK_FLIP_MAX_RESOLUTION_HOURS, filterLiveResolutionMarkets, LIVE_MAX_RESOLUTION_HOURS } from '@/lib/markets/fast-moving';
+import { filterBtcSniperMarkets, rankBtcSniperMarkets } from '@/lib/markets/btc-sniper';
+import { clearParentSignalCache } from '@/lib/btc/signal-engine';
+import { fetchBtcUsdtCloses } from '@/lib/clients/ccxt-binance';
+import { setBtcSniperBookCache } from '@/lib/strategies/btc-sniper';
 import { getDynamicAllocations } from '@/lib/strategies/allocator';
 import { getRecentSnapshotsBatch } from '@/lib/data/historical';
 import { executionManager } from '@/lib/execution/execution-manager';
@@ -57,6 +61,13 @@ function resolveQuickFlipMarketLimit(riskMode: RiskMode, liveMicro: boolean): nu
 
 /** Spread-capture scans more markets and prioritizes the widest books. */
 const SPREAD_CAPTURE_EVAL_LIMIT = 50;
+
+function isBtcSniperStrategy(
+  config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
+  type: string,
+): boolean {
+  return type === 'btc-sniper' || config.tradingGoal === 'btc-momentum';
+}
 
 function isSpreadCaptureStrategy(
   config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
@@ -194,7 +205,7 @@ export async function getRunnerIntervalMs(): Promise<number> {
   let value = 12000;
   for (const strat of activeStrategies) {
     const config = resolveStrategyConfigForType(strat.type, strat.config as unknown as StrategyConfig);
-    if (config.tradingGoal === 'quick-flip' || strat.type === 'live-quick-flip') {
+    if (config.tradingGoal === 'quick-flip' || strat.type === 'live-quick-flip' || strat.type === 'btc-sniper' || config.tradingGoal === 'btc-momentum') {
       value = 4000;
       break;
     }
@@ -521,6 +532,11 @@ export async function runOnce() {
     return;
   }
 
+  const hasBtcSniperStrategy = activeStrategies.some((s) => {
+    const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
+    return isBtcSniperStrategy(cfg, s.type);
+  });
+
   const hasQuickFlipStrategy = activeStrategies.some((s) => {
     const cfg = resolveStrategyConfigForType(s.type, s.config as unknown as StrategyConfig);
     return cfg.tradingGoal === 'quick-flip' || s.type === 'live-quick-flip' || cfg.liveMarketsOnly;
@@ -535,11 +551,18 @@ export async function runOnce() {
       return cfg.tradingGoal === 'spread-capture' || s.type === 'spread-scalper';
     });
 
-  const markets = hasQuickFlipStrategy
-    ? await getMarketsForQuickFlip()
-    : hasLiveSpreadCapture
-      ? await getMarketsForLiveNearTerm()
-      : await getAllMarkets();
+  clearParentSignalCache();
+  if (hasBtcSniperStrategy) {
+    void fetchBtcUsdtCloses(30, true);
+  }
+
+  const markets = hasBtcSniperStrategy
+    ? await getMarketsForBtcSniper()
+    : hasQuickFlipStrategy
+      ? await getMarketsForQuickFlip()
+      : hasLiveSpreadCapture
+        ? await getMarketsForLiveNearTerm()
+        : await getAllMarkets();
 
   // === Calculate global and per-market protection factors upfront ===
   const recentQuality = executionManager.getRecentExecutionQuality(30);
@@ -666,8 +689,9 @@ export async function runOnce() {
     const config = resolveStrategyConfigForType(stratRow.type, stratRow.config as unknown as StrategyConfig);
     const isQuickFlipStrat =
       config.tradingGoal === 'quick-flip' || config.liveMarketsOnly || stratRow.type === 'live-quick-flip';
+    const isBtcSniperStrat = isBtcSniperStrategy(config, stratRow.type);
     const isSpreadCaptureStrat = isSpreadCaptureStrategy(config, stratRow.type);
-    const stratLimit = isQuickFlipStrat
+    const stratLimit = isQuickFlipStrat || isBtcSniperStrat
       ? quickFlipLimit
       : isSpreadCaptureStrat
         ? SPREAD_CAPTURE_EVAL_LIMIT
@@ -682,12 +706,18 @@ export async function runOnce() {
     if (isQuickFlipStrat) {
       openPool = filterQuickFlipMarkets(openPool);
       openPool = openPool.length > 0 ? rankQuickFlipMarkets(openPool) : [];
+    } else if (isBtcSniperStrat) {
+      openPool = rankBtcSniperMarkets(filterBtcSniperMarkets(openPool));
     } else if (isSpreadCaptureStrat && isLiveStrat) {
       openPool = filterLiveResolutionMarkets(openPool);
     }
     for (const m of openPool.slice(0, stratLimit)) {
       evalMarketsToFetch.push({ platform: m.platform, externalId: m.externalId });
       marketsToFetch.push({ platform: m.platform, externalId: m.externalId });
+      if (m.siblingTokenId) {
+        evalMarketsToFetch.push({ platform: m.platform, externalId: m.siblingTokenId });
+        marketsToFetch.push({ platform: m.platform, externalId: m.siblingTokenId });
+      }
     }
   }
 
@@ -756,6 +786,7 @@ export async function runOnce() {
   }
 
   await bookCache.fetchBooks(marketsToFetch);
+  setBtcSniperBookCache(bookCache);
 
   const snapshotBatch = await getRecentSnapshotsBatch(
     evalMarketsToFetch.map((m) => ({ platform: m.platform, marketExternalId: m.externalId })),
@@ -883,6 +914,12 @@ export async function runOnce() {
       openPool = candidates.length > 0 ? rankQuickFlipMarkets(candidates) : [];
       if (openPool.length === 0) {
         console.warn(`[Runner] Quick-flip "${stratRow.name}": no markets resolving within ${QUICK_FLIP_MAX_RESOLUTION_HOURS}h this cycle`);
+      }
+    } else if (isBtcSniperStrategy(config, stratRow.type)) {
+      stratMarketLimit = quickFlipLimit;
+      openPool = rankBtcSniperMarkets(filterBtcSniperMarkets(openPool));
+      if (openPool.length === 0 && !skipReason) {
+        skipReason = `BTC sniper "${stratRow.name}": 0 active 5m/15m windows this cycle`;
       }
     } else if (isSpreadCaptureStrategy(config, stratRow.type)) {
       stratMarketLimit = SPREAD_CAPTURE_EVAL_LIMIT;
@@ -1216,7 +1253,10 @@ export async function runOnce() {
             book: q.book ?? undefined,
             takeLiquidity:
               q.signal.action === 'BUY' &&
-              (q.isQuickFlip || q.config.tradingGoal === 'spread-capture'),
+              (q.isQuickFlip ||
+                q.config.tradingGoal === 'spread-capture' ||
+                q.stratRow.type === 'btc-sniper' ||
+                q.config.tradingGoal === 'btc-momentum'),
             maxNotionalUsd: orderMaxNotional,
             reason: `[REAL][${q.stratRow.name}] ${q.signal.reason} (risk-adjusted)`,
             signalId,

@@ -44,6 +44,13 @@ export function usesQuickFlipLiveGates(
   return config.tradingGoal === 'quick-flip' || strategyType === 'live-quick-flip';
 }
 
+export function usesBtcSniperLiveGates(
+  config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
+  strategyType?: string,
+): boolean {
+  return config.tradingGoal === 'btc-momentum' || strategyType === 'btc-sniper';
+}
+
 export function usesSpreadCaptureLiveGates(
   config: Pick<ResolvedStrategyConfig, 'tradingGoal'>,
   strategyType?: string,
@@ -92,6 +99,8 @@ export async function checkLiveEntryGates(
 ): Promise<LiveEntryGateResult> {
   const { market, book, config, ask, bid, stakeUsd, targetMultiple, strategyType } = input;
   const quickFlipProfile = usesQuickFlipLiveGates(config, strategyType);
+  const btcSniperProfile = usesBtcSniperLiveGates(config, strategyType);
+  const fastMovingProfile = quickFlipProfile || btcSniperProfile;
 
   if (isMarketPaused(market.externalId)) {
     return deny('market_paused', 'Market paused by intelligence layer');
@@ -126,7 +135,7 @@ export async function checkLiveEntryGates(
   const filters = await resolveFilters();
   const bankrollUsd = snap?.microBankrollUsd ?? 25;
 
-  if (quickFlipProfile) {
+  if (fastMovingProfile) {
     const assessment = assessFastMovingMarket(market);
 
     if (assessment.kind === 'none') {
@@ -168,15 +177,17 @@ export async function checkLiveEntryGates(
         );
       }
 
-      const grossEdge = (ask * targetMultiple - ask) / ask;
-      const edgeAfterSpread = grossEdge - spreadPct / 100;
-      const minEdgePct = filters.minEdgeAfterSpreadPct ?? config.minEdgeAfterSpreadPct ?? 6;
-      const minEdge = minEdgePct / 100;
-      if (edgeAfterSpread < minEdge) {
-        return deny(
-          'insufficient_edge',
-          `Edge after spread ${(edgeAfterSpread * 100).toFixed(1)}% < min ${minEdgePct}%`,
-        );
+      if (quickFlipProfile) {
+        const grossEdge = (ask * targetMultiple - ask) / ask;
+        const edgeAfterSpread = grossEdge - spreadPct / 100;
+        const minEdgePct = filters.minEdgeAfterSpreadPct ?? config.minEdgeAfterSpreadPct ?? 6;
+        const minEdge = minEdgePct / 100;
+        if (edgeAfterSpread < minEdge) {
+          return deny(
+            'insufficient_edge',
+            `Edge after spread ${(edgeAfterSpread * 100).toFixed(1)}% < min ${minEdgePct}%`,
+          );
+        }
       }
     }
   }

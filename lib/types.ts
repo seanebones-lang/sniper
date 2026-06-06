@@ -20,6 +20,14 @@ export interface Market {
   /** Market resolution / event end (ISO) when available from the exchange */
   endDate?: string;
   volume24hr?: number;
+  /** BTC Up/Down binary outcome side */
+  outcome?: 'Up' | 'Down';
+  /** Gamma market id shared by Up + Down token rows */
+  parentMarketId?: string;
+  /** Other side's clob token id */
+  siblingTokenId?: string;
+  /** Parsed BTC window duration (5m / 15m) */
+  btcWindowMinutes?: 5 | 15;
 }
 
 export interface PricePoint {

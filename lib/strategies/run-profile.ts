@@ -1,7 +1,7 @@
 import type { StrategyConfig } from './types';
 
 export type TradingStyle = 'aggressive' | 'balanced' | 'conservative';
-export type TradingGoal = 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing';
+export type TradingGoal = 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing' | 'btc-momentum';
 
 export interface ResolvedStrategyConfig extends StrategyConfig {
   tradingStyle: TradingStyle;
@@ -20,6 +20,12 @@ export interface ResolvedStrategyConfig extends StrategyConfig {
   aggressiveEntryFills: boolean;
   /** Use immediate fills for exit (take-profit / stop-loss) orders */
   aggressiveExitFills: boolean;
+  btcWindowFilter?: '5' | '15' | 'both';
+  rsiPeriod?: number;
+  rsiBuyUpMax?: number;
+  rsiBuyDownMin?: number;
+  minMomentumPct?: number;
+  maxImpliedPrice?: number;
 }
 
 const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
@@ -99,6 +105,25 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
     maxHoldSeconds: 86400,
     allowScaleIn: true,
   },
+  'btc-momentum': {
+    maxSizeUsd: 1,
+    targetProfitPct: 12,
+    stopLossPct: 8,
+    maxHoldSeconds: 120,
+    minEdgeAfterSpreadPct: 4,
+    allowScaleIn: false,
+    cooldownSeconds: 10,
+    liveMarketsOnly: true,
+    minFillProbability: 0.4,
+    aggressiveEntryFills: true,
+    aggressiveExitFills: true,
+    btcWindowFilter: 'both',
+    rsiPeriod: 7,
+    rsiBuyUpMax: 35,
+    rsiBuyDownMin: 65,
+    minMomentumPct: 0.4,
+    maxImpliedPrice: 0.5,
+  },
 };
 
 export const TRADING_STYLE_OPTIONS: Array<{ id: TradingStyle; label: string; description: string }> = [
@@ -112,6 +137,7 @@ export const TRADING_GOAL_OPTIONS: Array<{ id: TradingGoal; label: string; descr
   { id: 'spread-capture', label: 'Spread capture', description: 'Enter on wide spreads, exit when spread narrows or target hit.' },
   { id: 'dip-buy', label: 'Buy the dip', description: 'Enter on cheap prices, hold for larger bounce.' },
   { id: 'swing', label: 'Swing', description: 'Fewer trades, wider profit targets, longer holds.' },
+  { id: 'btc-momentum', label: 'BTC momentum', description: 'RSI + Binance momentum vs Polymarket BTC Up/Down 5m/15m windows.' },
 ];
 
 export function resolveStrategyConfig(raw: StrategyConfig): ResolvedStrategyConfig {
@@ -172,6 +198,23 @@ export function normalizeStrategyConfig(
     next.minEntryPrice = LIVE_QUICK_FLIP_MIN_ENTRY_PRICE;
     next.minEdgeAfterSpreadPct = 6;
   }
+  if (type === 'btc-sniper') {
+    next.tradingGoal = 'btc-momentum';
+    next.tradingStyle = 'aggressive';
+    next.liveMarketsOnly = true;
+    next.maxSizeUsd = next.maxSizeUsd ?? 1;
+    next.targetProfitPct = next.targetProfitPct ?? 12;
+    next.stopLossPct = next.stopLossPct ?? 8;
+    next.maxHoldSeconds = next.maxHoldSeconds ?? 120;
+    next.cooldownSeconds = next.cooldownSeconds ?? 10;
+    next.minEdgeAfterSpreadPct = 4;
+    next.btcWindowFilter = next.btcWindowFilter ?? 'both';
+    next.rsiPeriod = next.rsiPeriod ?? 7;
+    next.rsiBuyUpMax = next.rsiBuyUpMax ?? 35;
+    next.rsiBuyDownMin = next.rsiBuyDownMin ?? 65;
+    next.minMomentumPct = next.minMomentumPct ?? 0.4;
+    next.maxImpliedPrice = next.maxImpliedPrice ?? 0.5;
+  }
   return next;
 }
 
@@ -187,6 +230,9 @@ export function resolveStrategyImplType(
   }
   if (type === 'live-quick-flip') {
     return 'live-quick-flip';
+  }
+  if (type === 'btc-sniper') {
+    return 'btc-sniper';
   }
   return type;
 }

@@ -8,7 +8,7 @@ export interface StrategyConfig {
 
   // Run profile (paper runner)
   tradingStyle?: 'aggressive' | 'balanced' | 'conservative';
-  tradingGoal?: 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing';
+  tradingGoal?: 'quick-flip' | 'spread-capture' | 'dip-buy' | 'swing' | 'btc-momentum';
   stopLossPct?: number;
   maxHoldSeconds?: number;
   allowScaleIn?: boolean;
@@ -28,6 +28,14 @@ export interface StrategyConfig {
 
   /** Live: min (target-entry)/entry minus spread fraction (percent points, e.g. 6 = 6%) */
   minEdgeAfterSpreadPct?: number;
+
+  /** btc-sniper: filter 5m, 15m, or both */
+  btcWindowFilter?: '5' | '15' | 'both';
+  rsiPeriod?: number;
+  rsiBuyUpMax?: number;
+  rsiBuyDownMin?: number;
+  minMomentumPct?: number;
+  maxImpliedPrice?: number;
 
   // Strategy-specific
   minSpreadPct?: number;       // for spread-scalper

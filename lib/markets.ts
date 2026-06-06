@@ -15,6 +15,17 @@ import {
 } from './clients/kalshi';
 import { ensureMarketRecord, ensureMarket } from './db/ensure-market';
 import { QUICK_FLIP_MAX_RESOLUTION_HOURS, LIVE_MAX_RESOLUTION_HOURS, filterLiveResolutionMarkets } from './markets/fast-moving';
+import { fetchBtcMarketsBySlug } from './clients/polymarket-btc-slug';
+import {
+  fetchPolymarketBtcNearTermMarkets,
+  fetchPolymarketBtcUpDownSearchMarkets,
+} from './clients/polymarket-btc-markets';
+import {
+  dedupeMarketsByToken,
+  filterBtcSniperMarkets,
+  rankBtcSniperMarkets,
+  summarizeBtcPool,
+} from './markets/btc-sniper';
 
 let cachedMarkets: Market[] | null = null;
 let lastFetch = 0;
@@ -22,6 +33,9 @@ let cachedQuickFlip: Market[] | null = null;
 let lastQuickFlipFetch = 0;
 let cachedLiveNearTerm: Market[] | null = null;
 let lastLiveNearTermFetch = 0;
+let cachedBtcSniper: Market[] | null = null;
+let lastBtcSniperFetch = 0;
+const BTC_SNIPER_CACHE_TTL = 12_000;
 const LIVE_NEAR_TERM_CACHE_TTL = 20_000;
 const CACHE_TTL = 25_000; // ~25s
 const QUICK_FLIP_CACHE_TTL = 20_000; // refresh fast markets slightly faster
@@ -172,6 +186,51 @@ export async function getMarketsForLiveNearTerm(force = false): Promise<Market[]
   lastLiveNearTermFetch = Date.now();
   return cachedLiveNearTerm;
 }
+
+/** BTC Up/Down 5m/15m pool — slug-first, search + near-term fallbacks. */
+export async function getMarketsForBtcSniper(force = false): Promise<Market[]> {
+  const now = Date.now();
+  if (!force && cachedBtcSniper && now - lastBtcSniperFetch < BTC_SNIPER_CACHE_TTL) {
+    return cachedBtcSniper;
+  }
+
+  const merged: Market[] = [];
+
+  try {
+    const slugResults = await withTimeout(fetchBtcMarketsBySlug(now), 'BTC slug markets');
+    for (const r of slugResults) merged.push(...r.markets);
+  } catch (err) {
+    console.warn('[markets] BTC slug fetch failed (non-fatal):', err);
+  }
+
+  try {
+    const nearTerm = await withTimeout(fetchPolymarketBtcNearTermMarkets(2, 200), 'BTC near-term');
+    merged.push(...nearTerm);
+  } catch (err) {
+    console.warn('[markets] BTC near-term fetch failed (non-fatal):', err);
+  }
+
+  try {
+    const search = await withTimeout(fetchPolymarketBtcUpDownSearchMarkets(), 'BTC search');
+    merged.push(...search);
+  } catch (err) {
+    console.warn('[markets] BTC search fetch failed (non-fatal):', err);
+  }
+
+  const deduped = dedupeMarketsByToken(merged);
+  const filtered = filterBtcSniperMarkets(deduped, now);
+  cachedBtcSniper = rankBtcSniperMarkets(filtered);
+  lastBtcSniperFetch = Date.now();
+
+  const summary = summarizeBtcPool(cachedBtcSniper);
+  console.log(
+    `[markets] BTC sniper pool: ${summary.poolTotal} tokens (${summary.parentMarkets} parents, 5m=${summary.windows5m}, 15m=${summary.windows15m})`,
+  );
+
+  return cachedBtcSniper;
+}
+
+export { summarizeBtcPool };
 
 export async function getMarket(platform: 'polymarket' | 'kalshi', externalId: string) {
   const all = await getAllMarkets();

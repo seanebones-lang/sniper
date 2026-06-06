@@ -42,7 +42,7 @@ export function evaluateExitSignal(
   /** Market resolution time — enables pre-expiry safety exit for quick-flip */
   marketEndDate?: string | Date | null,
   /** Market metadata for live policy exits (24h resolution cap) */
-  market?: Pick<Market, 'question' | 'endDate'>,
+  market?: Pick<Market, 'question' | 'endDate' | 'btcWindowMinutes'>,
 ): StrategySignal | null {
   if (position.netSize <= 0.01 || !currentPrice || currentPrice <= 0) {
     return null;
@@ -91,6 +91,7 @@ export function evaluateExitSignal(
   const stop = config.stopLossPct;
   const maxHold = config.maxHoldSeconds;
   const isQuickFlip = config.tradingGoal === 'quick-flip';
+  const isBtcMomentum = config.tradingGoal === 'btc-momentum';
 
   const mult = resolveProfitMultiple(config);
 
@@ -181,6 +182,45 @@ export function evaluateExitSignal(
         confidence: 0.75,
       };
     }
+  }
+
+  // BTC momentum: exit before window close if still red
+  if (isBtcMomentum && marketEndDate && profitPct < 0) {
+    const hoursLeft = hoursUntilResolution(
+      { endDate: marketEndDate } as import('../types').Market,
+      nowMs,
+    );
+    const exitMinutes = market?.btcWindowMinutes
+      ? Math.min(2, market.btcWindowMinutes * 0.4)
+      : 2;
+    if (
+      hoursLeft != null &&
+      hoursLeft >= 0 &&
+      hoursLeft <= exitMinutes / 60
+    ) {
+      return {
+        action: 'SELL',
+        price: currentPrice,
+        size: Math.floor(position.netSize),
+        reason: `BTC pre-window exit ${profitPct.toFixed(2)}% (${(hoursLeft * 60).toFixed(0)}m to close)`,
+        confidence: 0.8,
+      };
+    }
+  }
+
+  // BTC momentum: time stop
+  if (isBtcMomentum && maxHold > 0 && holdSeconds >= maxHold) {
+    return {
+      action: 'SELL',
+      price: currentPrice,
+      size: Math.floor(position.netSize),
+      reason:
+        profitPct >= 0
+          ? `BTC sniper max hold ${Math.round(maxHold)}s — lock +${profitPct.toFixed(2)}%`
+          : `BTC sniper max hold ${Math.round(maxHold)}s — cut at ${profitPct.toFixed(2)}%`,
+      confidence: 0.82,
+      edge: (currentPrice - entry) / entry,
+    };
   }
 
   // Quick-flip: time stop — don't bag-hold past maxHoldSeconds (e.g. 90–180s).
