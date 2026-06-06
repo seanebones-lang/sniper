@@ -10,7 +10,7 @@ import {
 import type { FastMovingKind } from '@/lib/markets/fast-moving';
 
 /** No new BUYs when free cash is below this (exits still run). */
-export const LIVE_MICRO_MIN_CASH_USD = 5;
+export const LIVE_MICRO_MIN_CASH_USD = 1;
 
 /** Accounts at or below this equity use micro guards. */
 export const LIVE_MICRO_EQUITY_CEILING_USD = 25;
@@ -36,6 +36,7 @@ type SessionBankrollRow = {
   startBankrollUsd: number;
   dayUtc: string;
   updatedAt: string;
+  zenStartedAt?: string;
 };
 
 export function isMicroLiveAccount(bankrollUsd: number): boolean {
@@ -55,6 +56,7 @@ export async function touchLiveSessionBankroll(currentBankrollUsd: number): Prom
       startBankrollUsd: Math.max(0.01, currentBankrollUsd),
       dayUtc: today,
       updatedAt: new Date().toISOString(),
+      zenStartedAt: refilled ? new Date().toISOString() : prev?.zenStartedAt,
     };
     await persistSystemState(
       SESSION_KEY,

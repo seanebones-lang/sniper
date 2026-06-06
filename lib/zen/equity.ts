@@ -19,6 +19,10 @@ import {
   inferLiveStartingBudget,
   realPositionsToPaperRows,
 } from '@/lib/zen/live-equity';
+import {
+  getLiveSessionStartBankrollUsd,
+  getLiveZenSessionStartedAt,
+} from '@/lib/zen/live-session';
 import type { LedgerTrade } from '@/lib/paper/ledger';
 
 export interface ZenEquityPoint {
@@ -134,17 +138,23 @@ async function getPaperZenSnapshot(): Promise<ZenEquitySnapshot> {
 }
 
 async function getLiveZenSnapshot(mode: RunnerExecutionMode): Promise<ZenEquitySnapshot> {
-  const [rows, liveStrats, clobCash] = await Promise.all([
-    db.query.realTrades.findMany({
-      where: inArray(realTrades.status, [...LIVE_TRADE_STATUSES]),
-      orderBy: [asc(realTrades.filledAt), asc(realTrades.createdAt)],
-    }),
+  const [zenSince, sessionStartUsd, liveStrats, clobCash] = await Promise.all([
+    getLiveZenSessionStartedAt(),
+    getLiveSessionStartBankrollUsd(),
     db.query.strategies.findMany({
       where: and(eq(strategies.isActive, true), eq(strategies.paperOnly, false)),
       columns: { id: true },
     }),
     getLiveClobBalance(),
   ]);
+
+  const rows = await db.query.realTrades.findMany({
+    where: and(
+      inArray(realTrades.status, [...LIVE_TRADE_STATUSES]),
+      zenSince ? gte(realTrades.filledAt, zenSince) : undefined,
+    ),
+    orderBy: [asc(realTrades.filledAt), asc(realTrades.createdAt)],
+  });
 
   const ledgerTrades = toLedgerTrades(rows);
 
@@ -159,7 +169,11 @@ async function getLiveZenSnapshot(mode: RunnerExecutionMode): Promise<ZenEquityS
   const mtm = await computeMarkToMarket(positionRows, markPrices);
 
   const startingBudgetUsd =
-    clobCash != null ? inferLiveStartingBudget(clobCash, ledgerTrades) : 0;
+    sessionStartUsd != null && zenSince
+      ? sessionStartUsd
+      : clobCash != null
+        ? inferLiveStartingBudget(clobCash, ledgerTrades)
+        : 0;
 
   const curve = buildEquityCurve(
     startingBudgetUsd > 0 ? startingBudgetUsd : clobCash ?? 0,
