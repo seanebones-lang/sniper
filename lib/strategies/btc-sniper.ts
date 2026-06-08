@@ -43,7 +43,8 @@ export async function evaluateBtcSniper(
 
   const ask = book.asks[0].price;
   const askSize = book.asks[0].size;
-  if (ask <= 0 || ask >= 0.52) return null;
+  const maxEntryAsk = config.maxEntryAsk ?? 0.52;
+  if (ask <= 0 || ask >= maxEntryAsk) return null;
 
   const stakeUsd = config.maxSizeUsd ?? 1;
   const sharesNeeded = Math.max(1, Math.ceil(stakeUsd / ask));
@@ -81,10 +82,11 @@ export async function evaluateBtcSniper(
     rsiPeriod: config.rsiPeriod ?? 7,
     rsiBuyUpMax: config.rsiBuyUpMax ?? 45,
     rsiBuyDownMin: config.rsiBuyDownMin ?? 55,
-    minMomentumPct: config.minMomentumPct ?? 0.12,
+    minMomentumPct: config.minMomentumPct ?? 0.06,
     maxImpliedPrice: config.maxImpliedPrice ?? 0.58,
     cheapImpliedMax: config.cheapImpliedMax ?? 0.42,
-    cheapMinMomentumPct: config.cheapMinMomentumPct ?? 0.04,
+    cheapMinMomentumPct: config.cheapMinMomentumPct ?? 0.02,
+    strongMomentumPct: config.strongMomentumPct ?? 0.12,
   };
 
   const parent = getOrComputeParentSignal(

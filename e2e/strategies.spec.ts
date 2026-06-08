@@ -26,7 +26,9 @@ test.describe('Strategies', () => {
   test('runner start/stop buttons are present', async ({ page }) => {
     await page.goto('/strategies');
 
-    const startBtn = page.getByRole('button', { name: /Start 24\/7 Paper Runner/i });
+    // Label is "Start 24/7 Runner" (paper) or "Start 24/7 Live Runner" (live);
+    // flips to "Stop 24/7 Runner" while running.
+    const startBtn = page.getByRole('button', { name: /Start 24\/7 (Live )?Runner/i });
     const stopBtn = page.getByRole('button', { name: /Stop 24\/7 Runner/i });
 
     await expect(startBtn.or(stopBtn)).toBeVisible();

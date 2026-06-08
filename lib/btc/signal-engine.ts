@@ -11,6 +11,8 @@ export type BtcSignalParams = {
   /** Cheap-side fallback: buy when implied < this and momentum aligns */
   cheapImpliedMax?: number;
   cheapMinMomentumPct?: number;
+  /** Tier-3: strong-momentum entry on coin-flip-ish odds (|momentum| over this). */
+  strongMomentumPct?: number;
 };
 
 const DEFAULTS: Required<BtcSignalParams> = {
@@ -21,6 +23,7 @@ const DEFAULTS: Required<BtcSignalParams> = {
   maxImpliedPrice: 0.58,
   cheapImpliedMax: 0.42,
   cheapMinMomentumPct: 0.04,
+  strongMomentumPct: 0.22,
 };
 
 export function computeMomentumPct(closes: number[], lookback = 5): number | null {
@@ -73,10 +76,10 @@ export function getAdvancedSignal(
   }
 
   // Tier 3: strong momentum with coin-flip-ish odds (not paying 70c+)
-  if (momentum > 0.22 && upPrice < 0.52) {
+  if (momentum > p.strongMomentumPct && upPrice < 0.52) {
     return { signal: 'BUY_UP', tier: 'strong_mom_up', rsi, momentum };
   }
-  if (momentum < -0.22 && downPrice < 0.52) {
+  if (momentum < -p.strongMomentumPct && downPrice < 0.52) {
     return { signal: 'BUY_DOWN', tier: 'strong_mom_down', rsi, momentum };
   }
 

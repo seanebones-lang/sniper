@@ -38,6 +38,10 @@ export interface StrategyConfig {
   maxImpliedPrice?: number;
   cheapImpliedMax?: number;
   cheapMinMomentumPct?: number;
+  /** btc-sniper: tier-3 strong-momentum entry threshold (|momentum %|). */
+  strongMomentumPct?: number;
+  /** btc-sniper: highest ask we'll lift on the chosen side (exchange-priced cap). */
+  maxEntryAsk?: number;
   minSpreadPct?: number;       // for spread-scalper
   maxSpreadPct?: number;       // for spread-scalper — skip broken books
   entryThreshold?: number;     // for threshold strategy

@@ -69,6 +69,23 @@ export async function touchLiveSessionBankroll(currentBankrollUsd: number): Prom
   return prev.startBankrollUsd;
 }
 
+/**
+ * Stable marker embedded in the daily-loss halt reason. The halt is a rolling 24h
+ * breaker that this guard both sets and clears, so the marker lets us tell our own
+ * pause apart from kind-block / manual pauses that must stay latched until their
+ * owner lifts them. `live-ops-monitor.ts` keys off the same substring.
+ */
+export const MICRO_DAILY_LOSS_HALT_MARKER = 'breached −';
+
+function formatMicroDailyLossHaltReason(totalPnlUsd: number, sessionStartUsd: number): string {
+  return `24h PnL $${totalPnlUsd.toFixed(2)} ${MICRO_DAILY_LOSS_HALT_MARKER}${(LIVE_MICRO_DAILY_LOSS_PCT * 100).toFixed(0)}% of session start $${sessionStartUsd.toFixed(2)}`;
+}
+
+/** True when an `entriesPaused` reason was set by this guard's daily-loss halt. */
+export function isMicroDailyLossHaltReason(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && reason.includes(MICRO_DAILY_LOSS_HALT_MARKER);
+}
+
 export async function evaluateLiveMicroGuards(
   cashBalanceUsd: number | null,
   bankrollUsd: number,
@@ -87,7 +104,15 @@ export async function evaluateLiveMicroGuards(
   }
 
   const intel = await loadLiveIntelligenceState();
-  if (intel.entriesPaused) {
+
+  // The daily-loss halt below is a rolling 24h breaker, not a permanent stop.
+  // Recognize a pause WE set so we can re-evaluate and lift it once the window
+  // recovers. Pauses from other sources (kind allow-list fully blocked, manual
+  // review) stay latched — only their owner may clear them.
+  const selfManagedDailyLossPause =
+    intel.entriesPaused === true && isMicroDailyLossHaltReason(intel.entriesPausedReason);
+
+  if (intel.entriesPaused && !selfManagedDailyLossPause) {
     return {
       entriesAllowed: false,
       code: 'entries_paused',
@@ -112,12 +137,11 @@ export async function evaluateLiveMicroGuards(
   const attr = await analyzeLiveRoundTrips(24);
   const lossLimit = -sessionStart * LIVE_MICRO_DAILY_LOSS_PCT;
   const unrestrictedKinds = intel.allowedKinds === null;
-  if (
-    !unrestrictedKinds &&
-    attr.totalPnlUsd <= lossLimit &&
-    attr.roundTrips >= 2
-  ) {
-    const reason = `24h PnL $${attr.totalPnlUsd.toFixed(2)} breached −${(LIVE_MICRO_DAILY_LOSS_PCT * 100).toFixed(0)}% of session start $${sessionStart.toFixed(2)}`;
+  const dailyLossBreached =
+    !unrestrictedKinds && attr.totalPnlUsd <= lossLimit && attr.roundTrips >= 2;
+
+  if (dailyLossBreached) {
+    const reason = formatMicroDailyLossHaltReason(attr.totalPnlUsd, sessionStart);
     // Avoid re-writing pause every runner cycle once already halted.
     if (!intel.entriesPaused) {
       await saveLiveIntelligenceState(
@@ -133,6 +157,15 @@ export async function evaluateLiveMicroGuards(
       cashFloor: false,
       sessionStartBankrollUsd: sessionStart,
     };
+  }
+
+  // Rolling window recovered — lift a stale daily-loss halt WE previously set so
+  // the runner resumes live entries without manual intervention.
+  if (selfManagedDailyLossPause) {
+    await saveLiveIntelligenceState(
+      { entriesPaused: false, entriesPausedReason: undefined },
+      'micro daily-loss halt auto-cleared (24h window recovered)',
+    );
   }
 
   return {

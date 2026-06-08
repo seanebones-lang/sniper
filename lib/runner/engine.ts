@@ -364,6 +364,24 @@ export async function startRunner(intervalMs = 15000) {
     console.warn('[Runner] Could not load durable safety state (non-fatal):', e);
   }
 
+  // Don't route startup setup through the metered proxy unless a live strategy
+  // is actually active — a paper soak boots and reads direct.
+  try {
+    const liveStrategyActive =
+      process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true' &&
+      (
+        await db.query.strategies.findMany({
+          where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+          columns: { id: true },
+          limit: 1,
+        })
+      ).length > 0;
+    const { setPolymarketProxyEgressEnabled } = await import('@/lib/clients/polymarket-http-proxy');
+    setPolymarketProxyEgressEnabled(liveStrategyActive);
+  } catch {
+    // Non-fatal.
+  }
+
   if (process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true') {
     try {
       const { checkPolymarketGeoblock, formatGeoblockMessage } = await import(
@@ -510,6 +528,27 @@ export async function runOnce() {
   if (!status.running) return;
 
   incrementRunCount();
+
+  // Gate the metered residential proxy on real execution being active THIS cycle.
+  // A paper soak (no active live strategy) must never route Polymarket egress
+  // through the proxy — any CLOB access below (self-heal, reconciliation, reads)
+  // then goes direct. Set before self-heal so even the first call is covered.
+  try {
+    const realEnabledNow = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
+    const liveStrategyActive =
+      realEnabledNow &&
+      (
+        await db.query.strategies.findMany({
+          where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
+          columns: { id: true },
+          limit: 1,
+        })
+      ).length > 0;
+    const { setPolymarketProxyEgressEnabled } = await import('@/lib/clients/polymarket-http-proxy');
+    setPolymarketProxyEgressEnabled(liveStrategyActive);
+  } catch {
+    // Non-fatal: never let proxy gating block a cycle.
+  }
 
   await runLiveSelfHealIfEnabled();
   await reconcileRealTradesIfEnabled('pre');
