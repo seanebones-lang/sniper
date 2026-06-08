@@ -1,4 +1,4 @@
-# Sniper.
+# Sniper
 
 **A research-first automated trading platform for Polymarket and Kalshi.**
 
