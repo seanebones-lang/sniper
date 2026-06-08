@@ -15,6 +15,39 @@ let axiosMiddlewareInstalled = false;
 let proxyPool: string[] = [];
 let proxyPoolIndex = 0;
 
+/**
+ * Master switch for routing Polymarket egress through the (metered) residential
+ * proxy. Defaults ON so live behavior is unchanged. The runner turns it OFF for
+ * paper-only cycles so a paper soak never burns proxy bandwidth — every
+ * Polymarket read then goes direct. Only live order placement needs the proxy
+ * to clear Polymarket's geoblock.
+ */
+let proxyEgressEnabled = true;
+
+export function isPolymarketProxyEgressEnabled(): boolean {
+  return proxyEgressEnabled;
+}
+
+export function setPolymarketProxyEgressEnabled(enabled: boolean): void {
+  if (proxyEgressEnabled === enabled) return;
+  proxyEgressEnabled = enabled;
+  if (!enabled) {
+    // Stop sending Polymarket traffic through the proxy: drop the agents and
+    // the global axios defaults so reads fall back to direct egress.
+    httpsProxyAgent = undefined;
+    fetchProxyAgent = undefined;
+    axios.defaults.httpAgent = undefined;
+    axios.defaults.httpsAgent = undefined;
+    appliedProxyUrl = null;
+    console.log('[Polymarket] Proxy egress DISABLED (paper mode — direct reads)');
+  } else {
+    const url = proxyPool[proxyPoolIndex] ?? proxyPool[0];
+    if (url) applyProxyAgents(url, true);
+    else void bootstrapPolymarketHttp().catch(() => {});
+    console.log('[Polymarket] Proxy egress ENABLED (live mode)');
+  }
+}
+
 /** Updated on every bootstrap/reload — axios interceptor reads this (not a stale closure). */
 let cachedBrowserSession: { cfClearance: string; userAgent: string } | null = null;
 
@@ -83,6 +116,7 @@ export async function getNextPublicClobAxiosAgents(): Promise<{
   httpAgent?: HttpsProxyAgent;
   proxy: false;
 }> {
+  if (!proxyEgressEnabled) return { proxy: false };
   const pool = await ensureProxyPoolLoaded();
   if (pool.length === 0) {
     return { httpsAgent: httpsProxyAgent, httpAgent: httpsProxyAgent, proxy: false };
@@ -163,6 +197,7 @@ function installAxiosMiddlewareOnce(): void {
 }
 
 function applyProxyAgents(proxyUrl: string | undefined, forceNewConnection = false): void {
+  if (!proxyEgressEnabled) return;
   if (!proxyUrl) return;
   if (!forceNewConnection && appliedProxyUrl === proxyUrl && httpsProxyAgent) return;
   httpsProxyAgent = new HttpsProxyAgent(proxyUrl);
@@ -256,6 +291,7 @@ export function getClobAxiosAgents(): {
   httpAgent?: HttpsProxyAgent;
   proxy: false;
 } {
+  if (!proxyEgressEnabled) return { proxy: false };
   return { httpsAgent: httpsProxyAgent, httpAgent: httpsProxyAgent, proxy: false };
 }
 
@@ -274,6 +310,7 @@ export async function ensurePolymarketProxyConfigured(): Promise<string | undefi
 export async function getPolymarketFetchInit(): Promise<
   RequestInit & { dispatcher?: ProxyAgent }
 > {
+  if (!proxyEgressEnabled) return {};
   const proxyUrl = await resolvePolymarketProxyUrl();
   const session = await resolveBrowserSession();
   cachedBrowserSession = session;
