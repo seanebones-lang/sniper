@@ -77,27 +77,35 @@ export async function runLiveLearningCycle(bankrollUsd: number): Promise<LiveLea
 
   if (blocked.size > 0) {
     patches.blockedKinds = [...blocked];
-    // allowedKinds === null → no kind filter (spread-scalper / all markets). Never
-    // pause entries for kind blocks in that mode — only quick-flip uses allow-lists.
-    const allowed =
-      prev.allowedKinds === undefined ? ['short-crypto'] : prev.allowedKinds;
-    const allAllowedBlocked =
-      allowed != null &&
-      allowed.length > 0 &&
-      allowed.every((k) => blocked.has(k as FastMovingKind));
-    if (allAllowedBlocked) {
-      patches.entriesPaused = true;
-      patches.entriesPausedReason =
-        'All allow-listed market kinds blocked — exit-only until manual review';
-      reasons.push('pause new entries (all allow-listed kinds blocked)');
-    } else if (
-      prev.entriesPaused &&
-      prev.entriesPausedReason?.includes('allow-listed market kinds blocked')
-    ) {
-      patches.entriesPaused = false;
-      patches.entriesPausedReason = undefined;
-      reasons.push('resume entries (kind allow-list no longer fully blocked)');
-    }
+  } else if ((prev.blockedKinds?.length ?? 0) > 0) {
+    // Block set drained back to empty — persist that so stale blocks don't linger.
+    patches.blockedKinds = [];
+  }
+
+  // allowedKinds === null → no kind filter (spread-scalper / all markets). Never
+  // pause entries for kind blocks in that mode — only quick-flip uses allow-lists.
+  // This pause/resume is evaluated OUTSIDE the `blocked.size > 0` guard above:
+  // when the last blocked kind recovers, `blocked` is empty and the resume branch
+  // must still run, otherwise the pause latches on permanently. We only set the
+  // pause when not already paused so a daily-loss halt reason is never clobbered.
+  const allowed =
+    prev.allowedKinds === undefined ? ['short-crypto'] : prev.allowedKinds;
+  const allAllowedBlocked =
+    allowed != null &&
+    allowed.length > 0 &&
+    allowed.every((k) => blocked.has(k as FastMovingKind));
+  const kindBlockPaused =
+    prev.entriesPaused === true &&
+    !!prev.entriesPausedReason?.includes('allow-listed market kinds blocked');
+  if (allAllowedBlocked && !prev.entriesPaused) {
+    patches.entriesPaused = true;
+    patches.entriesPausedReason =
+      'All allow-listed market kinds blocked — exit-only until manual review';
+    reasons.push('pause new entries (all allow-listed kinds blocked)');
+  } else if (kindBlockPaused && !allAllowedBlocked) {
+    patches.entriesPaused = false;
+    patches.entriesPausedReason = undefined;
+    reasons.push('resume entries (kind allow-list no longer fully blocked)');
   }
 
   if (Object.keys(patches).length === 0) {

@@ -250,7 +250,12 @@ export async function evaluateMarketForStrategy(
       liveBalanceUsd > 0 &&
       liveBalanceUsd <= 25;
 
-    const minAllowedUsd = isQuickFlip ? 0.5 : isLiveMicroBuy ? 1 : 5;
+    // btc-sniper is a $1 micro-dollar goal like quick-flip — hold it to the same
+    // low Kelly floor so a modest paper budget (or a tiny live edge) doesn't trip
+    // the $5 gate and reject every entry. The exchange $1 minimum is enforced
+    // downstream in the runner/executor.
+    const isMicroDollarGoal = isQuickFlip || isBtcSniper;
+    const minAllowedUsd = isMicroDollarGoal ? 0.5 : isLiveMicroBuy ? 1 : 5;
     if (riskDecision.allowedSize < minAllowedUsd) {
       return null;
     }
@@ -278,7 +283,7 @@ export async function evaluateMarketForStrategy(
       riskCapUsd: buyCapUsd,
       price: signal.price,
       isQuickFlipBuy: isQuickFlip && signal.action === 'BUY',
-      minSharesUsd: isQuickFlip || isLiveMicroBuy ? 0.5 : 1,
+      minSharesUsd: isMicroDollarGoal || isLiveMicroBuy ? 0.5 : 1,
     });
 
     if (finalSize <= 0) return null;

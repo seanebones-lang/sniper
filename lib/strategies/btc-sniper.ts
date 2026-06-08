@@ -43,7 +43,8 @@ export async function evaluateBtcSniper(
 
   const ask = book.asks[0].price;
   const askSize = book.asks[0].size;
-  if (ask <= 0 || ask >= 0.52) return null;
+  const maxEntryAsk = config.maxEntryAsk ?? 0.52;
+  if (ask <= 0 || ask >= maxEntryAsk) return null;
 
   const stakeUsd = config.maxSizeUsd ?? 1;
   const sharesNeeded = Math.max(1, Math.ceil(stakeUsd / ask));

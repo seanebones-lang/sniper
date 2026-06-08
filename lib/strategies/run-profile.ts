@@ -28,6 +28,7 @@ export interface ResolvedStrategyConfig extends StrategyConfig {
   maxImpliedPrice?: number;
   cheapImpliedMax?: number;
   cheapMinMomentumPct?: number;
+  maxEntryAsk?: number;
 }
 
 const STYLE_DEFAULTS: Record<TradingStyle, Partial<ResolvedStrategyConfig>> = {
@@ -127,6 +128,7 @@ const GOAL_DEFAULTS: Record<TradingGoal, Partial<ResolvedStrategyConfig>> = {
     maxImpliedPrice: 0.58,
     cheapImpliedMax: 0.42,
     cheapMinMomentumPct: 0.04,
+    maxEntryAsk: 0.52,
   },
 };
 
@@ -220,6 +222,7 @@ export function normalizeStrategyConfig(
     next.maxImpliedPrice = next.maxImpliedPrice ?? 0.58;
     next.cheapImpliedMax = next.cheapImpliedMax ?? 0.42;
     next.cheapMinMomentumPct = next.cheapMinMomentumPct ?? 0.04;
+    next.maxEntryAsk = next.maxEntryAsk ?? 0.52;
   }
   return next;
 }
