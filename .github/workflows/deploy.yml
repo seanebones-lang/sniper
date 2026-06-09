@@ -1,0 +1,51 @@
+name: Deploy to Railway
+
+# Railway's GitHub auto-deploy can silently stop firing (auto-deploy toggled off,
+# integration detached, or a long red-CI streak). This workflow is a reliable
+# fallback: it deploys the current commit to Railway via the CLI. Trigger it
+# manually from the Actions tab (or via the API) once the RAILWAY_TOKEN secret is
+# set. Add `on: push` later if you want every main push to auto-deploy through here.
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why are you deploying?
+        required: false
+        default: manual redeploy
+
+concurrency:
+  group: railway-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: railway up
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Deploy
+        env:
+          # Project token for the production environment:
+          # Railway → project → Settings → Tokens → create, then add here as
+          # repo Settings → Secrets and variables → Actions → New secret.
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # Optional: only needed if the project has more than one service.
+          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set. Add a Railway project token at repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          if [ -n "$RAILWAY_SERVICE" ]; then
+            railway up --detach --service "$RAILWAY_SERVICE"
+          else
+            railway up --detach
+          fi
