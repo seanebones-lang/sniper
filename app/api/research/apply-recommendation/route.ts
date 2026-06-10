@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
+import { requireApiAuth } from '@/lib/api-auth';
 import { applyRecommendation, ignoreRecommendation } from '@/lib/monitoring/ai-recommendations';
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const { index, action = 'apply', outcomeNote } = body;
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
 
-  if (typeof index !== 'number') {
-    return NextResponse.json({ error: 'index (number) is required' }, { status: 400 });
+  const body = (await req.json().catch(() => null)) as {
+    index?: unknown;
+    action?: string;
+    outcomeNote?: string;
+  } | null;
+  const { index, action = 'apply', outcomeNote } = body ?? {};
+
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+    return NextResponse.json({ error: 'index (non-negative integer) is required' }, { status: 400 });
   }
 
   let success = false;

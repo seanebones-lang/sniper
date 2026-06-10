@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import type { HealthResponse } from '@/lib/health-types';
+import { jsonAuthHeaders } from '@/lib/client/api-secret';
 
 export default function StrategyHealthPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -32,7 +33,10 @@ export default function StrategyHealthPage() {
     }
 
     void fetchHealth();
-    const interval = setInterval(() => { void fetchHealth(); }, 30000);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      void fetchHealth();
+    }, 30000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -204,6 +208,7 @@ export default function StrategyHealthPage() {
                           onClick={async () => {
                             await fetch('/api/research/apply-recommendation', {
                               method: 'POST',
+                              headers: jsonAuthHeaders(),
                               body: JSON.stringify({ index: rec.index, action: 'apply' }),
                             });
                             window.location.reload();
@@ -216,6 +221,7 @@ export default function StrategyHealthPage() {
                           onClick={async () => {
                             await fetch('/api/research/apply-recommendation', {
                               method: 'POST',
+                              headers: jsonAuthHeaders(),
                               body: JSON.stringify({ index: rec.index, action: 'ignore' }),
                             });
                             window.location.reload();

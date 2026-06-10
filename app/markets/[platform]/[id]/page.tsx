@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, RefreshCw, Zap, TrendingUp, Sparkles } from 'lucide-react';
 import type { OrderBook } from '@/lib/types';
 import { getErrorMessage } from '@/lib/error-message';
+import { jsonAuthHeaders } from '@/lib/client/api-secret';
 import type { PolymarketWSClient, PolymarketWSMessage, ClobBookLevel } from '@/lib/ws/polymarket';
 
 interface MarketMeta {
@@ -199,7 +200,7 @@ export default function LiveMarketDetail({ params }: Props) {
     try {
       const res = await fetch('/api/paper/fill', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonAuthHeaders(),
         body: JSON.stringify({
           platform,
           marketExternalId: marketId,
@@ -235,7 +236,7 @@ export default function LiveMarketDetail({ params }: Props) {
     try {
       const res = await fetch('/api/grok/intel', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonAuthHeaders(),
         body: JSON.stringify({
           marketQuestion: market?.question ?? `${platform} market`,
           currentPrice: book?.mid ?? market?.lastPrice,

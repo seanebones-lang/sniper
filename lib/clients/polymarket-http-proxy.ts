@@ -10,7 +10,7 @@ import { normalizeProxyUrl, parseProxyList } from '@/lib/clients/mars-proxy';
 
 let appliedProxyUrl: string | null = null;
 let fetchProxyAgent: ProxyAgent | undefined;
-let httpsProxyAgent: HttpsProxyAgent | undefined;
+let httpsProxyAgent: HttpsProxyAgent<string> | undefined;
 let axiosMiddlewareInstalled = false;
 let proxyPool: string[] = [];
 let proxyPoolIndex = 0;
@@ -112,8 +112,8 @@ async function ensureProxyPoolLoaded(): Promise<string[]> {
  * Does not reset the trading client (orders/balance stay on sticky egress until failure).
  */
 export async function getNextPublicClobAxiosAgents(): Promise<{
-  httpsAgent?: HttpsProxyAgent;
-  httpAgent?: HttpsProxyAgent;
+  httpsAgent?: HttpsProxyAgent<string>;
+  httpAgent?: HttpsProxyAgent<string>;
   proxy: false;
 }> {
   if (!proxyEgressEnabled) return { proxy: false };
@@ -287,8 +287,8 @@ export async function bootstrapPolymarketHttp(): Promise<void> {
 }
 
 export function getClobAxiosAgents(): {
-  httpsAgent?: HttpsProxyAgent;
-  httpAgent?: HttpsProxyAgent;
+  httpsAgent?: HttpsProxyAgent<string>;
+  httpAgent?: HttpsProxyAgent<string>;
   proxy: false;
 } {
   if (!proxyEgressEnabled) return { proxy: false };

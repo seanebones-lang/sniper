@@ -176,6 +176,7 @@ export default function RealExecutionPage() {
     void load();
     void loadRunner();
     const id = setInterval(() => {
+      if (document.hidden) return;
       setClockMs(Date.now());
       void load();
       void loadRunner();

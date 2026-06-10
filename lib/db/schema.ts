@@ -89,6 +89,9 @@ export const realTrades = pgTable('real_trades', {
 }, (t) => ({
   createdAtIdx: index('real_trades_created_at_idx').on(t.createdAt),
   signalIdx: index('real_trades_signal_id_idx').on(t.signalId),
+  // Reconciliation, risk exposure, and the runner's in-flight guard all poll by
+  // status ('pending' / 'needs_review') every cycle.
+  statusCreatedIdx: index('real_trades_status_created_idx').on(t.status, t.createdAt),
 }));
 
 export const positions = pgTable('positions', {
@@ -110,7 +113,12 @@ export const auditEvents = pgTable('audit_events', {
   action: varchar('action', { length: 60 }).notNull(),
   payload: jsonb('payload'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // This table grows every runner cycle; health/ops dashboards read it newest-first
+  // and proposals filter by action — without these, every read is a full scan + sort.
+  createdAtIdx: index('audit_events_created_at_idx').on(t.createdAt),
+  actionCreatedIdx: index('audit_events_action_created_idx').on(t.action, t.createdAt),
+}));
 
 /**
  * High-resolution market snapshots for research, backtesting, and feature engineering.

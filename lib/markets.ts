@@ -13,7 +13,7 @@ import {
   fetchKalshiMarkets,
   fetchKalshiMarketsClosingWithinHours,
 } from './clients/kalshi';
-import { ensureMarketRecord, ensureMarket } from './db/ensure-market';
+import { ensureMarketRecord, ensureMarket, ensureMarketRecordsBatch } from './db/ensure-market';
 import { QUICK_FLIP_MAX_RESOLUTION_HOURS, LIVE_MAX_RESOLUTION_HOURS, filterLiveResolutionMarkets } from './markets/fast-moving';
 import { fetchBtcMarketsBySlug } from './clients/polymarket-btc-slug';
 import {
@@ -102,44 +102,37 @@ export async function getMarketsForQuickFlip(force = false): Promise<Market[]> {
 
   const liveOnly = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
 
-  // Primary: near-term Polymarket (Kalshi skipped on live — 429s slow the runner)
-  try {
-    const nearTermPoly = await withTimeout(
+  // All sources are independent — fetch in parallel, then merge in priority
+  // order (near-term poly → near-term kalshi → live sports → leaderboard) so
+  // dedupe keeps the same winners as the old sequential code.
+  const [nearTermPoly, nearTermKalshi, liveSports, base] = await Promise.allSettled([
+    // Primary: near-term Polymarket (Kalshi skipped on live — 429s slow the runner)
+    withTimeout(
       fetchPolymarketMarketsResolvingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
       'Polymarket near-term',
-    );
-    for (const m of nearTermPoly) add(m);
-  } catch (err) {
-    console.warn('[markets] Polymarket near-term fetch failed (non-fatal):', err);
-  }
+    ),
+    liveOnly
+      ? Promise.resolve<Market[]>([])
+      : withTimeout(
+          fetchKalshiMarketsClosingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
+          'Kalshi near-term',
+        ),
+    // Secondary: live sports search (tennis, in-play — may lack endDate on some rows)
+    withTimeout(fetchPolymarketLiveSportsMarkets(), 'Polymarket live sports'),
+    // Tertiary: volume leaderboard (skip on live micro runner — saves ~15s/cycle)
+    liveOnly ? Promise.resolve<Market[]>([]) : getAllMarkets(force),
+  ]);
 
-  if (!liveOnly) {
-    try {
-      const nearTermKalshi = await withTimeout(
-        fetchKalshiMarketsClosingWithinHours(QUICK_FLIP_MAX_RESOLUTION_HOURS, 100),
-        'Kalshi near-term',
-      );
-      for (const m of nearTermKalshi) add(m);
-    } catch (err) {
-      console.warn('[markets] Kalshi near-term fetch failed (non-fatal):', err);
-    }
-  }
-
-  // Secondary: live sports search (tennis, in-play — may lack endDate on some rows)
-  try {
-    const liveSports = await withTimeout(fetchPolymarketLiveSportsMarkets(), 'Polymarket live sports');
-    for (const m of liveSports) add(m);
-  } catch (err) {
-    console.warn('[markets] Live sports fetch failed (non-fatal):', err);
-  }
-
-  // Tertiary: volume leaderboard (skip on live micro runner — saves ~15s/cycle)
-  if (!liveOnly) {
-    try {
-      const base = await getAllMarkets(force);
-      for (const m of base) add(m);
-    } catch (err) {
-      console.warn('[markets] Base market fetch failed (non-fatal):', err);
+  for (const [result, label] of [
+    [nearTermPoly, 'Polymarket near-term'],
+    [nearTermKalshi, 'Kalshi near-term'],
+    [liveSports, 'Live sports'],
+    [base, 'Base market'],
+  ] as const) {
+    if (result.status === 'fulfilled') {
+      for (const m of result.value) add(m);
+    } else {
+      console.warn(`[markets] ${label} fetch failed (non-fatal):`, result.reason);
     }
   }
 
@@ -165,21 +158,23 @@ export async function getMarketsForLiveNearTerm(force = false): Promise<Market[]
     merged.push(m);
   };
 
-  try {
-    const nearTermPoly = await withTimeout(
+  const [nearTermPoly, liveSports] = await Promise.allSettled([
+    withTimeout(
       fetchPolymarketMarketsResolvingWithinHours(LIVE_MAX_RESOLUTION_HOURS, 120),
       'Polymarket 24h near-term',
-    );
-    for (const m of nearTermPoly) add(m);
-  } catch (err) {
-    console.warn('[markets] Polymarket 24h near-term fetch failed (non-fatal):', err);
-  }
+    ),
+    withTimeout(fetchPolymarketLiveSportsMarkets(), 'Polymarket live sports'),
+  ]);
 
-  try {
-    const liveSports = await withTimeout(fetchPolymarketLiveSportsMarkets(), 'Polymarket live sports');
-    for (const m of liveSports) add(m);
-  } catch (err) {
-    console.warn('[markets] Live sports fetch failed (non-fatal):', err);
+  if (nearTermPoly.status === 'fulfilled') {
+    for (const m of nearTermPoly.value) add(m);
+  } else {
+    console.warn('[markets] Polymarket 24h near-term fetch failed (non-fatal):', nearTermPoly.reason);
+  }
+  if (liveSports.status === 'fulfilled') {
+    for (const m of liveSports.value) add(m);
+  } else {
+    console.warn('[markets] Live sports fetch failed (non-fatal):', liveSports.reason);
   }
 
   cachedLiveNearTerm = filterLiveResolutionMarkets(merged);
@@ -196,25 +191,26 @@ export async function getMarketsForBtcSniper(force = false): Promise<Market[]> {
 
   const merged: Market[] = [];
 
-  try {
-    const slugResults = await withTimeout(fetchBtcMarketsBySlug(now), 'BTC slug markets');
-    for (const r of slugResults) merged.push(...r.markets);
-  } catch (err) {
-    console.warn('[markets] BTC slug fetch failed (non-fatal):', err);
-  }
+  const [slugResults, nearTerm, search] = await Promise.allSettled([
+    withTimeout(fetchBtcMarketsBySlug(now), 'BTC slug markets'),
+    withTimeout(fetchPolymarketBtcNearTermMarkets(2, 200), 'BTC near-term'),
+    withTimeout(fetchPolymarketBtcUpDownSearchMarkets(), 'BTC search'),
+  ]);
 
-  try {
-    const nearTerm = await withTimeout(fetchPolymarketBtcNearTermMarkets(2, 200), 'BTC near-term');
-    merged.push(...nearTerm);
-  } catch (err) {
-    console.warn('[markets] BTC near-term fetch failed (non-fatal):', err);
+  if (slugResults.status === 'fulfilled') {
+    for (const r of slugResults.value) merged.push(...r.markets);
+  } else {
+    console.warn('[markets] BTC slug fetch failed (non-fatal):', slugResults.reason);
   }
-
-  try {
-    const search = await withTimeout(fetchPolymarketBtcUpDownSearchMarkets(), 'BTC search');
-    merged.push(...search);
-  } catch (err) {
-    console.warn('[markets] BTC search fetch failed (non-fatal):', err);
+  if (nearTerm.status === 'fulfilled') {
+    merged.push(...nearTerm.value);
+  } else {
+    console.warn('[markets] BTC near-term fetch failed (non-fatal):', nearTerm.reason);
+  }
+  if (search.status === 'fulfilled') {
+    merged.push(...search.value);
+  } else {
+    console.warn('[markets] BTC search fetch failed (non-fatal):', search.reason);
   }
 
   const deduped = dedupeMarketsByToken(merged);
@@ -246,25 +242,9 @@ export { ensureMarketRecord, ensureMarket };
 /**
  * Sync a batch of markets to the database (idempotent upsert).
  * Call this periodically or before heavy runner/signal activity.
+ * Uses a chunked multi-row upsert — one statement per ~100 markets instead of
+ * one round-trip per market.
  */
-export async function syncMarketsToDb(
-  markets: Market[],
-  concurrency = 12,
-): Promise<Map<string, string>> {
-  const ids = new Map<string, string>();
-  for (let i = 0; i < markets.length; i += concurrency) {
-    const batch = markets.slice(i, i + concurrency);
-    await Promise.all(
-      batch.map(async (m) => {
-        const key = `${m.platform}:${m.externalId}`;
-        try {
-          const id = await ensureMarketRecord(m);
-          ids.set(key, id);
-        } catch (err) {
-          console.warn(`[markets] Failed to sync market ${m.platform}:${m.externalId}`, err);
-        }
-      }),
-    );
-  }
-  return ids;
+export async function syncMarketsToDb(markets: Market[]): Promise<Map<string, string>> {
+  return ensureMarketRecordsBatch(markets);
 }

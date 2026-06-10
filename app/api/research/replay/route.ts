@@ -1,15 +1,29 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import { replayStrategyOnHistory } from '@/lib/data/historical';
 import { getStrategy } from '@/lib/strategies';
 import { getAllVariants, applyVariantConfig } from '@/lib/strategies/variants';
 import { resolveStrategyConfig } from '@/lib/strategies/run-profile';
 import type { StrategyConfig } from '@/lib/strategies/types';
 
-export async function POST(req: Request) {
-  const body = await req.json();
+/** Replay window cap: bounds the snapshot scan a single request can trigger. */
+const MAX_REPLAY_HOURS = 24 * 14;
 
-  const { platform, marketExternalId, strategyType, hours = 24, variantId } = body;
+export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+
+  const { platform, marketExternalId, strategyType, variantId } = body;
+  const hours = Math.min(
+    MAX_REPLAY_HOURS,
+    Math.max(1, Number(body.hours) || 24),
+  );
 
   if (!platform || !marketExternalId || !strategyType) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });

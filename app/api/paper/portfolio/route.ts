@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { z } from 'zod';
+import { requireApiAuth } from '@/lib/api-auth';
 import { getPaperPortfolio, applyPaperBudgetToRiskManager } from '@/lib/paper/portfolio';
 
 export async function GET(req: Request) {
@@ -24,6 +25,9 @@ const patchSchema = z.object({
 });
 
 export async function PATCH(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
     const body = patchSchema.parse(await req.json());
     const { setPaperBudgetSettings, clearPaperBudgetCache } = await import(

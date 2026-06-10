@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage } from '@/lib/error-message';
 import { z } from 'zod';
+import { requireApiAuth } from '@/lib/api-auth';
 import { db, paperTrades, auditEvents } from '@/lib/db';
 import { paperSimulator } from '@/lib/execution/paper-simulator';
 import { getMarket } from '@/lib/markets';
@@ -15,6 +16,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
     const json = await req.json();
     const parsed = bodySchema.safeParse(json);

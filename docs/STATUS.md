@@ -1,6 +1,6 @@
 # Project Status
 
-**Last verified:** June 3, 2026 (10/10 roadmap: reconciliation hardening, live ops UI, readiness probe, API auth, variant persistence, replay realism).
+**Last verified:** June 10, 2026 (performance & security pass: full mutating-route auth coverage, timing-safe token compare, security headers, hot-path DB indexes, parallel market fetches, batched market sync).
 
 This document is the **authoritative capability matrix** for reviewers. If README or other docs disagree with this file, **this file wins** until updated.
 
@@ -78,7 +78,7 @@ What reviewers can evaluate today with confidence:
 | `positions` DB table | **Works** | Real fill tracking + exposure; paper uses `paper_trades` aggregation |
 | `/real` status + live ops page | **Works** | Server status, ops panel (`/api/real/ops`), runner control |
 | `GET /api/health/ready` | **Works** | DB, runner, reconciliation backlog, kill switch |
-| API auth (production) | **Works** | `SNIPER_API_SECRET` on mutating routes when set |
+| API auth (production) | **Works** | `SNIPER_API_SECRET` on **all** mutating routes when set (timing-safe compare); UI sends stored bearer token |
 | CI (lint, build, unit, e2e) | **Works** | Unit tests include reconcile, engine smoke, ledger-chain audit |
 
 ---
@@ -171,7 +171,7 @@ See [`.env.example`](../.env.example). Server-side secrets are never exposed to 
 
 Real execution requires **both** `SNIPER_ENABLE_REAL_EXECUTION=true` and a strategy with `paperOnly: false` (DB field; Strategies PATCH or DB).
 
-When `SNIPER_API_SECRET` is set, mutating API routes require `Authorization: Bearer <secret>` or `X-Sniper-Secret` header.
+When `SNIPER_API_SECRET` is set, **every** mutating API route (POST/PATCH — runner, strategies, paper fill/run/budget, settings, research, grok, `/api/real/*`) requires `Authorization: Bearer <secret>` or `X-Sniper-Secret` header. The comparison is timing-safe. When live execution is enabled without a secret, startup logs a loud warning. Schema index changes are applied with `npm run db:push`.
 
 ---
 
