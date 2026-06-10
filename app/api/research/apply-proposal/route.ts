@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { requireApiAuth } from '@/lib/api-auth';
 import { createVariantFromProposal } from '@/lib/strategies/variants';
 import { replayStrategyOnHistory, type ReplayResult } from '@/lib/data/historical';
 import { getStrategy } from '@/lib/strategies';
@@ -21,13 +22,16 @@ const DEFAULT_CONFIG = {
 };
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const { proposal, autoCompare = true } = body as {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
+  const body = await req.json().catch(() => null);
+  const { proposal, autoCompare = true } = (body ?? {}) as {
     proposal?: StrategyProposal;
     autoCompare?: boolean;
   };
 
-  if (!proposal) {
+  if (!proposal || typeof proposal !== 'object') {
     return NextResponse.json({ error: 'Proposal required' }, { status: 400 });
   }
 

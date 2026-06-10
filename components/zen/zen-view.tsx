@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
 interface CurvePoint {
   t: number;
@@ -61,8 +61,19 @@ function useZenData(pollMs = 4000) {
 
   useEffect(() => {
     void fetchData();
-    const id = setInterval(() => void fetchData(), pollMs);
-    return () => clearInterval(id);
+    const id = setInterval(() => {
+      // Skip polling while the tab is hidden — equity computation is not free.
+      if (document.hidden) return;
+      void fetchData();
+    }, pollMs);
+    const onVisible = () => {
+      if (!document.hidden) void fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetchData, pollMs]);
 
   return { data, error, refresh: fetchData };
@@ -102,7 +113,7 @@ interface Particle {
   hue: number;
 }
 
-function AmbientField({ positive }: { positive: boolean }) {
+const AmbientField = memo(function AmbientField({ positive }: { positive: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -201,7 +212,7 @@ function AmbientField({ positive }: { positive: boolean }) {
   }, [positive]);
 
   return <canvas ref={ref} className="absolute inset-0 pointer-events-none" aria-hidden />;
-}
+});
 
 function EquityRiver({
   points,
@@ -215,11 +226,19 @@ function EquityRiver({
   const ref = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<CurvePoint[]>([]);
   const progressRef = useRef(0);
+  // Fresh poll data flows through a ref so the rAF loop below survives data
+  // updates — tearing it down every 4s poll caused visible stutter.
+  const targetRef = useRef<CurvePoint[]>(points);
+  const lastLengthRef = useRef(-1);
 
   useEffect(() => {
-    displayRef.current = points.map((p) => ({ ...p }));
-    progressRef.current = 0;
-  }, [points.length]);
+    targetRef.current = points;
+    if (points.length !== lastLengthRef.current) {
+      lastLengthRef.current = points.length;
+      displayRef.current = points.map((p) => ({ ...p }));
+      progressRef.current = 0;
+    }
+  }, [points]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -244,13 +263,14 @@ function EquityRiver({
       progressRef.current = Math.min(1, progressRef.current + 0.012);
       const reveal = easeOutCubic(progressRef.current);
 
+      const target = targetRef.current;
       const display = displayRef.current;
-      for (let i = 0; i < display.length && i < points.length; i++) {
-        display[i].equity = lerp(display[i].equity, points[i].equity, 0.12);
-        display[i].pnl = lerp(display[i].pnl, points[i].pnl, 0.12);
+      for (let i = 0; i < display.length && i < target.length; i++) {
+        display[i].equity = lerp(display[i].equity, target[i].equity, 0.12);
+        display[i].pnl = lerp(display[i].pnl, target[i].pnl, 0.12);
       }
-      while (display.length < points.length) {
-        const src = points[display.length];
+      while (display.length < target.length) {
+        const src = target[display.length];
         display.push({ ...src });
       }
 
@@ -364,7 +384,7 @@ function EquityRiver({
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [points, startingBudget, positive]);
+  }, [startingBudget, positive]);
 
   return (
     <canvas
@@ -416,8 +436,25 @@ function GrowthArc({ pct, positive }: { pct: number; positive: boolean }) {
   );
 }
 
+const BAR_COUNT = 40;
+
+function computeMomentumDeltas(points: CurvePoint[]): number[] {
+  const sample = points.slice(-BAR_COUNT - 1);
+  const deltas: number[] = [];
+  for (let i = 1; i < sample.length; i++) {
+    deltas.push(sample[i].equity - sample[i - 1].equity);
+  }
+  while (deltas.length < BAR_COUNT) deltas.unshift(0);
+  return deltas;
+}
+
 function MomentumBars({ points, positive }: { points: CurvePoint[]; positive: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const deltasRef = useRef<number[]>(computeMomentumDeltas(points));
+
+  useEffect(() => {
+    deltasRef.current = computeMomentumDeltas(points);
+  }, [points]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -426,23 +463,26 @@ function MomentumBars({ points, positive }: { points: CurvePoint[]; positive: bo
     if (!ctx) return;
 
     let raf = 0;
-    const barCount = 40;
-    const sample = points.slice(-barCount - 1);
-    const deltas: number[] = [];
-    for (let i = 1; i < sample.length; i++) {
-      deltas.push(sample[i].equity - sample[i - 1].equity);
-    }
-    while (deltas.length < barCount) deltas.unshift(0);
+    let lastW = 0;
+    let lastH = 0;
 
     const draw = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const dpr = Math.min(window.devicePixelRatio ?? 1, 2);
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Resizing a canvas resets its backing store — only do it when the
+      // element actually changed size, not on every frame.
+      if (w !== lastW || h !== lastH) {
+        lastW = w;
+        lastH = h;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       ctx.clearRect(0, 0, w, h);
 
+      const deltas = deltasRef.current;
+      const barCount = BAR_COUNT;
       const maxAbs = Math.max(0.01, ...deltas.map(Math.abs));
       const barW = w / barCount - 2;
       const t = Date.now() / 1000;
@@ -473,7 +513,7 @@ function MomentumBars({ points, positive }: { points: CurvePoint[]; positive: bo
 
     draw();
     return () => cancelAnimationFrame(raf);
-  }, [points, positive]);
+  }, [positive]);
 
   return (
     <canvas
@@ -484,7 +524,7 @@ function MomentumBars({ points, positive }: { points: CurvePoint[]; positive: bo
   );
 }
 
-function PulseRing({ positive }: { positive: boolean }) {
+const PulseRing = memo(function PulseRing({ positive }: { positive: boolean }) {
   return (
     <div className="absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 pointer-events-none" aria-hidden>
       <div
@@ -501,7 +541,7 @@ function PulseRing({ positive }: { positive: boolean }) {
       />
     </div>
   );
-}
+});
 
 function StatOrb({
   label,

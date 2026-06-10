@@ -529,6 +529,10 @@ export async function runOnce() {
 
   incrementRunCount();
 
+  const activeStrategies = await db.query.strategies.findMany({
+    where: (s, { eq }) => eq(s.isActive, true),
+  });
+
   // Gate the metered residential proxy on real execution being active THIS cycle.
   // A paper soak (no active live strategy) must never route Polymarket egress
   // through the proxy — any CLOB access below (self-heal, reconciliation, reads)
@@ -536,14 +540,7 @@ export async function runOnce() {
   try {
     const realEnabledNow = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
     const liveStrategyActive =
-      realEnabledNow &&
-      (
-        await db.query.strategies.findMany({
-          where: (s, { and, eq }) => and(eq(s.isActive, true), eq(s.paperOnly, false)),
-          columns: { id: true },
-          limit: 1,
-        })
-      ).length > 0;
+      realEnabledNow && activeStrategies.some((s) => s.paperOnly === false);
     const { setPolymarketProxyEgressEnabled } = await import('@/lib/clients/polymarket-http-proxy');
     setPolymarketProxyEgressEnabled(liveStrategyActive);
   } catch {
@@ -552,10 +549,6 @@ export async function runOnce() {
 
   await runLiveSelfHealIfEnabled();
   await reconcileRealTradesIfEnabled('pre');
-
-  const activeStrategies = await db.query.strategies.findMany({
-    where: (s, { eq }) => eq(s.isActive, true),
-  });
 
   if (activeStrategies.length === 0) {
     status.lastRun = new Date().toISOString();
@@ -996,38 +989,50 @@ export async function runOnce() {
 
     // Always evaluate markets where this strategy has open positions (for exits)
     const marketKeys = new Set(relevantMarkets.map((m) => `${m.platform}:${m.externalId}`));
-    for (const pos of openPositions) {
-      const key = `${pos.platform}:${pos.marketExternalId}`;
-      if (!marketKeys.has(key)) {
-        let found = markets.find(
-          (m) => m.platform === pos.platform && m.externalId === pos.marketExternalId,
-        );
-        if (pos.platform === 'polymarket') {
-          try {
-            const { fetchPolymarketMarketByTokenId } = await import('@/lib/clients/polymarket');
-            const fetched = await fetchPolymarketMarketByTokenId(pos.marketExternalId);
-            if (fetched) found = fetched;
-          } catch {
-            // keep pool row if any
-          }
+    const missingPositions = openPositions.filter(
+      (pos) => !marketKeys.has(`${pos.platform}:${pos.marketExternalId}`),
+    );
+    if (missingPositions.length > 0) {
+      // Fresh Polymarket metadata for held tokens (endDate drives exits) —
+      // fetched in parallel; fall back to the pool row, then to a stub.
+      const fetchedByKey = new Map<string, Market>();
+      const polyMissing = missingPositions.filter((p) => p.platform === 'polymarket');
+      if (polyMissing.length > 0) {
+        try {
+          const { fetchPolymarketMarketByTokenId } = await import('@/lib/clients/polymarket');
+          await runPool(polyMissing, 6, async (pos) => {
+            try {
+              const fetched = await fetchPolymarketMarketByTokenId(pos.marketExternalId);
+              if (fetched) {
+                fetchedByKey.set(`${pos.platform}:${pos.marketExternalId}`, fetched);
+              }
+            } catch {
+              // keep pool row if any
+            }
+          });
+        } catch {
+          // module load failure — pool rows/stubs still cover exits
         }
-        if (!found) {
-          found = {
+      }
+      for (const pos of missingPositions) {
+        const key = `${pos.platform}:${pos.marketExternalId}`;
+        if (marketKeys.has(key)) continue;
+        const found =
+          fetchedByKey.get(key) ??
+          marketByKey.get(key) ??
+          ({
             platform: pos.platform,
             externalId: pos.marketExternalId,
             question: '',
             status: 'open',
             volume: 0,
             updatedAt: new Date().toISOString(),
-          } as Market;
-        }
-        if (found) {
-          relevantMarkets.push(found);
-          marketKeys.add(key);
-          if (!evalKeys.has(key)) {
-            evalKeys.add(key);
-            marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
-          }
+          } as Market);
+        relevantMarkets.push(found);
+        marketKeys.add(key);
+        if (!evalKeys.has(key)) {
+          evalKeys.add(key);
+          marketsToFetch.push({ platform: pos.platform, externalId: pos.marketExternalId });
         }
       }
     }
@@ -1378,6 +1383,15 @@ export async function runOnce() {
           }
         }
       }
+    }
+  }
+
+  // Cap the cooldown map so a multi-week soak can't grow it unbounded — any
+  // entry older than a day is far past every strategy's cooldown window.
+  if (lastSignalAtByKey.size > 2000) {
+    const cooldownCutoff = Date.now() - 24 * 3600 * 1000;
+    for (const [key, at] of lastSignalAtByKey) {
+      if (at < cooldownCutoff) lastSignalAtByKey.delete(key);
     }
   }
 

@@ -84,7 +84,7 @@ export async function computeMarkToMarket(
 
   let openMarkValueUsd = 0;
   let positionsMarked = 0;
-  const batchSize = 6;
+  const batchSize = 12;
 
   for (let i = 0; i < positions.length; i += batchSize) {
     const batch = positions.slice(i, i + batchSize);

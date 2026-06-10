@@ -7,6 +7,7 @@ import {
 } from '@/lib/monitoring/live-intelligence';
 import { getLiveGateStats } from '@/lib/monitoring/live-gate-stats';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 
 export async function GET() {
   try {
@@ -23,6 +24,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
   try {
   const body = (await req.json()) as {
     minMarketScore?: number;

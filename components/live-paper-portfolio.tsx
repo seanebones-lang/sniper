@@ -118,7 +118,10 @@ export function LivePaperPortfolio({
     }
 
     void tick();
-    const interval = setInterval(() => { void tick(); }, pollMs);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      void tick();
+    }, pollMs);
     return () => {
       cancelled = true;
       clearInterval(interval);

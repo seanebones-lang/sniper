@@ -1,10 +1,24 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { getErrorMessage } from '@/lib/error-message';
+import { requireApiAuth } from '@/lib/api-auth';
 import { generateText } from 'ai';
 import { xai } from '@ai-sdk/xai';
 
+const bodySchema = z.object({
+  marketQuestion: z.string().min(1).max(2000),
+  currentPrice: z.union([z.number(), z.string().max(40)]).optional(),
+});
+
 export async function POST(req: Request) {
-  const { marketQuestion, currentPrice } = await req.json();
+  const authErr = requireApiAuth(req);
+  if (authErr) return authErr;
+
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+  const { marketQuestion, currentPrice } = parsed.data;
 
   if (!process.env.XAI_API_KEY) {
     return NextResponse.json({ error: 'XAI_API_KEY not configured' }, { status: 400 });

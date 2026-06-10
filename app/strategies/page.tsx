@@ -209,7 +209,7 @@ export default function StrategiesPage() {
     }
     const res = await fetch('/api/paper/run', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonAuthHeaders(),
       body: JSON.stringify({ action: 'new' }),
     });
     const json = await res.json().catch(() => ({}));
@@ -263,7 +263,10 @@ export default function StrategiesPage() {
     }
 
     void fetchData();
-    const interval = setInterval(() => { void fetchData(); }, 8000);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      void fetchData();
+    }, 8000);
     return () => {
       cancelled = true;
       clearInterval(interval);

@@ -9,7 +9,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (authErr) return authErr;
 
   const { id } = await params;
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
 
   const existing = await db.query.strategies.findFirst({
     where: eq(strategies.id, id),

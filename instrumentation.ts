@@ -10,6 +10,14 @@ export async function register() {
   const live = process.env.SNIPER_ENABLE_REAL_EXECUTION === 'true';
   const paperAutoStart = process.env.SNIPER_AUTO_START_RUNNER === 'true';
 
+  if (live && !process.env.SNIPER_API_SECRET?.trim()) {
+    console.warn(
+      '[instrumentation] ⚠️ SNIPER_ENABLE_REAL_EXECUTION=true but SNIPER_API_SECRET is unset — ' +
+        'all mutating API routes (runner control, strategy edits, live filters) are UNAUTHENTICATED. ' +
+        'Set SNIPER_API_SECRET before exposing this deployment publicly.',
+    );
+  }
+
   if (!live && !paperAutoStart) return;
 
   const { shouldAutoStartRunner } = await import('@/lib/monitoring/runner-control');

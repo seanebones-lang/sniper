@@ -8,6 +8,7 @@ import { availableStrategies } from '@/lib/strategies';
 import type { StrategyProposal } from '@/lib/research/grok-agent';
 import type { StrategyVariant } from '@/lib/strategies/variants';
 import { getErrorMessage } from '@/lib/error-message';
+import { jsonAuthHeaders } from '@/lib/client/api-secret';
 
 interface ReplayResult {
   totalPnl?: number;
@@ -64,6 +65,7 @@ export default function BacktestPage() {
     try {
       const res = await fetch('/api/research/replay', {
         method: 'POST',
+        headers: jsonAuthHeaders(),
         body: JSON.stringify({
           platform: 'polymarket',
           marketExternalId: '0x...', // user would fill real token id in real use
@@ -98,6 +100,7 @@ export default function BacktestPage() {
     try {
       const res = await fetch('/api/research/apply-proposal', {
         method: 'POST',
+        headers: jsonAuthHeaders(),
         body: JSON.stringify({ proposal }),
       });
       const data = await res.json();
@@ -265,6 +268,7 @@ export default function BacktestPage() {
             onClick={async () => {
               const res = await fetch('/api/research/agent', {
                 method: 'POST',
+                headers: jsonAuthHeaders(),
                 body: JSON.stringify({
                   type: 'strategy_analysis',
                   strategyId: strategyType,
@@ -283,6 +287,7 @@ export default function BacktestPage() {
             onClick={async () => {
               const res = await fetch('/api/research/agent', {
                 method: 'POST',
+                headers: jsonAuthHeaders(),
                 body: JSON.stringify({ type: 'feature_ideas', lookbackHours: 24 }),
               });
               const data = await res.json();
@@ -297,6 +302,7 @@ export default function BacktestPage() {
             onClick={async () => {
               const res = await fetch('/api/research/agent', {
                 method: 'POST',
+                headers: jsonAuthHeaders(),
                 body: JSON.stringify({ type: 'regime_detection', lookbackHours: 36 }),
               });
               const data = await res.json();

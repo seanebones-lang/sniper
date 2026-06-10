@@ -1,21 +1,26 @@
 # Security Policy
 
-## Supported Versions
+Sniper is a single-operator trading platform with optional real-money execution.
+Treat every deployment as production.
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## Deployment hardening checklist
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+- **Set `SNIPER_API_SECRET`** on any deployment reachable from the internet.
+  When set, every mutating API route (runner control, strategy edits, paper
+  fills/budget, settings, research, `/api/real/*`) requires
+  `Authorization: Bearer <secret>` (or `X-Sniper-Secret`). When unset, auth is
+  skipped — acceptable only for local development. Live mode logs a startup
+  warning if the secret is missing.
+- **Keep exchange/private keys in environment variables**, never in the repo or
+  the database. `POLYMARKET_PRIVATE_KEY` controls real funds.
+- **Apply schema changes** (`npm run db:push`) after pulling — index-only
+  migrations are safe and idempotent.
+- Responses ship with `X-Frame-Options: DENY`, `X-Content-Type-Options:
+  nosniff`, `Referrer-Policy`, and a restrictive `Permissions-Policy`
+  (configured in `next.config.ts`).
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
-
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Open a GitHub issue with the `security` label, or email the repository owner
+directly for anything sensitive (e.g. issues that could affect funds). Please
+include reproduction steps. Reports are typically triaged within a few days.

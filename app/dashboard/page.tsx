@@ -100,7 +100,10 @@ export default function Dashboard() {
     }
 
     void load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, 5000);
     return () => {
       cancelled = true;
       clearInterval(interval);

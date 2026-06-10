@@ -1,6 +1,5 @@
 import { db, paperTrades, signals } from '@/lib/db';
-import { chunkArray } from '@/lib/db/chunk-in-array';
-import { gte, desc, inArray, count, and } from 'drizzle-orm';
+import { gte, desc, count, and, eq } from 'drizzle-orm';
 import { getRunnerStatus } from '@/lib/runner/engine';
 import { getPaperBudgetSettings } from '@/lib/settings/paper-budget';
 import { getPaperRunStartedAt, getPaperPortfolioSince } from '@/lib/paper/run-session';
@@ -106,18 +105,39 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
 
   const runFilter = runStart ? gte(paperTrades.filledAt, runStart) : undefined;
 
-  const [positionTrades, periodTrades, periodSignals, stratRows, budget, totalCountRow, todayCountRow] =
+  const [positionTrades, periodTrades, signalCountRows, stratRows, budget, totalCountRow, todayCountRow] =
     await Promise.all([
       db.query.paperTrades.findMany({
         where: runFilter,
         orderBy: (t, { asc }) => [asc(t.filledAt)],
       }),
-      db.query.paperTrades.findMany({
-        where: gte(paperTrades.filledAt, since),
-        orderBy: [desc(paperTrades.filledAt)],
-        limit: 500,
-      }),
-      db.query.signals.findMany({ where: gte(signals.createdAt, since) }),
+      // Join signals inline so each fill carries its strategy — avoids a second
+      // round of signal lookups after the fact.
+      db
+        .select({
+          id: paperTrades.id,
+          platform: paperTrades.platform,
+          marketExternalId: paperTrades.marketExternalId,
+          side: paperTrades.side,
+          price: paperTrades.price,
+          size: paperTrades.size,
+          fee: paperTrades.fee,
+          filledAt: paperTrades.filledAt,
+          signalId: paperTrades.signalId,
+          strategyId: signals.strategyId,
+        })
+        .from(paperTrades)
+        .leftJoin(signals, eq(paperTrades.signalId, signals.id))
+        .where(gte(paperTrades.filledAt, since))
+        .orderBy(desc(paperTrades.filledAt))
+        .limit(500),
+      // Signal counts only — the dashboard polls this; hydrating every signal
+      // row in the window just to count them was the slowest part of the call.
+      db
+        .select({ strategyId: signals.strategyId, count: count() })
+        .from(signals)
+        .where(gte(signals.createdAt, since))
+        .groupBy(signals.strategyId),
       db.query.strategies.findMany(),
       getPaperBudgetSettings(),
       db.select({ count: count() }).from(paperTrades).where(runFilter),
@@ -171,16 +191,6 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
   };
 
   const stratById = Object.fromEntries(stratRows.map((s) => [s.id, s]));
-  const signalIds = periodTrades.map((t) => t.signalId).filter(Boolean) as string[];
-  const linkedSignals: Array<{ id: string; strategyId: string }> = [];
-  for (const ids of chunkArray(signalIds)) {
-    const batch = await db.query.signals.findMany({
-      where: inArray(signals.id, ids),
-      columns: { id: true, strategyId: true },
-    });
-    linkedSignals.push(...batch);
-  }
-  const signalStrategyMap = Object.fromEntries(linkedSignals.map((s) => [s.id, s.strategyId]));
 
   const byStrategy: Record<string, StrategyPerformanceRow> = {};
   for (const s of stratRows) {
@@ -194,42 +204,40 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
     };
   }
 
-  for (const sig of periodSignals) {
-    if (!byStrategy[sig.strategyId]) {
-      byStrategy[sig.strategyId] = {
-        strategyId: sig.strategyId,
-        name: stratById[sig.strategyId]?.name ?? 'Unknown',
+  let totalSignals = 0;
+  for (const row of signalCountRows) {
+    totalSignals += row.count;
+    if (!byStrategy[row.strategyId]) {
+      byStrategy[row.strategyId] = {
+        strategyId: row.strategyId,
+        name: stratById[row.strategyId]?.name ?? 'Unknown',
         signals: 0,
         fills: 0,
         notionalUsd: 0,
-        isActive: stratById[sig.strategyId]?.isActive ?? false,
+        isActive: stratById[row.strategyId]?.isActive ?? false,
       };
     }
-    byStrategy[sig.strategyId].signals++;
+    byStrategy[row.strategyId].signals += row.count;
   }
 
   for (const fill of periodTrades) {
-    const strategyId = fill.signalId ? signalStrategyMap[fill.signalId] : null;
-    if (strategyId && byStrategy[strategyId]) {
-      byStrategy[strategyId].fills++;
-      byStrategy[strategyId].notionalUsd += parseFloat(fill.size) * parseFloat(fill.price);
+    if (fill.strategyId && byStrategy[fill.strategyId]) {
+      byStrategy[fill.strategyId].fills++;
+      byStrategy[fill.strategyId].notionalUsd += parseFloat(fill.size) * parseFloat(fill.price);
     }
   }
 
-  const recentFills: PaperFillRow[] = periodTrades.slice(0, 30).map((t) => {
-    const strategyId = t.signalId ? signalStrategyMap[t.signalId] : null;
-    return {
-      id: t.id,
-      platform: t.platform,
-      marketExternalId: t.marketExternalId,
-      side: t.side,
-      price: parseFloat(t.price),
-      size: parseFloat(t.size),
-      fee: parseFloat(t.fee ?? '0'),
-      filledAt: t.filledAt.toISOString(),
-      strategyName: strategyId ? (stratById[strategyId]?.name ?? null) : null,
-    };
-  });
+  const recentFills: PaperFillRow[] = periodTrades.slice(0, 30).map((t) => ({
+    id: t.id,
+    platform: t.platform,
+    marketExternalId: t.marketExternalId,
+    side: t.side,
+    price: parseFloat(t.price),
+    size: parseFloat(t.size),
+    fee: parseFloat(t.fee ?? '0'),
+    filledAt: t.filledAt.toISOString(),
+    strategyName: t.strategyId ? (stratById[t.strategyId]?.name ?? null) : null,
+  }));
 
   const runner = getRunnerStatus();
   const activeStrategies = stratRows.filter((s) => s.isActive).length;
@@ -309,7 +317,7 @@ export async function getPaperPortfolio(periodDays = 7): Promise<PaperPortfolioS
     recentFills,
     performance: {
       periodDays,
-      totalSignals: periodSignals.length,
+      totalSignals,
       totalFills: periodTrades.length,
       buyFills: periodTrades.filter((t) => t.side === 'BUY').length,
       sellFills: periodTrades.filter((t) => t.side === 'SELL').length,
